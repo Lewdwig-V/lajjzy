@@ -34,6 +34,7 @@ pub struct ChangeDetail {
     pub bookmarks: Vec<String>,
     pub is_empty: bool,
     pub has_conflict: bool,
+    pub files: Vec<FileChange>,
 }
 
 /// A file changed in a change (parsed from `jj log --summary`).
@@ -157,6 +158,7 @@ mod tests {
                         bookmarks: vec!["main".into()],
                         is_empty: false,
                         has_conflict: false,
+                        files: vec![],
                     },
                 ),
                 (
@@ -170,6 +172,7 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: false,
                         has_conflict: false,
+                        files: vec![],
                     },
                 ),
                 (
@@ -183,6 +186,7 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: true,
                         has_conflict: false,
+                        files: vec![],
                     },
                 ),
             ]),

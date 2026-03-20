@@ -96,6 +96,7 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
                     },
                     is_empty: fields[7] == "true",
                     has_conflict: fields[8] == "true",
+                    files: vec![],
                 },
             );
 

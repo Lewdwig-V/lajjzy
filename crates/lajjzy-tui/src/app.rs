@@ -179,6 +179,7 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: false,
                         has_conflict: false,
+                        files: vec![],
                     },
                 ),
                 (
@@ -192,6 +193,7 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: false,
                         has_conflict: false,
+                        files: vec![],
                     },
                 ),
                 (
@@ -205,6 +207,7 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: false,
                         has_conflict: false,
+                        files: vec![],
                     },
                 ),
             ]),
