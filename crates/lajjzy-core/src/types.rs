@@ -183,9 +183,9 @@ mod tests {
                     ChangeDetail {
                         commit_id: "ccc333".into(),
                         author: "root".into(),
-                        email: "".into(),
-                        timestamp: "".into(),
-                        description: "".into(),
+                        email: String::new(),
+                        timestamp: String::new(),
+                        description: String::new(),
                         bookmarks: vec![],
                         is_empty: true,
                         has_conflict: false,

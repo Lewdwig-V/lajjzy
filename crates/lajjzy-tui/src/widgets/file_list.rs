@@ -96,7 +96,7 @@ mod tests {
         let line0: String = (0..40)
             .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
             .collect();
-        assert!(line0.contains("A"));
+        assert!(line0.contains('A'));
         assert!(line0.contains("bar.txt"));
     }
 
