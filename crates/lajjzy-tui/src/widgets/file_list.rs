@@ -27,6 +27,7 @@ impl<'a> FileListWidget<'a> {
             FileStatus::Modified => Color::Yellow,
             FileStatus::Deleted => Color::Red,
             FileStatus::Renamed => Color::Cyan,
+            FileStatus::Unknown(_) => Color::Magenta,
         }
     }
 }

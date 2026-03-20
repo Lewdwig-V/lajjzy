@@ -51,6 +51,8 @@ pub enum FileStatus {
     Deleted,
     /// Rename: path contains `{old => new}` format from jj.
     Renamed,
+    /// Unknown status code from jj — displayed as-is.
+    Unknown(char),
 }
 
 impl std::fmt::Display for FileStatus {
@@ -60,6 +62,7 @@ impl std::fmt::Display for FileStatus {
             Self::Modified => write!(f, "M"),
             Self::Deleted => write!(f, "D"),
             Self::Renamed => write!(f, "R"),
+            Self::Unknown(c) => write!(f, "{c}"),
         }
     }
 }

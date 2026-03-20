@@ -135,6 +135,7 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
             match backend.load_graph() {
                 Ok(new_graph) => {
                     state.graph = new_graph;
+                    state.reset_detail();
                     let nodes = state.graph.node_indices();
                     state.cursor = prev_change_id
                         .as_deref()
@@ -171,21 +172,34 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
             state.detail_cursor = state.detail_cursor.saturating_sub(1);
         }
         Action::DetailEnter => {
-            let file_path = state
+            let file_info = state
                 .selected_detail()
                 .and_then(|d| d.files.get(state.detail_cursor))
-                .map(|f| f.path.clone());
+                .map(|f| (f.path.clone(), f.status));
             let change_id = state.selected_change_id().map(String::from);
 
-            if let (Some(cid), Some(path)) = (change_id, file_path) {
-                match backend.file_diff(&cid, &path) {
+            if let (Some(cid), Some((raw_path, status))) = (change_id, file_info) {
+                // For renames, extract the destination path (after "=> ")
+                let diff_path = if status == lajjzy_core::types::FileStatus::Renamed {
+                    raw_path
+                        .split("=> ")
+                        .nth(1)
+                        .and_then(|s| s.strip_suffix('}'))
+                        .unwrap_or(&raw_path)
+                        .to_string()
+                } else {
+                    raw_path.clone()
+                };
+
+                match backend.file_diff(&cid, &diff_path) {
                     Ok(hunks) => {
                         state.diff_data = hunks;
                         state.diff_scroll = 0;
                         state.detail_mode = DetailMode::DiffView;
                     }
                     Err(e) => {
-                        state.error = Some(format!("Diff failed: {e}"));
+                        state.diff_data = vec![];
+                        state.error = Some(format!("Failed to load diff for {raw_path}: {e}"));
                     }
                 }
             }
@@ -240,14 +254,15 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
         }
     }
 
-    debug_assert!(
-        state
-            .graph
-            .lines
-            .get(state.cursor)
-            .is_none_or(|l| l.change_id.is_some()),
-        "cursor must point to a node line"
-    );
+    // Release-mode invariant check: cursor must point to a node line
+    if let Some(line) = state.graph.lines.get(state.cursor)
+        && line.change_id.is_none()
+    {
+        state.error = Some("Internal error: cursor on non-change line".to_string());
+        if let Some(&first) = state.graph.node_indices().first() {
+            state.cursor = first;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -429,6 +444,37 @@ mod tests {
             ]),
             Some(0),
         )
+    }
+
+    /// Mock that returns non-empty hunks from `file_diff`.
+    struct DiffMockBackend {
+        graph: GraphData,
+    }
+
+    impl RepoBackend for DiffMockBackend {
+        fn load_graph(&self) -> Result<GraphData> {
+            Ok(self.graph.clone())
+        }
+
+        fn file_diff(
+            &self,
+            _change_id: &str,
+            _path: &str,
+        ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
+            Ok(vec![lajjzy_core::types::DiffHunk {
+                header: "@@ -1,1 +1,1 @@".to_string(),
+                lines: vec![
+                    lajjzy_core::types::DiffLine {
+                        kind: lajjzy_core::types::DiffLineKind::Removed,
+                        content: "old".to_string(),
+                    },
+                    lajjzy_core::types::DiffLine {
+                        kind: lajjzy_core::types::DiffLineKind::Added,
+                        content: "new".to_string(),
+                    },
+                ],
+            }])
+        }
     }
 
     fn mock() -> MockBackend {
@@ -646,5 +692,81 @@ mod tests {
         // mode stays FileList, no diff data loaded
         assert_eq!(state.detail_mode, DetailMode::FileList);
         assert!(state.diff_data.is_empty());
+    }
+
+    #[test]
+    fn detail_enter_loads_diff() {
+        let graph = sample_graph_with_files();
+        let mock = DiffMockBackend {
+            graph: graph.clone(),
+        };
+        let mut state = AppState::new(graph);
+        state.focus = PanelFocus::Detail;
+
+        dispatch(&mut state, Action::DetailEnter, &mock);
+        assert_eq!(state.detail_mode, DetailMode::DiffView);
+        assert!(!state.diff_data.is_empty());
+    }
+
+    #[test]
+    fn detail_enter_error_sets_state_error() {
+        let mut state = AppState::new(sample_graph_with_files());
+        state.focus = PanelFocus::Detail;
+
+        dispatch(&mut state, Action::DetailEnter, &FailingBackend);
+        assert!(state.error.is_some());
+        assert_eq!(state.detail_mode, DetailMode::FileList); // didn't switch
+    }
+
+    #[test]
+    fn detail_move_down_with_files() {
+        let mock = MockBackend {
+            graph: sample_graph_with_files(),
+        };
+        let mut state = AppState::new(sample_graph_with_files());
+        assert_eq!(state.detail_cursor(), 0);
+
+        dispatch(&mut state, Action::DetailMoveDown, &mock);
+        assert_eq!(state.detail_cursor(), 1);
+    }
+
+    #[test]
+    fn detail_move_down_at_boundary_stays() {
+        let mock = MockBackend {
+            graph: sample_graph_with_files(),
+        };
+        let mut state = AppState::new(sample_graph_with_files());
+        let file_count = state.selected_detail().unwrap().files.len();
+        for _ in 0..file_count {
+            dispatch(&mut state, Action::DetailMoveDown, &mock);
+        }
+        let cursor_before = state.detail_cursor();
+        dispatch(&mut state, Action::DetailMoveDown, &mock);
+        assert_eq!(state.detail_cursor(), cursor_before);
+    }
+
+    #[test]
+    fn detail_move_up_at_zero_stays() {
+        let mock = MockBackend {
+            graph: sample_graph_with_files(),
+        };
+        let mut state = AppState::new(sample_graph_with_files());
+        dispatch(&mut state, Action::DetailMoveUp, &mock);
+        assert_eq!(state.detail_cursor(), 0);
+    }
+
+    #[test]
+    fn refresh_resets_detail_state() {
+        let mock = MockBackend {
+            graph: sample_graph(),
+        };
+        let mut state = AppState::new(sample_graph());
+        state.detail_mode = DetailMode::DiffView;
+        state.diff_scroll = 5;
+
+        dispatch(&mut state, Action::Refresh, &mock);
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert_eq!(state.diff_scroll, 0);
+        assert_eq!(state.detail_cursor(), 0);
     }
 }

@@ -76,10 +76,14 @@ fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
         return None;
     }
 
-    let status_char = content.as_bytes()[0];
+    let first_byte = content.as_bytes()[0];
+    if !first_byte.is_ascii() {
+        return None;
+    }
+
     let after_status = &content[1..];
 
-    match status_char {
+    match first_byte {
         b'A' if after_status.starts_with(' ') => Some(crate::types::FileChange {
             path: after_status.trim().to_string(),
             status: crate::types::FileStatus::Added,
@@ -96,6 +100,12 @@ fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
             path: after_status.trim().to_string(),
             status: crate::types::FileStatus::Renamed,
         }),
+        c if c.is_ascii_uppercase() && after_status.starts_with(' ') => {
+            Some(crate::types::FileChange {
+                path: after_status.trim().to_string(),
+                status: crate::types::FileStatus::Unknown(c as char),
+            })
+        }
         _ => None,
     }
 }
