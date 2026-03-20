@@ -10,17 +10,18 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
-  check:
-    name: cargo check
+  fmt:
+    name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
 
   clippy:
-    name: clippy
+    name: Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,10 +29,11 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    name: test
+    name: Test
+    needs: [fmt, clippy]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,12 +43,21 @@ jobs:
         run: cargo install --locked --bin jj jj-cli@0.39.0
       - run: cargo test --workspace
 
-  fmt:
-    name: rustfmt
+  # Aggregator job — the single required status check for branch protection.
+  ci-pass:
+    name: CI
+    needs: [fmt, clippy, test]
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --all --check
+      - name: Fail if any dependency did not succeed
+        run: |
+          if [[ "${{ needs.fmt.result }}" != "success" ||
+                "${{ needs.clippy.result }}" != "success" ||
+                "${{ needs.test.result }}" != "success" ]]; then
+            echo "One or more CI jobs failed or were skipped."
+            echo "  fmt:    ${{ needs.fmt.result }}"
+            echo "  clippy: ${{ needs.clippy.result }}"
+            echo "  test:   ${{ needs.test.result }}"
+            exit 1
+          fi
