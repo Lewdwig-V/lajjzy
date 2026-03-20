@@ -165,9 +165,13 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
                 },
             );
 
+            let glyph_end = display.find(|c: char| c.is_alphanumeric()).unwrap_or(0);
+            let glyph_prefix = display[..glyph_end].to_string();
+
             lines.push(crate::types::GraphLine {
                 raw: display.to_string(),
                 change_id: Some(change_id),
+                glyph_prefix,
             });
         } else if let Some(file_change) = parse_file_line(raw_line) {
             if let Some(last_id) = &current_change_id
@@ -175,12 +179,9 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
             {
                 detail.files.push(file_change);
             }
-            lines.push(crate::types::GraphLine {
-                raw: raw_line.to_string(),
-                change_id: None,
-            });
         } else {
             lines.push(crate::types::GraphLine {
+                glyph_prefix: raw_line.to_string(),
                 raw: raw_line.to_string(),
                 change_id: None,
             });
@@ -420,6 +421,9 @@ mod tests {
 ◆  zzzzzzzz (no description)\x1Fzzzzzzzz\x1E000000000000\x1E\x1E\x1E56y ago\x1E\x1E\x1Etrue\x1Efalse\x1E";
 
         let graph = parse_graph_output(output).unwrap();
+
+        // File lines are compacted out of graph.lines; only node lines remain.
+        assert_eq!(graph.lines.len(), 3);
 
         let detail = graph.details.get("mpvponzr").unwrap();
         assert_eq!(detail.files.len(), 2);

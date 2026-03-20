@@ -99,18 +99,22 @@ mod tests {
                 GraphLine {
                     raw: "◉  abc first".into(),
                     change_id: Some("abc".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "│  description one".into(),
                     change_id: None,
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "◉  def second".into(),
                     change_id: Some("def".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "│  description two".into(),
                     change_id: None,
+                    glyph_prefix: String::new(),
                 },
             ],
             HashMap::new(),

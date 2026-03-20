@@ -324,22 +324,27 @@ mod tests {
                 GraphLine {
                     raw: "◉  abc".into(),
                     change_id: Some("abc".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "│  desc1".into(),
                     change_id: None,
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "◉  def".into(),
                     change_id: Some("def".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "│  desc2".into(),
                     change_id: None,
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "◉  ghi".into(),
                     change_id: Some("ghi".into()),
+                    glyph_prefix: String::new(),
                 },
             ],
             HashMap::from([
@@ -397,10 +402,12 @@ mod tests {
                 GraphLine {
                     raw: "◉  abc".into(),
                     change_id: Some("abc".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "◉  def".into(),
                     change_id: Some("def".into()),
+                    glyph_prefix: String::new(),
                 },
             ],
             HashMap::from([
