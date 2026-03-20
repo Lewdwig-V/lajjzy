@@ -43,7 +43,7 @@ fn run_loop(
             if key_event.kind != KeyEventKind::Press {
                 continue;
             }
-            if let Some(action) = map_event(key_event) {
+            if let Some(action) = map_event(key_event, state.focus, state.detail_mode) {
                 dispatch(state, action, backend);
             }
         }
