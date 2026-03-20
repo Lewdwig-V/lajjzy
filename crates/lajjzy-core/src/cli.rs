@@ -259,6 +259,37 @@ fn parse_diff_output(output: &str) -> Result<Vec<crate::types::DiffHunk>> {
     Ok(hunks)
 }
 
+/// Parse the raw output of `jj op log` with our custom template into a list of `OpLogEntry`.
+///
+/// Expected line format: `<id>\x1f<description>\x1e<timestamp>`
+fn parse_op_log_output(output: &str) -> Result<Vec<crate::types::OpLogEntry>> {
+    let mut entries = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(sep_pos) = line.find(UNIT_SEP) {
+            let id = &line[..sep_pos];
+            let rest = &line[sep_pos + UNIT_SEP.len_utf8()..];
+            let fields: Vec<&str> = rest.split(RECORD_SEP).collect();
+            if fields.len() < 2 {
+                bail!(
+                    "Expected at least 2 op log fields after id, got {}: {:?}",
+                    fields.len(),
+                    fields
+                );
+            }
+            entries.push(crate::types::OpLogEntry {
+                id: id.to_string(),
+                description: fields[0].to_string(),
+                timestamp: fields[1].to_string(),
+            });
+        }
+    }
+    Ok(entries)
+}
+
 impl RepoBackend for JjCliBackend {
     fn file_diff(&self, change_id: &str, path: &str) -> Result<Vec<crate::types::DiffHunk>> {
         let output = Command::new("jj")
@@ -313,6 +344,33 @@ impl RepoBackend for JjCliBackend {
             String::from_utf8(output.stdout).context("jj log output was not valid UTF-8")?;
 
         parse_graph_output(&stdout)
+    }
+
+    fn op_log(&self) -> Result<Vec<crate::types::OpLogEntry>> {
+        // Template produces: <id>\x1f<description>\x1e<timestamp>\n
+        // The \x1f and \x1e are jj template escape sequences inside quoted strings.
+        let template = concat!(
+            "self.id().short(8)",
+            " ++ \"\\x1f\" ++ description",
+            " ++ \"\\x1e\" ++ self.time().start().ago()",
+            " ++ \"\\n\"",
+        );
+
+        let output = Command::new("jj")
+            .args(["op", "log", "--no-graph", "--color=never", "-T", template])
+            .current_dir(&self.workspace_root)
+            .output()
+            .context("Failed to run `jj op log`")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("jj op log failed: {}", stderr.trim());
+        }
+
+        let stdout =
+            String::from_utf8(output.stdout).context("jj op log output was not valid UTF-8")?;
+
+        parse_op_log_output(&stdout)
     }
 }
 
@@ -578,6 +636,38 @@ new mode 100755";
                 .iter()
                 .any(|l| l.kind == crate::types::DiffLineKind::Added)
         );
+    }
+
+    #[test]
+    fn parse_op_log_output_basic() {
+        let output = "abc12345\x1fcreate bookmark main\x1e2 hours ago\ndef67890\x1fsnapshot working copy\x1e3 hours ago\n";
+        let entries = parse_op_log_output(output).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, "abc12345");
+        assert!(entries[0].description.contains("bookmark"));
+    }
+
+    #[test]
+    fn parse_op_log_output_empty() {
+        let entries = parse_op_log_output("").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn op_log_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        Command::new("jj")
+            .args(["git", "init"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        let entries = backend.op_log().unwrap();
+        assert!(!entries.is_empty());
     }
 
     #[test]

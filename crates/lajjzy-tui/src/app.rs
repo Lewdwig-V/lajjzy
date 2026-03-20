@@ -300,6 +300,10 @@ mod tests {
         ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
             Ok(vec![])
         }
+
+        fn op_log(&self) -> Result<Vec<lajjzy_core::types::OpLogEntry>> {
+            Ok(vec![])
+        }
     }
 
     struct FailingBackend;
@@ -314,6 +318,10 @@ mod tests {
             _change_id: &str,
             _path: &str,
         ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
+            anyhow::bail!("connection lost")
+        }
+
+        fn op_log(&self) -> Result<Vec<lajjzy_core::types::OpLogEntry>> {
             anyhow::bail!("connection lost")
         }
     }
@@ -461,6 +469,10 @@ mod tests {
     impl RepoBackend for DiffMockBackend {
         fn load_graph(&self) -> Result<GraphData> {
             Ok(self.graph.clone())
+        }
+
+        fn op_log(&self) -> Result<Vec<lajjzy_core::types::OpLogEntry>> {
+            Ok(vec![])
         }
 
         fn file_diff(

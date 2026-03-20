@@ -15,4 +15,7 @@ pub trait RepoBackend: Send + Sync {
     /// Compute diff hunks for a specific file in a change.
     /// Lazy — called only when user drills into a file.
     fn file_diff(&self, change_id: &str, path: &str) -> Result<Vec<crate::types::DiffHunk>>;
+
+    /// Load the operation log.
+    fn op_log(&self) -> Result<Vec<crate::types::OpLogEntry>>;
 }

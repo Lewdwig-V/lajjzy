@@ -1,5 +1,13 @@
 use std::collections::HashMap;
 
+/// An entry in the jj operation log.
+#[derive(Debug, Clone)]
+pub struct OpLogEntry {
+    pub id: String,
+    pub description: String,
+    pub timestamp: String,
+}
+
 /// Complete graph data returned by `load_graph()`.
 #[derive(Debug, Clone)]
 pub struct GraphData {
