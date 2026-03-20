@@ -36,6 +36,54 @@ pub struct ChangeDetail {
     pub has_conflict: bool,
 }
 
+/// A file changed in a change (parsed from `jj log --summary`).
+#[derive(Debug, Clone)]
+pub struct FileChange {
+    pub path: String,
+    pub status: FileStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileStatus {
+    Added,
+    Modified,
+    Deleted,
+    /// Rename: path contains `{old => new}` format from jj.
+    Renamed,
+}
+
+impl std::fmt::Display for FileStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Added => write!(f, "A"),
+            Self::Modified => write!(f, "M"),
+            Self::Deleted => write!(f, "D"),
+            Self::Renamed => write!(f, "R"),
+        }
+    }
+}
+
+/// A hunk from a file diff (parsed from `jj diff --git`).
+#[derive(Debug, Clone)]
+pub struct DiffHunk {
+    pub header: String,
+    pub lines: Vec<DiffLine>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiffLine {
+    pub kind: DiffLineKind,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffLineKind {
+    Context,
+    Added,
+    Removed,
+    Header,
+}
+
 impl GraphData {
     pub fn new(
         lines: Vec<GraphLine>,
