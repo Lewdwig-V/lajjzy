@@ -199,10 +199,16 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
 }
 
 /// Parse git-format diff output into hunks.
+///
+/// Pre-`@@` header lines (`diff --git`, `index`, `new file mode`, etc.) are
+/// collected. If the diff has no `@@` hunks (chmod-only, binary, pure rename),
+/// a single hunk with these header lines is returned so the user sees something
+/// rather than "(empty diff)".
 #[allow(clippy::unnecessary_wraps)] // Result kept for forward-compatibility with error paths
 fn parse_diff_output(output: &str) -> Result<Vec<crate::types::DiffHunk>> {
     let mut hunks = Vec::new();
     let mut current_hunk: Option<crate::types::DiffHunk> = None;
+    let mut header_lines: Vec<crate::types::DiffLine> = Vec::new();
 
     for line in output.lines() {
         if line.starts_with("@@") {
@@ -227,11 +233,26 @@ fn parse_diff_output(output: &str) -> Result<Vec<crate::types::DiffHunk>> {
                 kind,
                 content: content.to_string(),
             });
+        } else {
+            // Pre-@@ header lines (diff --git, index, new file mode, etc.)
+            header_lines.push(crate::types::DiffLine {
+                kind: crate::types::DiffLineKind::Header,
+                content: line.to_string(),
+            });
         }
     }
 
     if let Some(hunk) = current_hunk {
         hunks.push(hunk);
+    }
+
+    // If no @@ hunks but we have header lines (chmod-only, binary, pure rename),
+    // create a synthetic hunk so the user sees the header info.
+    if hunks.is_empty() && !header_lines.is_empty() {
+        hunks.push(crate::types::DiffHunk {
+            header: String::new(),
+            lines: header_lines,
+        });
     }
 
     Ok(hunks)
@@ -503,6 +524,22 @@ diff --git a/foo.txt b/foo.txt
     fn parse_diff_output_empty() {
         let hunks = parse_diff_output("").unwrap();
         assert!(hunks.is_empty());
+    }
+
+    #[test]
+    fn parse_diff_output_header_only() {
+        // chmod-only or binary diffs have headers but no @@ hunks
+        let output = "\
+diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755";
+
+        let hunks = parse_diff_output(output).unwrap();
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].header.is_empty()); // synthetic header
+        assert_eq!(hunks[0].lines.len(), 3);
+        assert_eq!(hunks[0].lines[0].kind, crate::types::DiffLineKind::Header);
+        assert!(hunks[0].lines[0].content.contains("diff --git"));
     }
 
     #[test]
