@@ -81,8 +81,8 @@ When operations fail, the error context is captured and displayed in the status 
 jj's repo model is a DAG of **changes**, each of which is an immutable snapshot with a unique change ID. The primary view is a scrollable, ASCII-art (or Unicode box-drawing) graph — similar to `jj log` — but interactive:
 
 ```
-  ◉  ksqxwpml  martin@…  2m ago
-  │  (empty) (no description set)
+  ◉  ksqxwpml  martin@…  2m ago          ← cursor highlights
+  │  (empty) (no description set)            the full block
   ◉  ytoqrzxn  martin@…  15m ago  main@origin
   │  refactor: extract provisioner trait
   ◉  vlpmrokx  martin@…  1h ago
@@ -90,8 +90,10 @@ jj's repo model is a DAG of **changes**, each of which is an immutable snapshot 
   ◉  zzzzzzzz  root()
 ```
 
-- **Cursor movement** (`j`/`k`) moves between changes.
-- **Enter** expands a change to show its diff (file list → hunk view).
+- **Initial cursor** lands on the working-copy change (`@`), not the first node in the graph. This is the change the user is most likely to act on. `@` also jumps back to it from anywhere.
+- **Block highlight:** The cursor highlights the entire change block (ID line + description lines + any bookmark/conflict annotations), not a single line. A change with a multi-line description occupies multiple rows; the highlight covers all of them. This is what makes `j`/`k` feel like moving between *changes* rather than between *lines* — the unit of navigation matches the unit of work.
+- **Cursor movement** (`j`/`k`) moves between changes (blocks), not lines.
+- **Enter** expands a change to show its file list in the detail pane (no backend call — file data is loaded eagerly with the graph).
 - **Stacks** are visually grouped: contiguous linear chains rooted on a trunk branch are highlighted as a unit, with a gutter annotation showing review state if connected to a forge.
 
 ### 4.2 Panels
@@ -117,7 +119,7 @@ The UI is divided into context-sensitive panels, loosely following lazygit's lay
 | Panel | Content |
 |-------|---------|
 | **Change Graph** | The interactive DAG. Always visible. |
-| **Detail Pane** | Context-sensitive: file list, diff hunks, change description editor, conflict markers. |
+| **Detail Pane** | Context-sensitive: file list (from eager graph data), diff hunks (lazy on drill-down), change description editor, conflict markers. |
 | **Status Bar** | Op log summary, conflict count, current bookmarks, background task progress, error messages (C6). |
 
 Panel focus follows a `Tab` / `Shift-Tab` cycle. Each panel has its own local keymap layered atop global bindings.
@@ -198,10 +200,14 @@ pub struct ChangeInfo {
     pub description: String,
     pub author: Signature,
     pub timestamp: DateTime<Utc>,
+    pub is_working_copy: bool,
     pub is_empty: bool,
     pub has_conflict: bool,
     pub bookmarks: Vec<String>,
     pub parent_change_ids: Vec<ChangeId>,
+    /// Files touched by this change — loaded eagerly with the graph.
+    /// This avoids a backend round-trip on every cursor move.
+    pub files: Vec<FileChange>,
 }
 
 pub struct FileChange { /* path, status (M/A/D/R), size delta */ }
@@ -212,13 +218,14 @@ pub trait RepoBackend: Send + Sync {
     /// Discover and open a jj workspace from a directory.
     fn open_workspace(&self, path: &Path) -> Result<(), RepoError>;
 
-    /// Load the change graph (all visible changes with parent relationships).
+    /// Load the change graph: all visible changes with parent relationships
+    /// and per-change file lists. This is the only call required for initial
+    /// render — cursor movement within the graph never triggers a backend call.
     fn load_graph(&self) -> Result<Vec<ChangeInfo>, RepoError>;
 
-    /// List files changed in a specific change.
-    fn change_files(&self, id: &ChangeId) -> Result<Vec<FileChange>, RepoError>;
-
-    /// Compute diff hunks for a file in a change.
+    /// Compute diff hunks for a file in a change. This is the one read-path
+    /// call that remains lazy — hunk-level detail is only needed when the
+    /// user drills into a specific file (Enter on file list).
     fn file_diff(&self, id: &ChangeId, path: &RepoPath) -> Result<Vec<DiffHunk>, RepoError>;
 
     /// Load the operation log.
@@ -249,7 +256,11 @@ pub trait RepoBackend: Send + Sync {
 }
 ```
 
-**Note (C4):** The mutation methods above are *aspirational interface sketches*. Their signatures will be revised after the jj-lib API audit that gates M2. The read-only methods (`load_graph`, `change_files`, `file_diff`, `op_log`) are implemented first and validated against jj-lib during M0/M1.
+**Design note — eager file lists:** The previous design had a separate `change_files()` method called when the cursor moved to a change. This spawns a backend call per keypress, which is a latency problem — holding `j` down would queue calls and the UI would stutter or lag. Moving file lists into `load_graph()` means the entire graph + detail data arrives in a single batch. The tradeoff is a larger initial payload, but jj's diff computation is fast for the common case (tens of changes, each touching a handful of files), and the alternative is an app that feels sluggish on the most basic interaction.
+
+`file_diff()` remains lazy because hunk-level detail is expensive and only needed on explicit drill-down (Enter on a file). This is a deliberate choice: the user has signalled intent, so a brief load is acceptable and expected.
+
+**Note (C4):** The mutation methods above are *aspirational interface sketches*. Their signatures will be revised after the jj-lib API audit that gates M2. The read-only methods (`load_graph`, `file_diff`, `op_log`) are implemented first and validated against jj-lib during M0/M1.
 
 ### 5.3 Dependency Map
 
@@ -325,7 +336,7 @@ The main loop follows the standard ratatui pattern, extended with an async task 
 
 `jj-lib` requires careful handling: repo operations take a mutable lock, and some (like `rebase`) can be expensive.
 
-- **Read path:** The graph view is built from data returned by `RepoBackend::load_graph()`, which internally takes a read-only snapshot. Snapshots are cheap (jj's copy-on-write store).
+- **Read path:** The graph view is built from data returned by `RepoBackend::load_graph()`, which returns all visible changes *with their file lists* in a single batch. This means cursor navigation never triggers a backend call. Internally, `load_graph()` takes a read-only snapshot — cheap thanks to jj's copy-on-write store. The only lazy read is `file_diff()`, called when the user drills into a specific file's hunks.
 - **Write path:** Mutations go through `RepoBackend` methods, which internally acquire the repo lock, perform the operation, record an op, and return. The TUI then calls `load_graph()` again to rebuild its model from the new state.
 - **Background tasks:** Fetch/push run on a separate tokio task. On completion, they send a message to the event loop, which triggers a `load_graph()` refresh.
 
@@ -424,10 +435,17 @@ pub struct AppState {
     /// with layout information computed for rendering.
     pub graph: ChangeGraph,
 
-    /// Cursor positions per panel.
+    /// Index of the working-copy change (@) in the graph.
+    /// Cursor initialises here on load; `@` key jumps back to it.
+    pub working_copy_idx: usize,
+
+    /// Cursor positions per panel. Graph panel cursor initialised
+    /// to working_copy_idx, not 0.
     pub cursors: HashMap<PanelId, usize>,
 
     /// Currently expanded change (if any) with its file list.
+    /// File list is drawn from the eagerly-loaded ChangeInfo::files —
+    /// no backend call on expand.
     pub expanded: Option<ExpandedChange>,
 
     /// Active modal (help overlay, picker, text input, etc.).
@@ -474,20 +492,24 @@ pub struct AppState {
 **Constraints active:** C1, C2, C3 (pragmatic impurity), C5, C6.
 
 - Workspace setup with three crates. `CLAUDE.md` committed (C5).
-- `RepoBackend` trait defined with read-only methods: `open_workspace`, `load_graph`.
+- `RepoBackend` trait defined with read-only methods: `open_workspace`, `load_graph` (with eager file lists per change).
 - `JjBackend` implementation: links `jj-lib`, implements `open_workspace` + `load_graph`.
 - `MockBackend` with hardcoded graph data for TUI development.
-- Read-only graph view rendering in ratatui. Cursor navigation (`j`/`k`).
+- Read-only graph view rendering in ratatui:
+  - Cursor navigation (`j`/`k`) moves between change blocks, not lines.
+  - Initial cursor lands on the working-copy change (`@`).
+  - Block highlight covers the full change (ID line + description + annotations).
+  - `Enter` expands file list in detail pane from eager data (no backend call).
 - Graceful error on invalid workspace (C2, C6).
 - CI pipeline with C1/C2/C5 checks.
-- No mutations, no detail pane.
+- No mutations.
 
 ### M1 — Read-Only Explorer (weeks 3–4)
 
 **Constraints active:** all M0 constraints.
 
-- `RepoBackend` extended: `change_files`, `file_diff`, `op_log`.
-- Detail pane: file list and hunk diff view for selected change.
+- `RepoBackend` extended: `file_diff`, `op_log`.
+- Detail pane: hunk diff view when drilling into a specific file (lazy `file_diff` call — the one read-path call that remains on-demand).
 - Op log viewer (read-only).
 - Bookmark list.
 - Fuzzy-find across changes.
