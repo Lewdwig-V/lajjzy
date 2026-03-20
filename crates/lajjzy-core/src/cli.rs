@@ -124,6 +124,10 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
 }
 
 impl RepoBackend for JjCliBackend {
+    fn file_diff(&self, _change_id: &str, _path: &str) -> Result<Vec<crate::types::DiffHunk>> {
+        todo!("Implemented in Task 5")
+    }
+
     fn load_graph(&self) -> Result<GraphData> {
         // `working_copies` is empty in jj 0.39.0; use self.current_working_copy() instead.
         let template = concat!(

@@ -11,4 +11,8 @@ pub trait RepoBackend: Send + Sync {
     /// Load the full change graph for display.
     /// Returns all graph lines with pre-loaded change details.
     fn load_graph(&self) -> Result<GraphData>;
+
+    /// Compute diff hunks for a specific file in a change.
+    /// Lazy — called only when user drills into a file.
+    fn file_diff(&self, change_id: &str, path: &str) -> Result<Vec<crate::types::DiffHunk>>;
 }

@@ -133,12 +133,28 @@ mod tests {
         fn load_graph(&self) -> Result<GraphData> {
             Ok(self.graph.clone())
         }
+
+        fn file_diff(
+            &self,
+            _change_id: &str,
+            _path: &str,
+        ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
+            Ok(vec![])
+        }
     }
 
     struct FailingBackend;
 
     impl RepoBackend for FailingBackend {
         fn load_graph(&self) -> Result<GraphData> {
+            anyhow::bail!("connection lost")
+        }
+
+        fn file_diff(
+            &self,
+            _change_id: &str,
+            _path: &str,
+        ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
             anyhow::bail!("connection lost")
         }
     }
