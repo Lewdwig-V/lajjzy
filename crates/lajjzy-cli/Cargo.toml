@@ -1,0 +1,15 @@
+[package]
+name = "lajjzy"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "lajjzy"
+path = "src/main.rs"
+
+[dependencies]
+lajjzy-core = { path = "../lajjzy-core" }
+lajjzy-tui = { path = "../lajjzy-tui" }
+ratatui = "0.30"
+crossterm = "0.28"
+anyhow = "1"

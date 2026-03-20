@@ -1,0 +1,10 @@
+[package]
+name = "lajjzy-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lajjzy-core = { path = "../lajjzy-core" }
+ratatui = "0.30"
+crossterm = "0.28"
+anyhow = "1"
