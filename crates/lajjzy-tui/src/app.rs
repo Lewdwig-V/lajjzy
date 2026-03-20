@@ -1,5 +1,7 @@
 use lajjzy_core::backend::RepoBackend;
-use lajjzy_core::types::{ChangeDetail, DiffHunk, GraphData};
+use lajjzy_core::types::{ChangeDetail, DiffHunk, GraphData, OpLogEntry};
+use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelFocus {
@@ -13,6 +15,45 @@ pub enum DetailMode {
     DiffView,
 }
 
+#[derive(Debug, Clone)]
+pub enum Modal {
+    OpLog {
+        entries: Vec<OpLogEntry>,
+        cursor: usize,
+        scroll: usize,
+    },
+    BookmarkPicker {
+        bookmarks: Vec<(String, String)>, // (bookmark_name, change_id)
+        cursor: usize,
+    },
+    FuzzyFind {
+        query: String,
+        matches: Vec<usize>, // graph line indices from node_indices
+        cursor: usize,
+    },
+    Help {
+        context: HelpContext,
+        scroll: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpContext {
+    Graph,
+    DetailFileList,
+    DetailDiffView,
+}
+
+impl HelpContext {
+    pub fn line_count(self) -> usize {
+        match self {
+            Self::Graph => 10,
+            Self::DetailFileList => 4,
+            Self::DetailDiffView => 3,
+        }
+    }
+}
+
 pub struct AppState {
     pub graph: GraphData,
     cursor: usize,
@@ -23,6 +64,7 @@ pub struct AppState {
     pub detail_mode: DetailMode,
     pub diff_scroll: usize,
     pub diff_data: Vec<DiffHunk>,
+    pub modal: Option<Modal>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +86,16 @@ pub enum Action {
     DiffNextHunk,
     DiffPrevHunk,
     JumpToWorkingCopy,
+    ToggleOpLog,
+    OpenBookmarks,
+    OpenFuzzyFind,
+    OpenHelp,
+    ModalDismiss,
+    ModalMoveUp,
+    ModalMoveDown,
+    ModalEnter,
+    FuzzyInput(char),
+    FuzzyBackspace,
 }
 
 impl AppState {
@@ -61,6 +113,7 @@ impl AppState {
             detail_mode: DetailMode::FileList,
             diff_scroll: 0,
             diff_data: vec![],
+            modal: None,
         }
     }
 
@@ -252,6 +305,159 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
                 state.diff_scroll = prev;
             }
         }
+        Action::ToggleOpLog => {
+            if matches!(state.modal, Some(Modal::OpLog { .. })) {
+                state.modal = None;
+            } else {
+                match backend.op_log() {
+                    Ok(entries) => {
+                        state.modal = Some(Modal::OpLog {
+                            entries,
+                            cursor: 0,
+                            scroll: 0,
+                        });
+                    }
+                    Err(e) => {
+                        state.error = Some(format!("Failed to load op log: {e}"));
+                    }
+                }
+            }
+        }
+        Action::OpenBookmarks => {
+            let mut bookmarks = Vec::new();
+            for &idx in state.graph.node_indices() {
+                if let Some(cid) = state.graph.lines[idx].change_id.as_ref()
+                    && let Some(detail) = state.graph.details.get(cid)
+                {
+                    for bm in &detail.bookmarks {
+                        bookmarks.push((bm.clone(), cid.clone()));
+                    }
+                }
+            }
+            state.modal = Some(Modal::BookmarkPicker {
+                bookmarks,
+                cursor: 0,
+            });
+        }
+        Action::OpenFuzzyFind => {
+            let matches = state.graph.node_indices().to_vec();
+            state.modal = Some(Modal::FuzzyFind {
+                query: String::new(),
+                matches,
+                cursor: 0,
+            });
+        }
+        Action::OpenHelp => {
+            let context = match state.focus {
+                PanelFocus::Graph => HelpContext::Graph,
+                PanelFocus::Detail => match state.detail_mode {
+                    DetailMode::FileList => HelpContext::DetailFileList,
+                    DetailMode::DiffView => HelpContext::DetailDiffView,
+                },
+            };
+            state.modal = Some(Modal::Help { context, scroll: 0 });
+        }
+        Action::ModalDismiss => {
+            state.modal = None;
+        }
+        Action::ModalMoveDown => {
+            if let Some(ref mut modal) = state.modal {
+                match modal {
+                    Modal::OpLog {
+                        entries, cursor, ..
+                    } => {
+                        if *cursor + 1 < entries.len() {
+                            *cursor += 1;
+                        }
+                    }
+                    Modal::BookmarkPicker {
+                        bookmarks, cursor, ..
+                    } => {
+                        if *cursor + 1 < bookmarks.len() {
+                            *cursor += 1;
+                        }
+                    }
+                    Modal::FuzzyFind {
+                        matches, cursor, ..
+                    } => {
+                        if *cursor + 1 < matches.len() {
+                            *cursor += 1;
+                        }
+                    }
+                    Modal::Help { context, scroll } => {
+                        if *scroll + 1 < context.line_count() {
+                            *scroll += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Action::ModalMoveUp => {
+            if let Some(ref mut modal) = state.modal {
+                match modal {
+                    Modal::OpLog { cursor, .. }
+                    | Modal::BookmarkPicker { cursor, .. }
+                    | Modal::FuzzyFind { cursor, .. } => {
+                        *cursor = cursor.saturating_sub(1);
+                    }
+                    Modal::Help { scroll, .. } => {
+                        *scroll = scroll.saturating_sub(1);
+                    }
+                }
+            }
+        }
+        Action::ModalEnter => {
+            let modal = state.modal.take();
+            match modal {
+                Some(Modal::BookmarkPicker {
+                    bookmarks, cursor, ..
+                }) => {
+                    if let Some((_, change_id)) = bookmarks.get(cursor)
+                        && let Some(&idx) = state.graph.node_indices().iter().find(|&&i| {
+                            state.graph.lines[i].change_id.as_deref() == Some(change_id)
+                        })
+                    {
+                        state.cursor = idx;
+                        state.reset_detail();
+                    }
+                }
+                Some(Modal::FuzzyFind {
+                    matches, cursor, ..
+                }) => {
+                    if let Some(&idx) = matches.get(cursor) {
+                        state.cursor = idx;
+                        state.reset_detail();
+                    }
+                }
+                other => {
+                    state.modal = other;
+                }
+            }
+        }
+        Action::FuzzyInput(c) => {
+            if let Some(Modal::FuzzyFind {
+                query,
+                matches,
+                cursor,
+            }) = &mut state.modal
+            {
+                query.push(c);
+                *matches = fuzzy_match(query, &state.graph);
+                *cursor = 0;
+            }
+        }
+        Action::FuzzyBackspace => {
+            if let Some(Modal::FuzzyFind {
+                query,
+                matches,
+                cursor,
+            }) = &mut state.modal
+            {
+                query.pop();
+                *matches = fuzzy_match(query, &state.graph);
+                *cursor = 0;
+            }
+        }
     }
 
     // Release-mode invariant check: cursor must point to a node line
@@ -263,6 +469,35 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
             state.cursor = first;
         }
     }
+}
+
+fn fuzzy_match(query: &str, graph: &GraphData) -> Vec<usize> {
+    if query.is_empty() {
+        return graph.node_indices().to_vec();
+    }
+
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let pattern = Pattern::new(
+        query,
+        CaseMatching::Smart,
+        Normalization::Smart,
+        AtomKind::Fuzzy,
+    );
+
+    let mut scored: Vec<(usize, u32)> = Vec::new();
+    for &idx in graph.node_indices() {
+        if let Some(cid) = graph.lines[idx].change_id.as_ref()
+            && let Some(detail) = graph.details.get(cid)
+        {
+            let haystack = format!("{cid} {} {}", detail.author, detail.description);
+            let mut buf: Vec<char> = Vec::new();
+            if let Some(score) = pattern.score(Utf32Str::new(&haystack, &mut buf), &mut matcher) {
+                scored.push((idx, score));
+            }
+        }
+    }
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.into_iter().map(|(idx, _)| idx).collect()
 }
 
 #[cfg(test)]
@@ -300,6 +535,10 @@ mod tests {
         ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
             Ok(vec![])
         }
+
+        fn op_log(&self) -> Result<Vec<lajjzy_core::types::OpLogEntry>> {
+            Ok(vec![])
+        }
     }
 
     struct FailingBackend;
@@ -316,6 +555,10 @@ mod tests {
         ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
             anyhow::bail!("connection lost")
         }
+
+        fn op_log(&self) -> Result<Vec<lajjzy_core::types::OpLogEntry>> {
+            anyhow::bail!("connection lost")
+        }
     }
 
     fn sample_graph() -> GraphData {
@@ -324,22 +567,27 @@ mod tests {
                 GraphLine {
                     raw: "◉  abc".into(),
                     change_id: Some("abc".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "│  desc1".into(),
                     change_id: None,
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "◉  def".into(),
                     change_id: Some("def".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "│  desc2".into(),
                     change_id: None,
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "◉  ghi".into(),
                     change_id: Some("ghi".into()),
+                    glyph_prefix: String::new(),
                 },
             ],
             HashMap::from([
@@ -397,10 +645,12 @@ mod tests {
                 GraphLine {
                     raw: "◉  abc".into(),
                     change_id: Some("abc".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "◉  def".into(),
                     change_id: Some("def".into()),
+                    glyph_prefix: String::new(),
                 },
             ],
             HashMap::from([
@@ -454,6 +704,10 @@ mod tests {
     impl RepoBackend for DiffMockBackend {
         fn load_graph(&self) -> Result<GraphData> {
             Ok(self.graph.clone())
+        }
+
+        fn op_log(&self) -> Result<Vec<lajjzy_core::types::OpLogEntry>> {
+            Ok(vec![])
         }
 
         fn file_diff(
@@ -768,5 +1022,267 @@ mod tests {
         assert_eq!(state.detail_mode, DetailMode::FileList);
         assert_eq!(state.diff_scroll, 0);
         assert_eq!(state.detail_cursor(), 0);
+    }
+
+    // --- Modal system tests ---
+
+    #[test]
+    fn toggle_op_log_opens_and_closes() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        assert!(state.modal.is_none());
+        dispatch(&mut state, Action::ToggleOpLog, &mock);
+        assert!(matches!(state.modal, Some(Modal::OpLog { .. })));
+        dispatch(&mut state, Action::ModalDismiss, &mock);
+        assert!(state.modal.is_none());
+    }
+
+    #[test]
+    fn modal_dismiss_does_not_quit() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::ToggleOpLog, &mock);
+        dispatch(&mut state, Action::ModalDismiss, &mock);
+        assert!(!state.should_quit);
+    }
+
+    #[test]
+    fn open_help_captures_context() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        state.focus = PanelFocus::Detail;
+        state.detail_mode = DetailMode::DiffView;
+        dispatch(&mut state, Action::OpenHelp, &mock);
+        match &state.modal {
+            Some(Modal::Help { context, .. }) => assert_eq!(*context, HelpContext::DetailDiffView),
+            _ => panic!("Expected Help modal"),
+        }
+    }
+
+    #[test]
+    fn open_bookmarks_collects_from_graph() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenBookmarks, &mock);
+        match &state.modal {
+            Some(Modal::BookmarkPicker { bookmarks, .. }) => {
+                // sample_graph has no bookmarks, so this should be empty
+                assert!(bookmarks.is_empty());
+            }
+            _ => panic!("Expected BookmarkPicker modal"),
+        }
+    }
+
+    #[test]
+    fn fuzzy_find_opens_with_all_matches() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
+        match &state.modal {
+            Some(Modal::FuzzyFind { matches, query, .. }) => {
+                assert!(query.is_empty());
+                assert_eq!(matches.len(), state.graph.node_indices().len());
+            }
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+    }
+
+    #[test]
+    fn toggle_op_log_toggles() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::ToggleOpLog, &mock);
+        assert!(matches!(state.modal, Some(Modal::OpLog { .. })));
+        dispatch(&mut state, Action::ToggleOpLog, &mock);
+        assert!(state.modal.is_none());
+    }
+
+    #[test]
+    fn modal_move_down_and_up() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
+        dispatch(&mut state, Action::ModalMoveDown, &mock);
+        match &state.modal {
+            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 1),
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+        dispatch(&mut state, Action::ModalMoveUp, &mock);
+        match &state.modal {
+            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 0),
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+    }
+
+    #[test]
+    fn fuzzy_input_and_backspace() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
+        dispatch(&mut state, Action::FuzzyInput('a'), &mock);
+        dispatch(&mut state, Action::FuzzyInput('b'), &mock);
+        match &state.modal {
+            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "ab"),
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+        dispatch(&mut state, Action::FuzzyBackspace, &mock);
+        match &state.modal {
+            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "a"),
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+    }
+
+    #[test]
+    fn modal_enter_on_fuzzy_find_jumps_cursor() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
+        // Move to second match (index 2, change "def")
+        dispatch(&mut state, Action::ModalMoveDown, &mock);
+        dispatch(&mut state, Action::ModalEnter, &mock);
+        assert!(state.modal.is_none());
+        assert_eq!(state.cursor(), 2);
+    }
+
+    fn sample_graph_with_bookmarks() -> GraphData {
+        GraphData::new(
+            vec![
+                GraphLine {
+                    raw: "◉  abc".into(),
+                    change_id: Some("abc".into()),
+                    glyph_prefix: String::new(),
+                },
+                GraphLine {
+                    raw: "│  desc1".into(),
+                    change_id: None,
+                    glyph_prefix: String::new(),
+                },
+                GraphLine {
+                    raw: "◉  def".into(),
+                    change_id: Some("def".into()),
+                    glyph_prefix: String::new(),
+                },
+            ],
+            HashMap::from([
+                (
+                    "abc".into(),
+                    ChangeDetail {
+                        commit_id: "a1".into(),
+                        author: "a".into(),
+                        email: "a@b".into(),
+                        timestamp: "1m".into(),
+                        description: "desc1".into(),
+                        bookmarks: vec!["main".into()],
+                        is_empty: false,
+                        has_conflict: false,
+                        files: vec![],
+                    },
+                ),
+                (
+                    "def".into(),
+                    ChangeDetail {
+                        commit_id: "d1".into(),
+                        author: "b".into(),
+                        email: "b@c".into(),
+                        timestamp: "2m".into(),
+                        description: "desc2".into(),
+                        bookmarks: vec!["feature".into()],
+                        is_empty: false,
+                        has_conflict: false,
+                        files: vec![],
+                    },
+                ),
+            ]),
+            Some(0),
+        )
+    }
+
+    #[test]
+    fn toggle_op_log_error_sets_state_error() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::ToggleOpLog, &FailingBackend);
+        assert!(state.error.is_some());
+        assert!(state.modal.is_none());
+    }
+
+    #[test]
+    fn bookmark_enter_jumps_cursor() {
+        let mock = MockBackend {
+            graph: sample_graph_with_bookmarks(),
+        };
+        let mut state = AppState::new(sample_graph_with_bookmarks());
+        dispatch(&mut state, Action::OpenBookmarks, &mock);
+        assert!(matches!(state.modal, Some(Modal::BookmarkPicker { .. })));
+
+        if let Some(Modal::BookmarkPicker { ref bookmarks, .. }) = state.modal {
+            assert!(!bookmarks.is_empty());
+        }
+
+        // Move to second bookmark ("feature" on change "def" at index 2)
+        dispatch(&mut state, Action::ModalMoveDown, &mock);
+        dispatch(&mut state, Action::ModalEnter, &mock);
+        assert!(state.modal.is_none());
+        assert_eq!(state.cursor(), 2);
+        assert_eq!(state.selected_change_id(), Some("def"));
+    }
+
+    #[test]
+    fn fuzzy_input_narrows_matches() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
+
+        let initial_count = match &state.modal {
+            Some(Modal::FuzzyFind { matches, .. }) => matches.len(),
+            _ => panic!("Expected FuzzyFind"),
+        };
+
+        // Type characters that should narrow results
+        dispatch(&mut state, Action::FuzzyInput('d'), &mock);
+        dispatch(&mut state, Action::FuzzyInput('e'), &mock);
+        dispatch(&mut state, Action::FuzzyInput('s'), &mock);
+        dispatch(&mut state, Action::FuzzyInput('c'), &mock);
+
+        match &state.modal {
+            Some(Modal::FuzzyFind { matches, .. }) => {
+                assert!(matches.len() <= initial_count);
+            }
+            _ => panic!("Expected FuzzyFind"),
+        }
+    }
+
+    #[test]
+    fn help_scroll_clamped_to_content() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        // Open help for DetailDiffView which has 3 lines
+        state.focus = PanelFocus::Detail;
+        state.detail_mode = DetailMode::DiffView;
+        dispatch(&mut state, Action::OpenHelp, &mock);
+
+        // Try scrolling many times — should clamp at line_count - 1
+        for _ in 0..20 {
+            dispatch(&mut state, Action::ModalMoveDown, &mock);
+        }
+        match &state.modal {
+            Some(Modal::Help { scroll, context }) => {
+                assert!(
+                    *scroll < context.line_count(),
+                    "scroll {} should be < {}",
+                    scroll,
+                    context.line_count()
+                );
+            }
+            _ => panic!("Expected Help modal"),
+        }
+    }
+
+    #[test]
+    fn modal_enter_on_help_keeps_modal() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenHelp, &mock);
+        dispatch(&mut state, Action::ModalEnter, &mock);
+        assert!(matches!(state.modal, Some(Modal::Help { .. })));
     }
 }

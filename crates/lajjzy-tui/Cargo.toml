@@ -8,6 +8,7 @@ lajjzy-core = { path = "../lajjzy-core" }
 ratatui = "0.30"
 crossterm = "0.29"
 anyhow = "1"
+nucleo-matcher = "0.3"
 
 [lints]
 workspace = true

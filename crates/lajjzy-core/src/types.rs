@@ -1,5 +1,13 @@
 use std::collections::HashMap;
 
+/// An entry in the jj operation log.
+#[derive(Debug, Clone)]
+pub struct OpLogEntry {
+    pub id: String,
+    pub description: String,
+    pub timestamp: String,
+}
+
 /// Complete graph data returned by `load_graph()`.
 #[derive(Debug, Clone)]
 pub struct GraphData {
@@ -21,6 +29,10 @@ pub struct GraphLine {
     /// The change ID if this is a node line (first line of a change block).
     /// None for continuation/connector lines.
     pub change_id: Option<String>,
+    /// Everything in the display string before the first alphanumeric character.
+    /// For node lines this is the graph glyph prefix; for connector lines it is
+    /// the entire `raw` string.
+    pub glyph_prefix: String,
 }
 
 /// Detailed info for the status bar.
@@ -131,22 +143,27 @@ mod tests {
                 GraphLine {
                     raw: "◉  abc123 alice 2m ago".into(),
                     change_id: Some("abc123".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "│  fix: resolve parser bug".into(),
                     change_id: None,
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "◉  def456 bob 1h ago".into(),
                     change_id: Some("def456".into()),
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "│  feat: add retry logic".into(),
                     change_id: None,
+                    glyph_prefix: String::new(),
                 },
                 GraphLine {
                     raw: "◉  ghi789 root()".into(),
                     change_id: Some("ghi789".into()),
+                    glyph_prefix: String::new(),
                 },
             ],
             HashMap::from([
