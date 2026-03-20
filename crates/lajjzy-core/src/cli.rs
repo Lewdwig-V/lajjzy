@@ -47,11 +47,65 @@ const UNIT_SEP: char = '\x1F';
 /// Separator between fields within metadata.
 const RECORD_SEP: char = '\x1E';
 
+/// Strip leading graph glyphs from a line to get the content.
+fn strip_graph_glyphs(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b' ' {
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'|' || bytes[i] == b'-' || bytes[i] == b'@' {
+            i += 1;
+            continue;
+        }
+        if i + 2 < bytes.len() && bytes[i] == 0xE2 {
+            i += 3;
+            continue;
+        }
+        break;
+    }
+    &line[i..]
+}
+
+/// Try to parse a continuation line as a file change summary.
+fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
+    let content = strip_graph_glyphs(raw_line);
+    if content.len() < 2 {
+        return None;
+    }
+
+    let status_char = content.as_bytes()[0];
+    let after_status = &content[1..];
+
+    match status_char {
+        b'A' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Added,
+        }),
+        b'M' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Modified,
+        }),
+        b'D' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Deleted,
+        }),
+        b'R' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Renamed,
+        }),
+        _ => None,
+    }
+}
+
 /// Parse the raw output of `jj log` with our custom template into `GraphData`.
 fn parse_graph_output(output: &str) -> Result<GraphData> {
     let mut lines = Vec::new();
     let mut details = std::collections::HashMap::new();
     let mut working_copy_index = None;
+    let mut current_change_id: Option<String> = None;
 
     for raw_line in output.lines() {
         if let Some(sep_pos) = raw_line.find(UNIT_SEP) {
@@ -68,6 +122,7 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
             }
 
             let change_id = fields[0].to_string();
+            current_change_id = Some(change_id.clone());
             let is_working_copy = !fields[9].is_empty();
 
             let index = lines.len();
@@ -103,6 +158,16 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
             lines.push(crate::types::GraphLine {
                 raw: display.to_string(),
                 change_id: Some(change_id),
+            });
+        } else if let Some(file_change) = parse_file_line(raw_line) {
+            if let Some(last_id) = &current_change_id
+                && let Some(detail) = details.get_mut(last_id)
+            {
+                detail.files.push(file_change);
+            }
+            lines.push(crate::types::GraphLine {
+                raw: raw_line.to_string(),
+                change_id: None,
             });
         } else {
             lines.push(crate::types::GraphLine {
@@ -145,11 +210,11 @@ impl RepoBackend for JjCliBackend {
             " ++ \"\\x1e\" ++ empty",
             " ++ \"\\x1e\" ++ conflict",
             " ++ \"\\x1e\" ++ if(self.current_working_copy(), \"@\", \"\")",
-            " ++ \"\\n\" ++ coalesce(description.first_line(), \"(no description)\")",
+            " ++ \"\\n\"",
         );
 
         let output = Command::new("jj")
-            .args(["log", "--color=never", "-T", template])
+            .args(["log", "--summary", "--color=never", "-T", template])
             .current_dir(&self.workspace_root)
             .output()
             .context("Failed to run `jj log`")?;
@@ -258,6 +323,56 @@ mod tests {
         let graph = parse_graph_output("").unwrap();
         assert!(graph.lines.is_empty());
         assert!(graph.node_indices().is_empty());
+    }
+
+    #[test]
+    fn parse_graph_output_with_file_summary() {
+        let output = "\
+@  mpvponzr add bar\x1Fmpvponzr\x1Edbd5259e\x1ELewdwig\x1Etest@test.com\x1E1m ago\x1Eadd bar\x1E\x1Efalse\x1Efalse\x1E@
+│  A bar.txt
+│  M foo.txt
+○  mrvmvrsz add foo\x1Fmrvmvrsz\x1Ecbfd5aa0\x1ELewdwig\x1Etest@test.com\x1E2m ago\x1Eadd foo\x1E\x1Efalse\x1Efalse\x1E
+│  A foo.txt
+◆  zzzzzzzz (no description)\x1Fzzzzzzzz\x1E000000000000\x1E\x1E\x1E56y ago\x1E\x1E\x1Etrue\x1Efalse\x1E";
+
+        let graph = parse_graph_output(output).unwrap();
+
+        let detail = graph.details.get("mpvponzr").unwrap();
+        assert_eq!(detail.files.len(), 2);
+        assert_eq!(detail.files[0].path, "bar.txt");
+        assert_eq!(detail.files[0].status, crate::types::FileStatus::Added);
+        assert_eq!(detail.files[1].path, "foo.txt");
+        assert_eq!(detail.files[1].status, crate::types::FileStatus::Modified);
+
+        let detail2 = graph.details.get("mrvmvrsz").unwrap();
+        assert_eq!(detail2.files.len(), 1);
+        assert_eq!(detail2.files[0].path, "foo.txt");
+
+        let detail3 = graph.details.get("zzzzzzzz").unwrap();
+        assert!(detail3.files.is_empty());
+    }
+
+    #[test]
+    fn parse_graph_output_rename() {
+        let output = "\
+@  abc rename\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Erename\x1E\x1Efalse\x1Efalse\x1E@
+│  R {foo.txt => bar.txt}";
+
+        let graph = parse_graph_output(output).unwrap();
+        let detail = graph.details.get("abc").unwrap();
+        assert_eq!(detail.files.len(), 1);
+        assert_eq!(detail.files[0].status, crate::types::FileStatus::Renamed);
+        assert!(detail.files[0].path.contains("=>"));
+    }
+
+    #[test]
+    fn parse_graph_output_no_files_for_empty_change() {
+        let output = "\
+@  abc (no description)\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1E\x1E\x1Etrue\x1Efalse\x1E@";
+
+        let graph = parse_graph_output(output).unwrap();
+        let detail = graph.details.get("abc").unwrap();
+        assert!(detail.files.is_empty());
     }
 
     #[test]
