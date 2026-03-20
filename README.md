@@ -556,6 +556,32 @@ pub struct AppState {
 - Mouse support (optional, not primary input).
 - Packaging: `cargo install`, AUR, Homebrew, Nix flake.
 
+### M7 - implement **complete** UI/UX for jj's branchless and safe history editing
+
+* Automatic Commits & No Index: There is no git add or staging area. Every change in your working directory is automatically recorded as a "working copy" commit.
+* Stable Change IDs: Unlike Git hashes that change when you rebase or amend, jj uses permanent Change IDs. This allows the tool to automatically rebase all descendant changes whenever a parent is modified.
+* First-Class Conflicts: Conflicts do not stop your workflow. They are stored in the commit tree as metadata, allowing you to resolve them whenever it is convenient rather than immediately during a merge.
+* Operation Log & Undo: Every command can be undone. jj maintains a full history of operations (like a supercharged reflog), making experimentation and history rewriting fearless. [5, 8, 9, 10, 11, 12, 13, 14]
+
+### M8 - implement UI/UX for GitButler-inspired Simultaneous Parallel Work using jj
+
+* Virtual Branch Lanes: You can work on multiple independent features simultaneously in the same working directory. Changes can be moved into different "lanes" (branches) like a Kanban board.
+* Early Conflict Detection: Conflicts are surfaced as soon as you apply a teammate's branch locally, rather than waiting until the final merge into the main branch.
+* Branch Composition: You can apply and test multiple branches at once without leaving your current coding context or performing complex checkouts. [16, 17]
+
+### M9 - implement UI/UX for Gerrit-inspired Atomic, Commit-Level Reviews using jj
+
+* Commit-by-Commit Review: Every single commit is treated as a separate reviewable unit. This encourages small, self-contained changes rather than monolithic pull requests.
+* Automated Review Branches: When you push a commit, Gerrit automatically creates temporary, "invisible" branches to hold the change for review.
+* Change Tracking Across Force Pushes: Gerrit excels at showing the difference between different versions of the same commit (patchsets), even if you've rebased or amended it.
+
+### M10 - Implement UI/UX for Graphite-inspired Automated Stacked Pull Requests
+
+* Automatic Restacking: If you modify a commit in the middle of a "stack" of dependent branches, Graphite automatically rebases all "downstack" (child) branches for you.
+* One Command Submission: Use gt stack submit to push an entire sequence of dependent branches and create individual GitHub PRs for each, all at once.
+* Stack-Aware Review UI: It provides a custom web interface that understands the relationship between PRs, allowing reviewers to navigate through the logical sequence of a feature.
+* Merge Queues: A built-in merge queue batches multiple PRs together to test them in parallel, ensuring they land on the main branch without conflicts or breaking CI.
+
 ---
 
 ## 10. Open Questions
