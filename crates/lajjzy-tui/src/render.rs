@@ -1,7 +1,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::Clear;
 
 use crate::app::{AppState, Modal};
 use crate::panels;
@@ -63,19 +63,26 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
             );
             frame.render_widget(widget, modal_area);
         }
-        Modal::FuzzyFind { .. } | Modal::Help { .. } => {
+        Modal::FuzzyFind {
+            query,
+            matches,
+            cursor,
+        } => {
             let modal_area = centered_rect(60, 80, area);
             frame.render_widget(Clear, modal_area);
-            let title = match modal {
-                Modal::FuzzyFind { .. } => "Find Change",
-                Modal::Help { .. } => "Help",
-                _ => unreachable!(),
-            };
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Blue))
-                .title(title);
-            frame.render_widget(block, modal_area);
+            let widget = crate::widgets::fuzzy_find::FuzzyFindWidget::new(
+                query,
+                matches,
+                &state.graph,
+                *cursor,
+            );
+            frame.render_widget(widget, modal_area);
+        }
+        Modal::Help { context, scroll } => {
+            let modal_area = centered_rect(50, 60, area);
+            frame.render_widget(Clear, modal_area);
+            let widget = crate::widgets::help::HelpWidget::new(*context, *scroll);
+            frame.render_widget(widget, modal_area);
         }
     }
 }
