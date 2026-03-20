@@ -26,7 +26,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     frame.render_widget(status_widget, outer[1]);
 
     // Modal overlay
-    if let Some(ref modal) = state.modal {
+    if state.modal.is_some() {
         let dim = Style::default().add_modifier(Modifier::DIM);
         let area = outer[0];
         for y in area.y..area.y + area.height {
@@ -34,24 +34,50 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 frame.buffer_mut()[(x, y)].set_style(dim);
             }
         }
-        render_modal(frame, modal, area);
+        render_modal(frame, state, area);
     }
 }
 
-fn render_modal(frame: &mut Frame, modal: &Modal, area: Rect) {
-    let modal_area = centered_rect(60, 80, area);
-    frame.render_widget(Clear, modal_area);
-    let title = match modal {
-        Modal::OpLog { .. } => "Operation Log",
-        Modal::BookmarkPicker { .. } => "Bookmarks",
-        Modal::FuzzyFind { .. } => "Find Change",
-        Modal::Help { .. } => "Help",
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Blue))
-        .title(title);
-    frame.render_widget(block, modal_area);
+fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
+    let modal = state
+        .modal
+        .as_ref()
+        .expect("render_modal called without modal");
+    match modal {
+        Modal::OpLog {
+            entries,
+            cursor,
+            scroll,
+        } => {
+            frame.render_widget(Clear, area);
+            let widget = crate::widgets::op_log::OpLogWidget::new(entries, *cursor, *scroll);
+            frame.render_widget(widget, area);
+        }
+        Modal::BookmarkPicker { bookmarks, cursor } => {
+            let modal_area = centered_rect(60, 80, area);
+            frame.render_widget(Clear, modal_area);
+            let widget = crate::widgets::bookmark_picker::BookmarkPickerWidget::new(
+                bookmarks,
+                &state.graph.details,
+                *cursor,
+            );
+            frame.render_widget(widget, modal_area);
+        }
+        Modal::FuzzyFind { .. } | Modal::Help { .. } => {
+            let modal_area = centered_rect(60, 80, area);
+            frame.render_widget(Clear, modal_area);
+            let title = match modal {
+                Modal::FuzzyFind { .. } => "Find Change",
+                Modal::Help { .. } => "Help",
+                _ => unreachable!(),
+            };
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Blue))
+                .title(title);
+            frame.render_widget(block, modal_area);
+        }
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
