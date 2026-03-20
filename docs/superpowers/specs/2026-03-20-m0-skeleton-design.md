@@ -142,7 +142,7 @@ jj log --color=never -T '
   ++ author.name() ++ "\x1E"
   ++ author.email() ++ "\x1E"
   ++ committer.timestamp().ago() ++ "\x1E"
-  ++ description ++ "\x1E"
+  ++ description.first_line() ++ "\x1E"
   ++ bookmarks ++ "\x1E"
   ++ empty ++ "\x1E"
   ++ conflict ++ "\x1E"
@@ -153,7 +153,8 @@ jj log --color=never -T '
 The exact template will be validated during implementation (jj template syntax may require adjustments). The key design points:
 - `--color=never` avoids ANSI escape sequences; the TUI applies its own colors via ratatui styles.
 - `\x1F` (unit separator) marks the boundary between display text and metadata.
-- `\x1E` (record separator) delimits fields within the metadata, avoiding JSON escaping issues with descriptions containing quotes/newlines.
+- `\x1E` (record separator) delimits fields within the metadata, avoiding JSON escaping issues.
+- `description.first_line()` is used in metadata to avoid multi-line descriptions breaking line-by-line parsing. Full descriptions are an M1 concern (detail pane).
 - The metadata is parsed into `ChangeDetail` structs and stored in a `HashMap` keyed by change ID.
 - The working-copy change is identified by the `working_copies` field being non-empty.
 
