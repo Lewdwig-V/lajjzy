@@ -1,5 +1,7 @@
 use lajjzy_core::backend::RepoBackend;
 use lajjzy_core::types::{ChangeDetail, DiffHunk, GraphData, OpLogEntry};
+use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelFocus {
@@ -457,8 +459,33 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
     }
 }
 
-fn fuzzy_match(_query: &str, graph: &GraphData) -> Vec<usize> {
-    graph.node_indices().to_vec()
+fn fuzzy_match(query: &str, graph: &GraphData) -> Vec<usize> {
+    if query.is_empty() {
+        return graph.node_indices().to_vec();
+    }
+
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let pattern = Pattern::new(
+        query,
+        CaseMatching::Smart,
+        Normalization::Smart,
+        AtomKind::Fuzzy,
+    );
+
+    let mut scored: Vec<(usize, u32)> = Vec::new();
+    for &idx in graph.node_indices() {
+        if let Some(cid) = graph.lines[idx].change_id.as_ref()
+            && let Some(detail) = graph.details.get(cid)
+        {
+            let haystack = format!("{cid} {} {}", detail.author, detail.description);
+            let mut buf: Vec<char> = Vec::new();
+            if let Some(score) = pattern.score(Utf32Str::new(&haystack, &mut buf), &mut matcher) {
+                scored.push((idx, score));
+            }
+        }
+    }
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.into_iter().map(|(idx, _)| idx).collect()
 }
 
 #[cfg(test)]
