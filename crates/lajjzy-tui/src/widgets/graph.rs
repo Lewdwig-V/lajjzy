@@ -108,6 +108,10 @@ impl<'a> GraphWidget<'a> {
             }
         } else {
             // No detail — fall back to the raw tail after the glyph prefix
+            debug_assert!(
+                false,
+                "GraphLine has change_id '{change_id}' but no detail entry"
+            );
             let tail = &line.raw[line.glyph_prefix.len()..];
             spans.push(Span::raw(tail.to_string()));
         }

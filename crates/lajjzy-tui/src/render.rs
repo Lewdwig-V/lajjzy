@@ -39,10 +39,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
 }
 
 fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
-    let modal = state
-        .modal
-        .as_ref()
-        .expect("render_modal called without modal");
+    let Some(modal) = state.modal.as_ref() else {
+        return;
+    };
     match modal {
         Modal::OpLog {
             entries,

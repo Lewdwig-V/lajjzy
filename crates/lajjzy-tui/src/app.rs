@@ -44,6 +44,16 @@ pub enum HelpContext {
     DetailDiffView,
 }
 
+impl HelpContext {
+    pub fn line_count(self) -> usize {
+        match self {
+            Self::Graph => 10,
+            Self::DetailFileList => 4,
+            Self::DetailDiffView => 3,
+        }
+    }
+}
+
 pub struct AppState {
     pub graph: GraphData,
     cursor: usize,
@@ -374,8 +384,10 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
                             *cursor += 1;
                         }
                     }
-                    Modal::Help { scroll, .. } => {
-                        *scroll += 1;
+                    Modal::Help { context, scroll } => {
+                        if *scroll + 1 < context.line_count() {
+                            *scroll += 1;
+                        }
                     }
                 }
             }
@@ -1130,6 +1142,139 @@ mod tests {
         dispatch(&mut state, Action::ModalEnter, &mock);
         assert!(state.modal.is_none());
         assert_eq!(state.cursor(), 2);
+    }
+
+    fn sample_graph_with_bookmarks() -> GraphData {
+        GraphData::new(
+            vec![
+                GraphLine {
+                    raw: "◉  abc".into(),
+                    change_id: Some("abc".into()),
+                    glyph_prefix: String::new(),
+                },
+                GraphLine {
+                    raw: "│  desc1".into(),
+                    change_id: None,
+                    glyph_prefix: String::new(),
+                },
+                GraphLine {
+                    raw: "◉  def".into(),
+                    change_id: Some("def".into()),
+                    glyph_prefix: String::new(),
+                },
+            ],
+            HashMap::from([
+                (
+                    "abc".into(),
+                    ChangeDetail {
+                        commit_id: "a1".into(),
+                        author: "a".into(),
+                        email: "a@b".into(),
+                        timestamp: "1m".into(),
+                        description: "desc1".into(),
+                        bookmarks: vec!["main".into()],
+                        is_empty: false,
+                        has_conflict: false,
+                        files: vec![],
+                    },
+                ),
+                (
+                    "def".into(),
+                    ChangeDetail {
+                        commit_id: "d1".into(),
+                        author: "b".into(),
+                        email: "b@c".into(),
+                        timestamp: "2m".into(),
+                        description: "desc2".into(),
+                        bookmarks: vec!["feature".into()],
+                        is_empty: false,
+                        has_conflict: false,
+                        files: vec![],
+                    },
+                ),
+            ]),
+            Some(0),
+        )
+    }
+
+    #[test]
+    fn toggle_op_log_error_sets_state_error() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::ToggleOpLog, &FailingBackend);
+        assert!(state.error.is_some());
+        assert!(state.modal.is_none());
+    }
+
+    #[test]
+    fn bookmark_enter_jumps_cursor() {
+        let mock = MockBackend {
+            graph: sample_graph_with_bookmarks(),
+        };
+        let mut state = AppState::new(sample_graph_with_bookmarks());
+        dispatch(&mut state, Action::OpenBookmarks, &mock);
+        assert!(matches!(state.modal, Some(Modal::BookmarkPicker { .. })));
+
+        if let Some(Modal::BookmarkPicker { ref bookmarks, .. }) = state.modal {
+            assert!(!bookmarks.is_empty());
+        }
+
+        // Move to second bookmark ("feature" on change "def" at index 2)
+        dispatch(&mut state, Action::ModalMoveDown, &mock);
+        dispatch(&mut state, Action::ModalEnter, &mock);
+        assert!(state.modal.is_none());
+        assert_eq!(state.cursor(), 2);
+        assert_eq!(state.selected_change_id(), Some("def"));
+    }
+
+    #[test]
+    fn fuzzy_input_narrows_matches() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
+
+        let initial_count = match &state.modal {
+            Some(Modal::FuzzyFind { matches, .. }) => matches.len(),
+            _ => panic!("Expected FuzzyFind"),
+        };
+
+        // Type characters that should narrow results
+        dispatch(&mut state, Action::FuzzyInput('d'), &mock);
+        dispatch(&mut state, Action::FuzzyInput('e'), &mock);
+        dispatch(&mut state, Action::FuzzyInput('s'), &mock);
+        dispatch(&mut state, Action::FuzzyInput('c'), &mock);
+
+        match &state.modal {
+            Some(Modal::FuzzyFind { matches, .. }) => {
+                assert!(matches.len() <= initial_count);
+            }
+            _ => panic!("Expected FuzzyFind"),
+        }
+    }
+
+    #[test]
+    fn help_scroll_clamped_to_content() {
+        let mock = mock();
+        let mut state = AppState::new(sample_graph());
+        // Open help for DetailDiffView which has 3 lines
+        state.focus = PanelFocus::Detail;
+        state.detail_mode = DetailMode::DiffView;
+        dispatch(&mut state, Action::OpenHelp, &mock);
+
+        // Try scrolling many times — should clamp at line_count - 1
+        for _ in 0..20 {
+            dispatch(&mut state, Action::ModalMoveDown, &mock);
+        }
+        match &state.modal {
+            Some(Modal::Help { scroll, context }) => {
+                assert!(
+                    *scroll < context.line_count(),
+                    "scroll {} should be < {}",
+                    scroll,
+                    context.line_count()
+                );
+            }
+            _ => panic!("Expected Help modal"),
+        }
     }
 
     #[test]

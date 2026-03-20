@@ -287,6 +287,14 @@ fn parse_op_log_output(output: &str) -> Result<Vec<crate::types::OpLogEntry>> {
             });
         }
     }
+
+    if entries.is_empty() && output.lines().any(|l| !l.trim().is_empty()) {
+        bail!(
+            "Parsed op log output but found zero entries. \
+             The jj op log template output format may have changed."
+        );
+    }
+
     Ok(entries)
 }
 
@@ -645,6 +653,13 @@ new mode 100755";
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, "abc12345");
         assert!(entries[0].description.contains("bookmark"));
+    }
+
+    #[test]
+    fn parse_op_log_output_rejects_lines_without_separator() {
+        let output = "some output without separator\nanother line\n";
+        let result = parse_op_log_output(output);
+        assert!(result.is_err());
     }
 
     #[test]

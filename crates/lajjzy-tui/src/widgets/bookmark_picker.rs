@@ -46,7 +46,16 @@ impl Widget for BookmarkPickerWidget<'_> {
         let highlight = Style::default().add_modifier(Modifier::REVERSED);
         let height = inner.height as usize;
 
-        for (row, idx) in (0..height).enumerate() {
+        // Auto-follow: ensure cursor is visible in viewport
+        let scroll = if height == 0 {
+            0
+        } else if self.cursor >= height {
+            self.cursor - height + 1
+        } else {
+            0
+        };
+
+        for (row, idx) in (scroll..scroll + height).enumerate() {
             if idx >= self.bookmarks.len() {
                 break;
             }

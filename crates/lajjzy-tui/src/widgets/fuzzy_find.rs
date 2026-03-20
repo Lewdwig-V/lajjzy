@@ -63,7 +63,16 @@ impl Widget for FuzzyFindWidget<'_> {
             return;
         }
 
-        for (row, idx) in (0..results_height).enumerate() {
+        // Auto-follow: ensure cursor is visible in viewport
+        let scroll = if results_height == 0 {
+            0
+        } else if self.cursor >= results_height {
+            self.cursor - results_height + 1
+        } else {
+            0
+        };
+
+        for (row, idx) in (scroll..scroll + results_height).enumerate() {
             if idx >= self.matches.len() {
                 break;
             }

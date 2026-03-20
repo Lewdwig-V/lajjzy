@@ -40,7 +40,18 @@ impl Widget for OpLogWidget<'_> {
         let highlight = Style::default().add_modifier(Modifier::REVERSED);
         let height = inner.height as usize;
 
-        for (row, idx) in (self.scroll..self.scroll + height).enumerate() {
+        // Auto-follow: ensure cursor is visible in viewport
+        let scroll = if height == 0 {
+            self.scroll
+        } else if self.cursor >= self.scroll + height {
+            self.cursor - height + 1
+        } else if self.cursor < self.scroll {
+            self.cursor
+        } else {
+            self.scroll
+        };
+
+        for (row, idx) in (scroll..scroll + height).enumerate() {
             if idx >= self.entries.len() {
                 break;
             }
