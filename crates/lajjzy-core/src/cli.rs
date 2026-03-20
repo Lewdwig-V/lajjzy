@@ -188,9 +188,62 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
     Ok(GraphData::new(lines, details, working_copy_index))
 }
 
+/// Parse git-format diff output into hunks.
+#[allow(clippy::unnecessary_wraps)] // Result kept for forward-compatibility with error paths
+fn parse_diff_output(output: &str) -> Result<Vec<crate::types::DiffHunk>> {
+    let mut hunks = Vec::new();
+    let mut current_hunk: Option<crate::types::DiffHunk> = None;
+
+    for line in output.lines() {
+        if line.starts_with("@@") {
+            if let Some(hunk) = current_hunk.take() {
+                hunks.push(hunk);
+            }
+            current_hunk = Some(crate::types::DiffHunk {
+                header: line.to_string(),
+                lines: Vec::new(),
+            });
+        } else if let Some(ref mut hunk) = current_hunk {
+            let (kind, content) = if let Some(rest) = line.strip_prefix('+') {
+                (crate::types::DiffLineKind::Added, rest)
+            } else if let Some(rest) = line.strip_prefix('-') {
+                (crate::types::DiffLineKind::Removed, rest)
+            } else if let Some(rest) = line.strip_prefix(' ') {
+                (crate::types::DiffLineKind::Context, rest)
+            } else {
+                (crate::types::DiffLineKind::Context, line)
+            };
+            hunk.lines.push(crate::types::DiffLine {
+                kind,
+                content: content.to_string(),
+            });
+        }
+    }
+
+    if let Some(hunk) = current_hunk {
+        hunks.push(hunk);
+    }
+
+    Ok(hunks)
+}
+
 impl RepoBackend for JjCliBackend {
-    fn file_diff(&self, _change_id: &str, _path: &str) -> Result<Vec<crate::types::DiffHunk>> {
-        todo!("Implemented in Task 5")
+    fn file_diff(&self, change_id: &str, path: &str) -> Result<Vec<crate::types::DiffHunk>> {
+        let output = Command::new("jj")
+            .args(["diff", "-r", change_id, "--git", "--color=never", path])
+            .current_dir(&self.workspace_root)
+            .output()
+            .with_context(|| format!("Failed to run `jj diff` for {path}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("jj diff failed for {path}: {}", stderr.trim());
+        }
+
+        let stdout =
+            String::from_utf8(output.stdout).context("jj diff output was not valid UTF-8")?;
+
+        parse_diff_output(&stdout)
     }
 
     fn load_graph(&self) -> Result<GraphData> {
@@ -373,6 +426,107 @@ mod tests {
         let graph = parse_graph_output(output).unwrap();
         let detail = graph.details.get("abc").unwrap();
         assert!(detail.files.is_empty());
+    }
+
+    #[test]
+    fn parse_diff_output_single_hunk() {
+        let output = "\
+diff --git a/foo.txt b/foo.txt
+index ce01362..2e09960 100644
+--- a/foo.txt
++++ b/foo.txt
+@@ -1,1 +1,1 @@
+-hello
++modified";
+
+        let hunks = parse_diff_output(output).unwrap();
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].header.contains("-1,1 +1,1"));
+        assert_eq!(hunks[0].lines.len(), 2);
+        assert_eq!(hunks[0].lines[0].kind, crate::types::DiffLineKind::Removed);
+        assert_eq!(hunks[0].lines[0].content, "hello");
+        assert_eq!(hunks[0].lines[1].kind, crate::types::DiffLineKind::Added);
+        assert_eq!(hunks[0].lines[1].content, "modified");
+    }
+
+    #[test]
+    fn parse_diff_output_new_file() {
+        let output = "\
+diff --git a/bar.txt b/bar.txt
+new file mode 100644
+index 0000000..cc628cc
+--- /dev/null
++++ b/bar.txt
+@@ -0,0 +1,1 @@
++world";
+
+        let hunks = parse_diff_output(output).unwrap();
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].lines.len(), 1);
+        assert_eq!(hunks[0].lines[0].kind, crate::types::DiffLineKind::Added);
+    }
+
+    #[test]
+    fn parse_diff_output_multi_hunk() {
+        let output = "\
+diff --git a/foo.txt b/foo.txt
+--- a/foo.txt
++++ b/foo.txt
+@@ -1,3 +1,3 @@
+ line1
+-old2
++new2
+ line3
+@@ -10,3 +10,3 @@
+ line10
+-old11
++new11
+ line12";
+
+        let hunks = parse_diff_output(output).unwrap();
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(hunks[0].lines.len(), 4); // context, removed, added, context
+        assert_eq!(hunks[1].lines.len(), 4); // context, removed, added, context
+    }
+
+    #[test]
+    fn parse_diff_output_empty() {
+        let hunks = parse_diff_output("").unwrap();
+        assert!(hunks.is_empty());
+    }
+
+    #[test]
+    fn file_diff_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        Command::new("jj")
+            .args(["git", "init"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "hello\n").unwrap();
+        Command::new("jj")
+            .args(["describe", "-m", "add test"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        let graph = backend.load_graph().unwrap();
+        let wc_idx = graph.working_copy_index.unwrap();
+        let change_id = graph.lines[wc_idx].change_id.as_ref().unwrap();
+
+        let hunks = backend.file_diff(change_id, "test.txt").unwrap();
+        assert!(!hunks.is_empty());
+        assert!(
+            hunks[0]
+                .lines
+                .iter()
+                .any(|l| l.kind == crate::types::DiffLineKind::Added)
+        );
     }
 
     #[test]
