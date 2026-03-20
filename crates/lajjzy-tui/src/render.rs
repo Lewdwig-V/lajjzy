@@ -1,7 +1,9 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::{Block, Borders, Clear};
 
-use crate::app::AppState;
+use crate::app::{AppState, Modal};
 use crate::panels;
 use crate::widgets::status_bar::StatusBarWidget;
 
@@ -22,4 +24,47 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let error = state.error.as_deref();
     let status_widget = StatusBarWidget::new(change_id, detail, error);
     frame.render_widget(status_widget, outer[1]);
+
+    // Modal overlay
+    if let Some(ref modal) = state.modal {
+        let dim = Style::default().add_modifier(Modifier::DIM);
+        let area = outer[0];
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                frame.buffer_mut()[(x, y)].set_style(dim);
+            }
+        }
+        render_modal(frame, modal, area);
+    }
+}
+
+fn render_modal(frame: &mut Frame, modal: &Modal, area: Rect) {
+    let modal_area = centered_rect(60, 80, area);
+    frame.render_widget(Clear, modal_area);
+    let title = match modal {
+        Modal::OpLog { .. } => "Operation Log",
+        Modal::BookmarkPicker { .. } => "Bookmarks",
+        Modal::FuzzyFind { .. } => "Find Change",
+        Modal::Help { .. } => "Help",
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Blue))
+        .title(title);
+    frame.render_widget(block, modal_area);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(area);
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(popup_layout[1])[1]
 }

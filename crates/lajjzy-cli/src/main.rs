@@ -6,7 +6,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use lajjzy_core::backend::RepoBackend;
 use lajjzy_core::cli::JjCliBackend;
 use lajjzy_tui::app::{AppState, dispatch};
-use lajjzy_tui::input::map_event;
+use lajjzy_tui::input::{map_event, map_modal_event};
 use lajjzy_tui::render::render;
 
 fn main() -> Result<()> {
@@ -43,7 +43,11 @@ fn run_loop(
             if key_event.kind != KeyEventKind::Press {
                 continue;
             }
-            if let Some(action) = map_event(key_event, state.focus, state.detail_mode) {
+            if let Some(action) = if let Some(ref modal) = state.modal {
+                map_modal_event(key_event, modal)
+            } else {
+                map_event(key_event, state.focus, state.detail_mode)
+            } {
                 dispatch(state, action, backend);
             }
         }
