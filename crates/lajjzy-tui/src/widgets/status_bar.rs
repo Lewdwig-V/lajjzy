@@ -80,6 +80,7 @@ mod tests {
             bookmarks: vec!["main".into()],
             is_empty: false,
             has_conflict: false,
+            files: vec![],
         }
     }
 

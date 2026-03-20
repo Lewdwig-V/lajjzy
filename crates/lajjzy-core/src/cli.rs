@@ -47,11 +47,75 @@ const UNIT_SEP: char = '\x1F';
 /// Separator between fields within metadata.
 const RECORD_SEP: char = '\x1E';
 
+/// Strip leading graph glyphs from a line to get the content.
+fn strip_graph_glyphs(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b' ' {
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'|' || bytes[i] == b'-' || bytes[i] == b'@' {
+            i += 1;
+            continue;
+        }
+        if i + 2 < bytes.len() && bytes[i] == 0xE2 {
+            i += 3;
+            continue;
+        }
+        break;
+    }
+    &line[i..]
+}
+
+/// Try to parse a continuation line as a file change summary.
+fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
+    let content = strip_graph_glyphs(raw_line);
+    if content.len() < 2 {
+        return None;
+    }
+
+    let first_byte = content.as_bytes()[0];
+    if !first_byte.is_ascii() {
+        return None;
+    }
+
+    let after_status = &content[1..];
+
+    match first_byte {
+        b'A' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Added,
+        }),
+        b'M' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Modified,
+        }),
+        b'D' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Deleted,
+        }),
+        b'R' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Renamed,
+        }),
+        c if c.is_ascii_uppercase() && after_status.starts_with(' ') => {
+            Some(crate::types::FileChange {
+                path: after_status.trim().to_string(),
+                status: crate::types::FileStatus::Unknown(c as char),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Parse the raw output of `jj log` with our custom template into `GraphData`.
 fn parse_graph_output(output: &str) -> Result<GraphData> {
     let mut lines = Vec::new();
     let mut details = std::collections::HashMap::new();
     let mut working_copy_index = None;
+    let mut current_change_id: Option<String> = None;
 
     for raw_line in output.lines() {
         if let Some(sep_pos) = raw_line.find(UNIT_SEP) {
@@ -68,6 +132,7 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
             }
 
             let change_id = fields[0].to_string();
+            current_change_id = Some(change_id.clone());
             let is_working_copy = !fields[9].is_empty();
 
             let index = lines.len();
@@ -96,12 +161,23 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
                     },
                     is_empty: fields[7] == "true",
                     has_conflict: fields[8] == "true",
+                    files: vec![],
                 },
             );
 
             lines.push(crate::types::GraphLine {
                 raw: display.to_string(),
                 change_id: Some(change_id),
+            });
+        } else if let Some(file_change) = parse_file_line(raw_line) {
+            if let Some(last_id) = &current_change_id
+                && let Some(detail) = details.get_mut(last_id)
+            {
+                detail.files.push(file_change);
+            }
+            lines.push(crate::types::GraphLine {
+                raw: raw_line.to_string(),
+                change_id: None,
             });
         } else {
             lines.push(crate::types::GraphLine {
@@ -122,7 +198,85 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
     Ok(GraphData::new(lines, details, working_copy_index))
 }
 
+/// Parse git-format diff output into hunks.
+///
+/// Pre-`@@` header lines (`diff --git`, `index`, `new file mode`, etc.) are
+/// collected. If the diff has no `@@` hunks (chmod-only, binary, pure rename),
+/// a single hunk with these header lines is returned so the user sees something
+/// rather than "(empty diff)".
+#[allow(clippy::unnecessary_wraps)] // Result kept for forward-compatibility with error paths
+fn parse_diff_output(output: &str) -> Result<Vec<crate::types::DiffHunk>> {
+    let mut hunks = Vec::new();
+    let mut current_hunk: Option<crate::types::DiffHunk> = None;
+    let mut header_lines: Vec<crate::types::DiffLine> = Vec::new();
+
+    for line in output.lines() {
+        if line.starts_with("@@") {
+            if let Some(hunk) = current_hunk.take() {
+                hunks.push(hunk);
+            }
+            current_hunk = Some(crate::types::DiffHunk {
+                header: line.to_string(),
+                lines: Vec::new(),
+            });
+        } else if let Some(ref mut hunk) = current_hunk {
+            let (kind, content) = if let Some(rest) = line.strip_prefix('+') {
+                (crate::types::DiffLineKind::Added, rest)
+            } else if let Some(rest) = line.strip_prefix('-') {
+                (crate::types::DiffLineKind::Removed, rest)
+            } else if let Some(rest) = line.strip_prefix(' ') {
+                (crate::types::DiffLineKind::Context, rest)
+            } else {
+                (crate::types::DiffLineKind::Context, line)
+            };
+            hunk.lines.push(crate::types::DiffLine {
+                kind,
+                content: content.to_string(),
+            });
+        } else {
+            // Pre-@@ header lines (diff --git, index, new file mode, etc.)
+            header_lines.push(crate::types::DiffLine {
+                kind: crate::types::DiffLineKind::Header,
+                content: line.to_string(),
+            });
+        }
+    }
+
+    if let Some(hunk) = current_hunk {
+        hunks.push(hunk);
+    }
+
+    // If no @@ hunks but we have header lines (chmod-only, binary, pure rename),
+    // create a synthetic hunk so the user sees the header info.
+    if hunks.is_empty() && !header_lines.is_empty() {
+        hunks.push(crate::types::DiffHunk {
+            header: String::new(),
+            lines: header_lines,
+        });
+    }
+
+    Ok(hunks)
+}
+
 impl RepoBackend for JjCliBackend {
+    fn file_diff(&self, change_id: &str, path: &str) -> Result<Vec<crate::types::DiffHunk>> {
+        let output = Command::new("jj")
+            .args(["diff", "-r", change_id, "--git", "--color=never", path])
+            .current_dir(&self.workspace_root)
+            .output()
+            .with_context(|| format!("Failed to run `jj diff` for {path}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("jj diff failed for {path}: {}", stderr.trim());
+        }
+
+        let stdout =
+            String::from_utf8(output.stdout).context("jj diff output was not valid UTF-8")?;
+
+        parse_diff_output(&stdout)
+    }
+
     fn load_graph(&self) -> Result<GraphData> {
         // `working_copies` is empty in jj 0.39.0; use self.current_working_copy() instead.
         let template = concat!(
@@ -140,11 +294,11 @@ impl RepoBackend for JjCliBackend {
             " ++ \"\\x1e\" ++ empty",
             " ++ \"\\x1e\" ++ conflict",
             " ++ \"\\x1e\" ++ if(self.current_working_copy(), \"@\", \"\")",
-            " ++ \"\\n\" ++ coalesce(description.first_line(), \"(no description)\")",
+            " ++ \"\\n\"",
         );
 
         let output = Command::new("jj")
-            .args(["log", "--color=never", "-T", template])
+            .args(["log", "--summary", "--color=never", "-T", template])
             .current_dir(&self.workspace_root)
             .output()
             .context("Failed to run `jj log`")?;
@@ -253,6 +407,173 @@ mod tests {
         let graph = parse_graph_output("").unwrap();
         assert!(graph.lines.is_empty());
         assert!(graph.node_indices().is_empty());
+    }
+
+    #[test]
+    fn parse_graph_output_with_file_summary() {
+        let output = "\
+@  mpvponzr add bar\x1Fmpvponzr\x1Edbd5259e\x1ELewdwig\x1Etest@test.com\x1E1m ago\x1Eadd bar\x1E\x1Efalse\x1Efalse\x1E@
+│  A bar.txt
+│  M foo.txt
+○  mrvmvrsz add foo\x1Fmrvmvrsz\x1Ecbfd5aa0\x1ELewdwig\x1Etest@test.com\x1E2m ago\x1Eadd foo\x1E\x1Efalse\x1Efalse\x1E
+│  A foo.txt
+◆  zzzzzzzz (no description)\x1Fzzzzzzzz\x1E000000000000\x1E\x1E\x1E56y ago\x1E\x1E\x1Etrue\x1Efalse\x1E";
+
+        let graph = parse_graph_output(output).unwrap();
+
+        let detail = graph.details.get("mpvponzr").unwrap();
+        assert_eq!(detail.files.len(), 2);
+        assert_eq!(detail.files[0].path, "bar.txt");
+        assert_eq!(detail.files[0].status, crate::types::FileStatus::Added);
+        assert_eq!(detail.files[1].path, "foo.txt");
+        assert_eq!(detail.files[1].status, crate::types::FileStatus::Modified);
+
+        let detail2 = graph.details.get("mrvmvrsz").unwrap();
+        assert_eq!(detail2.files.len(), 1);
+        assert_eq!(detail2.files[0].path, "foo.txt");
+
+        let detail3 = graph.details.get("zzzzzzzz").unwrap();
+        assert!(detail3.files.is_empty());
+    }
+
+    #[test]
+    fn parse_graph_output_rename() {
+        let output = "\
+@  abc rename\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Erename\x1E\x1Efalse\x1Efalse\x1E@
+│  R {foo.txt => bar.txt}";
+
+        let graph = parse_graph_output(output).unwrap();
+        let detail = graph.details.get("abc").unwrap();
+        assert_eq!(detail.files.len(), 1);
+        assert_eq!(detail.files[0].status, crate::types::FileStatus::Renamed);
+        assert!(detail.files[0].path.contains("=>"));
+    }
+
+    #[test]
+    fn parse_graph_output_no_files_for_empty_change() {
+        let output = "\
+@  abc (no description)\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1E\x1E\x1Etrue\x1Efalse\x1E@";
+
+        let graph = parse_graph_output(output).unwrap();
+        let detail = graph.details.get("abc").unwrap();
+        assert!(detail.files.is_empty());
+    }
+
+    #[test]
+    fn parse_diff_output_single_hunk() {
+        let output = "\
+diff --git a/foo.txt b/foo.txt
+index ce01362..2e09960 100644
+--- a/foo.txt
++++ b/foo.txt
+@@ -1,1 +1,1 @@
+-hello
++modified";
+
+        let hunks = parse_diff_output(output).unwrap();
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].header.contains("-1,1 +1,1"));
+        assert_eq!(hunks[0].lines.len(), 2);
+        assert_eq!(hunks[0].lines[0].kind, crate::types::DiffLineKind::Removed);
+        assert_eq!(hunks[0].lines[0].content, "hello");
+        assert_eq!(hunks[0].lines[1].kind, crate::types::DiffLineKind::Added);
+        assert_eq!(hunks[0].lines[1].content, "modified");
+    }
+
+    #[test]
+    fn parse_diff_output_new_file() {
+        let output = "\
+diff --git a/bar.txt b/bar.txt
+new file mode 100644
+index 0000000..cc628cc
+--- /dev/null
++++ b/bar.txt
+@@ -0,0 +1,1 @@
++world";
+
+        let hunks = parse_diff_output(output).unwrap();
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].lines.len(), 1);
+        assert_eq!(hunks[0].lines[0].kind, crate::types::DiffLineKind::Added);
+    }
+
+    #[test]
+    fn parse_diff_output_multi_hunk() {
+        let output = "\
+diff --git a/foo.txt b/foo.txt
+--- a/foo.txt
++++ b/foo.txt
+@@ -1,3 +1,3 @@
+ line1
+-old2
++new2
+ line3
+@@ -10,3 +10,3 @@
+ line10
+-old11
++new11
+ line12";
+
+        let hunks = parse_diff_output(output).unwrap();
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(hunks[0].lines.len(), 4); // context, removed, added, context
+        assert_eq!(hunks[1].lines.len(), 4); // context, removed, added, context
+    }
+
+    #[test]
+    fn parse_diff_output_empty() {
+        let hunks = parse_diff_output("").unwrap();
+        assert!(hunks.is_empty());
+    }
+
+    #[test]
+    fn parse_diff_output_header_only() {
+        // chmod-only or binary diffs have headers but no @@ hunks
+        let output = "\
+diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755";
+
+        let hunks = parse_diff_output(output).unwrap();
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].header.is_empty()); // synthetic header
+        assert_eq!(hunks[0].lines.len(), 3);
+        assert_eq!(hunks[0].lines[0].kind, crate::types::DiffLineKind::Header);
+        assert!(hunks[0].lines[0].content.contains("diff --git"));
+    }
+
+    #[test]
+    fn file_diff_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        Command::new("jj")
+            .args(["git", "init"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "hello\n").unwrap();
+        Command::new("jj")
+            .args(["describe", "-m", "add test"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        let graph = backend.load_graph().unwrap();
+        let wc_idx = graph.working_copy_index.unwrap();
+        let change_id = graph.lines[wc_idx].change_id.as_ref().unwrap();
+
+        let hunks = backend.file_diff(change_id, "test.txt").unwrap();
+        assert!(!hunks.is_empty());
+        assert!(
+            hunks[0]
+                .lines
+                .iter()
+                .any(|l| l.kind == crate::types::DiffLineKind::Added)
+        );
     }
 
     #[test]

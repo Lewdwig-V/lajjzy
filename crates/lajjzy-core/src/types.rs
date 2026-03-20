@@ -34,6 +34,58 @@ pub struct ChangeDetail {
     pub bookmarks: Vec<String>,
     pub is_empty: bool,
     pub has_conflict: bool,
+    pub files: Vec<FileChange>,
+}
+
+/// A file changed in a change (parsed from `jj log --summary`).
+#[derive(Debug, Clone)]
+pub struct FileChange {
+    pub path: String,
+    pub status: FileStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileStatus {
+    Added,
+    Modified,
+    Deleted,
+    /// Rename: path contains `{old => new}` format from jj.
+    Renamed,
+    /// Unknown status code from jj — displayed as-is.
+    Unknown(char),
+}
+
+impl std::fmt::Display for FileStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Added => write!(f, "A"),
+            Self::Modified => write!(f, "M"),
+            Self::Deleted => write!(f, "D"),
+            Self::Renamed => write!(f, "R"),
+            Self::Unknown(c) => write!(f, "{c}"),
+        }
+    }
+}
+
+/// A hunk from a file diff (parsed from `jj diff --git`).
+#[derive(Debug, Clone)]
+pub struct DiffHunk {
+    pub header: String,
+    pub lines: Vec<DiffLine>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiffLine {
+    pub kind: DiffLineKind,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffLineKind {
+    Context,
+    Added,
+    Removed,
+    Header,
 }
 
 impl GraphData {
@@ -109,6 +161,7 @@ mod tests {
                         bookmarks: vec!["main".into()],
                         is_empty: false,
                         has_conflict: false,
+                        files: vec![],
                     },
                 ),
                 (
@@ -122,6 +175,7 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: false,
                         has_conflict: false,
+                        files: vec![],
                     },
                 ),
                 (
@@ -129,12 +183,13 @@ mod tests {
                     ChangeDetail {
                         commit_id: "ccc333".into(),
                         author: "root".into(),
-                        email: "".into(),
-                        timestamp: "".into(),
-                        description: "".into(),
+                        email: String::new(),
+                        timestamp: String::new(),
+                        description: String::new(),
                         bookmarks: vec![],
                         is_empty: true,
                         has_conflict: false,
+                        files: vec![],
                     },
                 ),
             ]),

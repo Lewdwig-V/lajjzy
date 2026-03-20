@@ -34,3 +34,4 @@ cargo fmt --check              # format check
 - Elm-style state machine: `fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)`
 - Graph data loaded in bulk via `load_graph()` — one jj subprocess call, not per-keypress.
 - Cursor skips connector lines; always lands on change nodes.
+- Backend calls in dispatch: `load_graph()` (Refresh) and `file_diff()` (DetailEnter). Both are pragmatic impurities that move to the effect executor in M2.
