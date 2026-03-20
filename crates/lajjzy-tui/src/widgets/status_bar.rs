@@ -58,7 +58,7 @@ impl Widget for StatusBarWidget<'_> {
                 } else {
                     &detail.description
                 };
-                let line2 = format!("{}{}", desc, bookmarks_str);
+                let line2 = format!("{desc}{bookmarks_str}");
                 buf.set_line(area.x, area.y + 1, &Line::raw(&line2), area.width);
             }
         }

@@ -25,8 +25,7 @@ impl<'a> GraphWidget<'a> {
         self.graph.lines[self.cursor + 1..]
             .iter()
             .position(|l| l.change_id.is_some())
-            .map(|p| self.cursor + p)
-            .unwrap_or(self.graph.lines.len() - 1)
+            .map_or(self.graph.lines.len() - 1, |p| self.cursor + p)
     }
 
     fn scroll_offset(&self, height: usize) -> usize {
@@ -75,6 +74,7 @@ impl Widget for GraphWidget<'_> {
             };
 
             let display = Line::raw(&line.raw);
+            #[allow(clippy::cast_possible_truncation)] // row bounded by area.height (u16)
             let y = area.y + row as u16;
             buf.set_line(area.x, y, &display, area.width);
 
