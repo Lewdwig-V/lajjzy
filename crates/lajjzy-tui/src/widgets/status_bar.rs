@@ -7,13 +7,22 @@ use ratatui::widgets::Widget;
 use lajjzy_core::types::ChangeDetail;
 
 pub struct StatusBarWidget<'a> {
+    change_id: Option<&'a str>,
     detail: Option<&'a ChangeDetail>,
     error: Option<&'a str>,
 }
 
 impl<'a> StatusBarWidget<'a> {
-    pub fn new(detail: Option<&'a ChangeDetail>, error: Option<&'a str>) -> Self {
-        Self { detail, error }
+    pub fn new(
+        change_id: Option<&'a str>,
+        detail: Option<&'a ChangeDetail>,
+        error: Option<&'a str>,
+    ) -> Self {
+        Self {
+            change_id,
+            detail,
+            error,
+        }
     }
 }
 
@@ -31,9 +40,10 @@ impl Widget for StatusBarWidget<'_> {
         }
 
         if let Some(detail) = self.detail {
+            let change_id = self.change_id.unwrap_or("???");
             let line1 = format!(
                 "{} {}  {} <{}>",
-                detail.change_id, detail.commit_id, detail.author, detail.email
+                change_id, detail.commit_id, detail.author, detail.email
             );
             buf.set_line(area.x, area.y, &Line::raw(&line1), area.width);
 
@@ -62,7 +72,6 @@ mod tests {
 
     fn sample_detail() -> ChangeDetail {
         ChangeDetail {
-            change_id: "abc12".into(),
             commit_id: "aaa11".into(),
             author: "alice".into(),
             email: "alice@example.com".into(),
@@ -71,14 +80,13 @@ mod tests {
             bookmarks: vec!["main".into()],
             is_empty: false,
             has_conflict: false,
-            is_working_copy: true,
         }
     }
 
     #[test]
     fn renders_change_detail() {
         let detail = sample_detail();
-        let widget = StatusBarWidget::new(Some(&detail), None);
+        let widget = StatusBarWidget::new(Some("abc12"), Some(&detail), None);
         let area = Rect::new(0, 0, 60, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -98,7 +106,7 @@ mod tests {
 
     #[test]
     fn renders_error_in_red() {
-        let widget = StatusBarWidget::new(None, Some("Refresh failed: timeout"));
+        let widget = StatusBarWidget::new(None, None, Some("Refresh failed: timeout"));
         let area = Rect::new(0, 0, 40, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -108,5 +116,18 @@ mod tests {
             .collect();
         assert!(line0.contains("Refresh failed"));
         assert_eq!(buf[(0, 0)].style().fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn renders_nothing_when_no_detail_and_no_error() {
+        let widget = StatusBarWidget::new(None, None, None);
+        let area = Rect::new(0, 0, 40, 2);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        // Buffer should be empty (all spaces)
+        let line0: String = (0..40)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert_eq!(line0.trim(), "");
     }
 }

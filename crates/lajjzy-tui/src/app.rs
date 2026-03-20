@@ -3,12 +3,12 @@ use lajjzy_core::types::{ChangeDetail, GraphData};
 
 pub struct AppState {
     pub graph: GraphData,
-    pub cursor: usize,
+    cursor: usize,
     pub should_quit: bool,
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     MoveUp,
     MoveDown,
@@ -31,6 +31,10 @@ impl AppState {
         }
     }
 
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
     pub fn selected_change_id(&self) -> Option<&str> {
         self.graph
             .lines
@@ -44,8 +48,6 @@ impl AppState {
 }
 
 pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend) {
-    state.error = None;
-
     match action {
         Action::MoveDown => {
             let nodes = state.graph.node_indices();
@@ -73,6 +75,7 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
             state.should_quit = true;
         }
         Action::Refresh => {
+            state.error = None;
             let prev_change_id = state.selected_change_id().map(String::from);
             match backend.load_graph() {
                 Ok(new_graph) => {
@@ -95,6 +98,22 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
                 }
             }
         }
+    }
+
+    debug_assert!(
+        state
+            .graph
+            .lines
+            .get(state.cursor)
+            .is_none_or(|l| l.change_id.is_some()),
+        "cursor must point to a node line"
+    );
+}
+
+#[cfg(test)]
+impl AppState {
+    fn set_cursor_for_test(&mut self, index: usize) {
+        self.cursor = index;
     }
 }
 
@@ -125,8 +144,8 @@ mod tests {
     }
 
     fn sample_graph() -> GraphData {
-        GraphData {
-            lines: vec![
+        GraphData::new(
+            vec![
                 GraphLine {
                     raw: "◉  abc".into(),
                     change_id: Some("abc".into()),
@@ -148,11 +167,10 @@ mod tests {
                     change_id: Some("ghi".into()),
                 },
             ],
-            details: HashMap::from([
+            HashMap::from([
                 (
                     "abc".into(),
                     ChangeDetail {
-                        change_id: "abc".into(),
                         commit_id: "a1".into(),
                         author: "a".into(),
                         email: "a@b".into(),
@@ -161,13 +179,11 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: false,
                         has_conflict: false,
-                        is_working_copy: true,
                     },
                 ),
                 (
                     "def".into(),
                     ChangeDetail {
-                        change_id: "def".into(),
                         commit_id: "d1".into(),
                         author: "b".into(),
                         email: "b@c".into(),
@@ -176,13 +192,11 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: false,
                         has_conflict: false,
-                        is_working_copy: false,
                     },
                 ),
                 (
                     "ghi".into(),
                     ChangeDetail {
-                        change_id: "ghi".into(),
                         commit_id: "g1".into(),
                         author: "c".into(),
                         email: "c@d".into(),
@@ -191,18 +205,17 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: false,
                         has_conflict: false,
-                        is_working_copy: false,
                     },
                 ),
             ]),
-            working_copy_index: Some(0),
-        }
+            Some(0),
+        )
     }
 
     #[test]
     fn initial_cursor_on_working_copy() {
         let state = AppState::new(sample_graph());
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.cursor(), 0);
         assert_eq!(state.selected_change_id(), Some("abc"));
     }
 
@@ -213,7 +226,7 @@ mod tests {
         };
         let mut state = AppState::new(sample_graph());
         dispatch(&mut state, Action::MoveDown, &mock);
-        assert_eq!(state.cursor, 2);
+        assert_eq!(state.cursor(), 2);
         assert_eq!(state.selected_change_id(), Some("def"));
     }
 
@@ -223,9 +236,9 @@ mod tests {
             graph: sample_graph(),
         };
         let mut state = AppState::new(sample_graph());
-        state.cursor = 2;
+        state.set_cursor_for_test(2);
         dispatch(&mut state, Action::MoveUp, &mock);
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.cursor(), 0);
     }
 
     #[test]
@@ -234,9 +247,9 @@ mod tests {
             graph: sample_graph(),
         };
         let mut state = AppState::new(sample_graph());
-        state.cursor = 4;
+        state.set_cursor_for_test(4);
         dispatch(&mut state, Action::MoveDown, &mock);
-        assert_eq!(state.cursor, 4);
+        assert_eq!(state.cursor(), 4);
     }
 
     #[test]
@@ -246,7 +259,7 @@ mod tests {
         };
         let mut state = AppState::new(sample_graph());
         dispatch(&mut state, Action::MoveUp, &mock);
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.cursor(), 0);
     }
 
     #[test]
@@ -255,9 +268,9 @@ mod tests {
             graph: sample_graph(),
         };
         let mut state = AppState::new(sample_graph());
-        state.cursor = 4;
+        state.set_cursor_for_test(4);
         dispatch(&mut state, Action::JumpToTop, &mock);
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.cursor(), 0);
     }
 
     #[test]
@@ -267,7 +280,7 @@ mod tests {
         };
         let mut state = AppState::new(sample_graph());
         dispatch(&mut state, Action::JumpToBottom, &mock);
-        assert_eq!(state.cursor, 4);
+        assert_eq!(state.cursor(), 4);
     }
 
     #[test]
@@ -286,9 +299,9 @@ mod tests {
             graph: sample_graph(),
         };
         let mut state = AppState::new(sample_graph());
-        state.cursor = 2;
+        state.set_cursor_for_test(2);
         dispatch(&mut state, Action::Refresh, &mock);
-        assert_eq!(state.cursor, 2);
+        assert_eq!(state.cursor(), 2);
         assert_eq!(state.selected_change_id(), Some("def"));
     }
 
@@ -297,22 +310,26 @@ mod tests {
         let mut graph = sample_graph();
         graph.working_copy_index = None;
         let state = AppState::new(graph);
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.cursor(), 0);
     }
 
     #[test]
     fn refresh_falls_back_when_change_disappears() {
         let mut state = AppState::new(sample_graph());
-        state.cursor = 2; // at "def"
+        state.set_cursor_for_test(2); // at "def"
 
-        let mut new_graph = sample_graph();
-        new_graph.lines.remove(3);
-        new_graph.lines.remove(2);
-        new_graph.details.remove("def");
+        // Build a new graph without the "def" change
+        let sg = sample_graph();
+        let mut lines: Vec<GraphLine> = sg.lines.into_iter().collect();
+        lines.remove(3);
+        lines.remove(2);
+        let mut details = sg.details;
+        details.remove("def");
+        let new_graph = GraphData::new(lines, details, sg.working_copy_index);
         let new_mock = MockBackend { graph: new_graph };
 
         dispatch(&mut state, Action::Refresh, &new_mock);
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.cursor(), 0);
         assert_eq!(state.selected_change_id(), Some("abc"));
     }
 
@@ -324,5 +341,28 @@ mod tests {
         assert!(state.error.is_some());
         assert!(state.error.as_ref().unwrap().contains("connection lost"));
         assert_eq!(state.graph.lines.len(), 5);
+    }
+
+    #[test]
+    fn navigation_preserves_error() {
+        let mock = MockBackend {
+            graph: sample_graph(),
+        };
+        let mut state = AppState::new(sample_graph());
+        state.error = Some("old error".into());
+        dispatch(&mut state, Action::MoveDown, &mock);
+        assert!(state.error.is_some());
+        assert!(state.error.as_ref().unwrap().contains("old error"));
+    }
+
+    #[test]
+    fn refresh_clears_error_on_success() {
+        let mock = MockBackend {
+            graph: sample_graph(),
+        };
+        let mut state = AppState::new(sample_graph());
+        state.error = Some("old error".into());
+        dispatch(&mut state, Action::Refresh, &mock);
+        assert!(state.error.is_none());
     }
 }

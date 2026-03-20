@@ -75,10 +75,15 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
                 working_copy_index = Some(index);
             }
 
+            if details.contains_key(&change_id) {
+                bail!(
+                    "Duplicate short change ID '{change_id}'. \
+                     This may indicate a truncation collision."
+                );
+            }
             details.insert(
                 change_id.clone(),
                 crate::types::ChangeDetail {
-                    change_id: change_id.clone(),
                     commit_id: fields[1].to_string(),
                     author: fields[2].to_string(),
                     email: fields[3].to_string(),
@@ -91,7 +96,6 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
                     },
                     is_empty: fields[7] == "true",
                     has_conflict: fields[8] == "true",
-                    is_working_copy,
                 },
             );
 
@@ -107,11 +111,15 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
         }
     }
 
-    Ok(GraphData {
-        lines,
-        details,
-        working_copy_index,
-    })
+    if !output.trim().is_empty() && details.is_empty() {
+        bail!(
+            "Parsed {} lines of jj output but found zero change nodes. \
+             The jj template output format may have changed.",
+            lines.len()
+        );
+    }
+
+    Ok(GraphData::new(lines, details, working_copy_index))
 }
 
 impl RepoBackend for JjCliBackend {
@@ -121,7 +129,6 @@ impl RepoBackend for JjCliBackend {
             "change_id.short() ++ \" \" ++ ",
             "coalesce(author.name(), \"anonymous\") ++ \" \" ++ ",
             "committer.timestamp().ago()",
-            " ++ \"\\n\" ++ coalesce(description.first_line(), \"(no description)\")",
             " ++ \"\\x1f\"",
             " ++ change_id.short()",
             " ++ \"\\x1e\" ++ commit_id.short()",
@@ -133,6 +140,7 @@ impl RepoBackend for JjCliBackend {
             " ++ \"\\x1e\" ++ empty",
             " ++ \"\\x1e\" ++ conflict",
             " ++ \"\\x1e\" ++ if(self.current_working_copy(), \"@\", \"\")",
+            " ++ \"\\n\" ++ coalesce(description.first_line(), \"(no description)\")",
         );
 
         let output = Command::new("jj")
@@ -207,11 +215,9 @@ mod tests {
         let detail = graph.details.get("abc12").unwrap();
         assert_eq!(detail.author, "alice");
         assert_eq!(detail.bookmarks, vec!["main"]);
-        assert!(detail.is_working_copy);
 
         let detail2 = graph.details.get("def45").unwrap();
         assert!(detail2.bookmarks.is_empty());
-        assert!(!detail2.is_working_copy);
     }
 
     #[test]
@@ -232,6 +238,21 @@ mod tests {
         let output = "◉  x y 1m\x1Fx\x1Ey\x1Ez\x1Ea@b\x1E1m\x1Ed\x1E\x1Efalse\x1Efalse\x1E";
         let graph = parse_graph_output(output).unwrap();
         assert!(graph.details.get("x").unwrap().bookmarks.is_empty());
+    }
+
+    #[test]
+    fn parse_graph_output_rejects_incomplete_metadata() {
+        let output = "◉  x y 1m\x1Fx\x1Ey"; // only 2 fields
+        let result = parse_graph_output(output);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Expected 10"));
+    }
+
+    #[test]
+    fn parse_graph_output_empty_input() {
+        let graph = parse_graph_output("").unwrap();
+        assert!(graph.lines.is_empty());
+        assert!(graph.node_indices().is_empty());
     }
 
     #[test]
@@ -257,7 +278,7 @@ mod tests {
 
         assert!(!graph.node_indices().is_empty());
         assert!(graph.working_copy_index.is_some());
-        for idx in graph.node_indices() {
+        for &idx in graph.node_indices() {
             assert!(graph.detail_at(idx).is_some());
         }
     }

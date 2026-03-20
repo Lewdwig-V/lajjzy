@@ -21,17 +21,21 @@ impl<'a> GraphWidget<'a> {
         }
     }
 
+    fn block_end(&self) -> usize {
+        self.graph.lines[self.cursor + 1..]
+            .iter()
+            .position(|l| l.change_id.is_some())
+            .map(|p| self.cursor + p)
+            .unwrap_or(self.graph.lines.len() - 1)
+    }
+
     fn scroll_offset(&self, height: usize) -> usize {
         if self.graph.lines.is_empty() || height == 0 {
             return 0;
         }
 
         let block_start = self.cursor;
-        let block_end = self.graph.lines[self.cursor + 1..]
-            .iter()
-            .position(|l| l.change_id.is_some())
-            .map(|p| self.cursor + p)
-            .unwrap_or(self.graph.lines.len() - 1);
+        let block_end = self.block_end();
 
         let total = self.graph.lines.len();
         let desired_top = block_start.saturating_sub(self.scrolloff);
@@ -54,11 +58,7 @@ impl Widget for GraphWidget<'_> {
         let offset = self.scroll_offset(height);
 
         let block_start = self.cursor;
-        let block_end = self.graph.lines[self.cursor + 1..]
-            .iter()
-            .position(|l| l.change_id.is_some())
-            .map(|p| self.cursor + p)
-            .unwrap_or(self.graph.lines.len() - 1);
+        let block_end = self.block_end();
 
         let highlight = Style::default().add_modifier(Modifier::REVERSED);
 
@@ -94,8 +94,8 @@ mod tests {
     use std::collections::HashMap;
 
     fn simple_graph() -> GraphData {
-        GraphData {
-            lines: vec![
+        GraphData::new(
+            vec![
                 GraphLine {
                     raw: "◉  abc first".into(),
                     change_id: Some("abc".into()),
@@ -113,9 +113,9 @@ mod tests {
                     change_id: None,
                 },
             ],
-            details: HashMap::new(),
-            working_copy_index: Some(0),
-        }
+            HashMap::new(),
+            Some(0),
+        )
     }
 
     #[test]

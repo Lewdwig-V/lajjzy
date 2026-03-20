@@ -11,11 +11,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(STATUS_BAR_HEIGHT)])
         .split(frame.area());
 
-    let graph_widget = GraphWidget::new(&state.graph, state.cursor);
+    let graph_widget = GraphWidget::new(&state.graph, state.cursor());
     frame.render_widget(graph_widget, chunks[0]);
 
+    let change_id = state.selected_change_id();
     let detail = state.selected_detail();
     let error = state.error.as_deref();
-    let status_widget = StatusBarWidget::new(detail, error);
+    let status_widget = StatusBarWidget::new(change_id, detail, error);
     frame.render_widget(status_widget, chunks[1]);
 }

@@ -16,6 +16,12 @@ fn main() -> Result<()> {
     let graph = backend.load_graph().context("Failed to load graph")?;
     let mut state = AppState::new(graph);
 
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = ratatui::try_restore();
+        original_hook(info);
+    }));
+
     let mut terminal = ratatui::init();
 
     let result = run_loop(&mut terminal, &mut state, &backend);

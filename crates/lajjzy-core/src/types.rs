@@ -9,6 +9,8 @@ pub struct GraphData {
     pub details: HashMap<String, ChangeDetail>,
     /// Index of the working-copy change's node line in `lines`.
     pub working_copy_index: Option<usize>,
+    /// Pre-computed indices of node lines (lines with a change_id).
+    cached_node_indices: Vec<usize>,
 }
 
 /// One line of jj's graph output.
@@ -24,7 +26,6 @@ pub struct GraphLine {
 /// Detailed info for the status bar.
 #[derive(Debug, Clone)]
 pub struct ChangeDetail {
-    pub change_id: String,
     pub commit_id: String,
     pub author: String,
     pub email: String,
@@ -33,17 +34,30 @@ pub struct ChangeDetail {
     pub bookmarks: Vec<String>,
     pub is_empty: bool,
     pub has_conflict: bool,
-    pub is_working_copy: bool,
 }
 
 impl GraphData {
-    /// Returns the indices of all node lines (lines with a change ID).
-    pub fn node_indices(&self) -> Vec<usize> {
-        self.lines
+    pub fn new(
+        lines: Vec<GraphLine>,
+        details: HashMap<String, ChangeDetail>,
+        working_copy_index: Option<usize>,
+    ) -> Self {
+        let cached_node_indices = lines
             .iter()
             .enumerate()
             .filter_map(|(i, line)| line.change_id.as_ref().map(|_| i))
-            .collect()
+            .collect();
+        Self {
+            lines,
+            details,
+            working_copy_index,
+            cached_node_indices,
+        }
+    }
+
+    /// Returns the indices of all node lines (lines with a change ID).
+    pub fn node_indices(&self) -> &[usize] {
+        &self.cached_node_indices
     }
 
     /// Returns the ChangeDetail for the node line at the given index, if any.
@@ -60,8 +74,8 @@ mod tests {
     use super::*;
 
     fn sample_graph() -> GraphData {
-        GraphData {
-            lines: vec![
+        GraphData::new(
+            vec![
                 GraphLine {
                     raw: "◉  abc123 alice 2m ago".into(),
                     change_id: Some("abc123".into()),
@@ -83,11 +97,10 @@ mod tests {
                     change_id: Some("ghi789".into()),
                 },
             ],
-            details: HashMap::from([
+            HashMap::from([
                 (
                     "abc123".into(),
                     ChangeDetail {
-                        change_id: "abc123".into(),
                         commit_id: "aaa111".into(),
                         author: "alice".into(),
                         email: "alice@example.com".into(),
@@ -96,13 +109,11 @@ mod tests {
                         bookmarks: vec!["main".into()],
                         is_empty: false,
                         has_conflict: false,
-                        is_working_copy: true,
                     },
                 ),
                 (
                     "def456".into(),
                     ChangeDetail {
-                        change_id: "def456".into(),
                         commit_id: "bbb222".into(),
                         author: "bob".into(),
                         email: "bob@example.com".into(),
@@ -111,13 +122,11 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: false,
                         has_conflict: false,
-                        is_working_copy: false,
                     },
                 ),
                 (
                     "ghi789".into(),
                     ChangeDetail {
-                        change_id: "ghi789".into(),
                         commit_id: "ccc333".into(),
                         author: "root".into(),
                         email: "".into(),
@@ -126,12 +135,11 @@ mod tests {
                         bookmarks: vec![],
                         is_empty: true,
                         has_conflict: false,
-                        is_working_copy: false,
                     },
                 ),
             ]),
-            working_copy_index: Some(0),
-        }
+            Some(0),
+        )
     }
 
     #[test]
@@ -144,7 +152,6 @@ mod tests {
     fn detail_at_returns_detail_for_node_line() {
         let graph = sample_graph();
         let detail = graph.detail_at(0).unwrap();
-        assert_eq!(detail.change_id, "abc123");
         assert_eq!(detail.author, "alice");
     }
 
