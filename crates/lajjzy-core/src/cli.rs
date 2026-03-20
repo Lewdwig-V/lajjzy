@@ -47,7 +47,7 @@ const UNIT_SEP: char = '\x1F';
 /// Separator between fields within metadata.
 const RECORD_SEP: char = '\x1E';
 
-/// Parse the raw output of `jj log` with our custom template into GraphData.
+/// Parse the raw output of `jj log` with our custom template into `GraphData`.
 fn parse_graph_output(output: &str) -> Result<GraphData> {
     let mut lines = Vec::new();
     let mut details = std::collections::HashMap::new();

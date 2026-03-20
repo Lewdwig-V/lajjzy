@@ -5,8 +5,9 @@ use crate::app::Action;
 /// Map a crossterm key event to an Action.
 pub fn map_event(event: KeyEvent) -> Option<Action> {
     match (event.code, event.modifiers) {
-        (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Action::Quit),
-        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            Some(Action::Quit)
+        }
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => Some(Action::MoveDown),
         (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => Some(Action::MoveUp),
         (KeyCode::Char('R'), _) => Some(Action::Refresh),

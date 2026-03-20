@@ -8,7 +8,7 @@ pub struct AppState {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     MoveUp,
     MoveDown,

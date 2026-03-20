@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-/// Complete graph data returned by load_graph().
+/// Complete graph data returned by `load_graph()`.
 #[derive(Debug, Clone)]
 pub struct GraphData {
     /// All lines of graph output.
@@ -9,7 +9,7 @@ pub struct GraphData {
     pub details: HashMap<String, ChangeDetail>,
     /// Index of the working-copy change's node line in `lines`.
     pub working_copy_index: Option<usize>,
-    /// Pre-computed indices of node lines (lines with a change_id).
+    /// Pre-computed indices of node lines (lines with a `change_id`).
     cached_node_indices: Vec<usize>,
 }
 
@@ -60,7 +60,7 @@ impl GraphData {
         &self.cached_node_indices
     }
 
-    /// Returns the ChangeDetail for the node line at the given index, if any.
+    /// Returns the `ChangeDetail` for the node line at the given index, if any.
     pub fn detail_at(&self, index: usize) -> Option<&ChangeDetail> {
         self.lines
             .get(index)
