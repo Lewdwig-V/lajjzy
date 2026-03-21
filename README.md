@@ -114,10 +114,10 @@ See `CLAUDE.md` for architectural constraints and crate structure.
 - **M3a — Omnibar**: revset-first search/filter bar, replaces fuzzy-find
 - **M3b — Rebase**: target picker modal, `jj rebase` with destination selection
 - **M3c — Split & Partial Squash**: interactive hunk picker widget, the hardest UI in the app
-- **M3d — Autocomplete for jj revset query language syntax in the Omnibar
+- **M3d — Autocomplete**: for jj revset query language syntax in the Omnibar
 - **M4 — Conflict Handling**: conflict file navigation, 3-way merge view, external merge tool launch
 - **M5 — Forge Integration**: Gerrit, GitHub, GitLab — review status in graph, push-for-review
-- **M6 — Polish**: configurable keymap, theming, mouse support, packaging, collapsible debug pane which shows which jj commands we are running
+- **M6 — Polish**: configurable keymap, theming, mouse support, packaging, collapsible debug pane which shows which jj commands we are running, move hunks in hunk picker
 - **M7 — Parallel Branches**: lane view for concurrent work (git-butler model)
 - **M8 — Gerrit Depth**: patchset comparison, review actions, inline comments
 - **M9 — GitHub/GitLab Stacked PRs**: Graphite-style stack-aware PR management
