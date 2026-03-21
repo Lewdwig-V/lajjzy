@@ -34,14 +34,19 @@ pub fn render(frame: &mut Frame, state: &AppState) {
 
     // Modal overlay
     if state.modal.is_some() {
-        let dim = Style::default().add_modifier(Modifier::DIM);
-        let area = outer[0];
-        for y in area.y..area.y + area.height {
-            for x in area.x..area.x + area.width {
-                frame.buffer_mut()[(x, y)].set_style(dim);
+        // Describe modal renders over the detail pane (right side)
+        if matches!(state.modal, Some(Modal::Describe { .. })) {
+            render_modal(frame, state, main[1]);
+        } else {
+            let dim = Style::default().add_modifier(Modifier::DIM);
+            let area = outer[0];
+            for y in area.y..area.y + area.height {
+                for x in area.x..area.x + area.width {
+                    frame.buffer_mut()[(x, y)].set_style(dim);
+                }
             }
+            render_modal(frame, state, area);
         }
-        render_modal(frame, state, area);
     }
 }
 
@@ -90,8 +95,13 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
             let widget = crate::widgets::help::HelpWidget::new(*context, *scroll);
             frame.render_widget(widget, modal_area);
         }
+        Modal::Describe { editor, .. } => {
+            frame.render_widget(Clear, area);
+            let widget = crate::widgets::describe::DescribeWidget::new(editor);
+            frame.render_widget(widget, area);
+        }
         // M2 modals — rendered in later tasks; no-op for now.
-        Modal::Describe { .. } | Modal::BookmarkInput { .. } => {}
+        Modal::BookmarkInput { .. } => {}
     }
 }
 

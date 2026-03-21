@@ -455,24 +455,44 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                     .selected_detail()
                     .map(|d| d.description.clone())
                     .unwrap_or_default();
-                return vec![Effect::SuspendForEditor {
+                let lines: Vec<String> = if text.is_empty() {
+                    vec![String::new()]
+                } else {
+                    text.lines().map(String::from).collect()
+                };
+                let editor = Box::new(tui_textarea::TextArea::new(lines));
+                state.modal = Some(Modal::Describe {
                     change_id: cid,
-                    initial_text: text,
-                }];
+                    editor,
+                });
             }
         }
         Action::EditorComplete { change_id, text } => {
             state.pending_mutation = Some(MutationKind::Describe);
             return vec![Effect::Describe { change_id, text }];
         }
+        Action::DescribeSave => {
+            if let Some(Modal::Describe { change_id, editor }) = state.modal.take() {
+                let text = editor.lines().join("\n");
+                state.pending_mutation = Some(MutationKind::Describe);
+                return vec![Effect::Describe { change_id, text }];
+            }
+        }
+        Action::DescribeEscalateEditor => {
+            if let Some(Modal::Describe { change_id, editor }) = state.modal.take() {
+                let text = editor.lines().join("\n");
+                return vec![Effect::SuspendForEditor {
+                    change_id,
+                    initial_text: text,
+                }];
+            }
+        }
         // M2 actions — handled in later tasks; no-op for now.
         Action::OpenBookmarkSet
         | Action::BookmarkInputChar(_)
         | Action::BookmarkInputBackspace
         | Action::BookmarkInputConfirm
-        | Action::BookmarkDelete
-        | Action::DescribeSave
-        | Action::DescribeEscalateEditor => {}
+        | Action::BookmarkDelete => {}
     }
 
     // Release-mode invariant check: cursor must point to a node line
@@ -1584,19 +1604,21 @@ mod tests {
     // --- OpenDescribe / EditorComplete tests ---
 
     #[test]
-    fn open_describe_emits_suspend_for_editor() {
+    fn open_describe_opens_modal() {
         let mut state = AppState::new(sample_graph());
         // Cursor starts at "abc" (working copy) with description "desc1"
         assert_eq!(state.selected_change_id(), Some("abc"));
         let effects = dispatch(&mut state, Action::OpenDescribe);
-        assert_eq!(
-            effects,
-            vec![Effect::SuspendForEditor {
-                change_id: "abc".into(),
-                initial_text: "desc1".into(),
-            }]
-        );
-        // pending_mutation NOT set — editor hasn't returned yet
+        assert!(effects.is_empty()); // no effect — opens modal
+        assert!(matches!(state.modal, Some(Modal::Describe { .. })));
+        if let Some(Modal::Describe {
+            change_id, editor, ..
+        }) = &state.modal
+        {
+            assert_eq!(change_id, "abc");
+            assert_eq!(editor.lines(), &["desc1"]);
+        }
+        // pending_mutation NOT set — user hasn't saved yet
         assert!(state.pending_mutation.is_none());
     }
 
@@ -1627,13 +1649,48 @@ mod tests {
         );
         let mut state = AppState::new(graph);
         let effects = dispatch(&mut state, Action::OpenDescribe);
+        assert!(effects.is_empty());
+        assert!(matches!(state.modal, Some(Modal::Describe { .. })));
+        if let Some(Modal::Describe { editor, .. }) = &state.modal {
+            assert_eq!(editor.lines(), &[""]);
+        }
+    }
+
+    #[test]
+    fn describe_save_emits_effect_and_closes_modal() {
+        let mut state = AppState::new(sample_graph());
+        // Open the modal first
+        dispatch(&mut state, Action::OpenDescribe);
+        assert!(matches!(state.modal, Some(Modal::Describe { .. })));
+        // Save
+        let effects = dispatch(&mut state, Action::DescribeSave);
+        assert_eq!(
+            effects,
+            vec![Effect::Describe {
+                change_id: "abc".into(),
+                text: "desc1".into(),
+            }]
+        );
+        assert!(state.modal.is_none());
+        assert_eq!(state.pending_mutation, Some(MutationKind::Describe));
+    }
+
+    #[test]
+    fn describe_escalate_editor_emits_suspend() {
+        let mut state = AppState::new(sample_graph());
+        // Open the modal first
+        dispatch(&mut state, Action::OpenDescribe);
+        assert!(matches!(state.modal, Some(Modal::Describe { .. })));
+        // Escalate to editor
+        let effects = dispatch(&mut state, Action::DescribeEscalateEditor);
         assert_eq!(
             effects,
             vec![Effect::SuspendForEditor {
-                change_id: "nodesc".into(),
-                initial_text: String::new(),
+                change_id: "abc".into(),
+                initial_text: "desc1".into(),
             }]
         );
+        assert!(state.modal.is_none());
     }
 
     #[test]

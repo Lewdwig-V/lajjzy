@@ -582,6 +582,7 @@ dependencies = [
  "lajjzy-tui",
  "ratatui 0.30.0",
  "tempfile",
+ "tui-textarea",
 ]
 
 [[package]]

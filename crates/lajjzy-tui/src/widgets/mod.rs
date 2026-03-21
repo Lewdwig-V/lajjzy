@@ -1,4 +1,5 @@
 pub mod bookmark_picker;
+pub mod describe;
 pub mod diff_view;
 pub mod file_list;
 pub mod fuzzy_find;

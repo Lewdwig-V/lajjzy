@@ -171,6 +171,44 @@ fn run_editor(initial_text: &str) -> anyhow::Result<String> {
     Ok(std::fs::read_to_string(tmp.path())?)
 }
 
+/// Convert a crossterm 0.29 `KeyEvent` into tui-textarea's backend-agnostic `Input`.
+/// This bridge is needed because tui-textarea 0.7 depends on crossterm 0.28,
+/// whose `KeyEvent` type is distinct from the crossterm 0.29 used by ratatui 0.30.
+fn key_event_to_textarea_input(key: crossterm::event::KeyEvent) -> tui_textarea::Input {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use tui_textarea::{Input, Key};
+
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+    let textarea_key = match key.code {
+        KeyCode::Char(c) => Key::Char(c),
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::Enter => Key::Enter,
+        KeyCode::Left => Key::Left,
+        KeyCode::Right => Key::Right,
+        KeyCode::Up => Key::Up,
+        KeyCode::Down => Key::Down,
+        KeyCode::Tab => Key::Tab,
+        KeyCode::Delete => Key::Delete,
+        KeyCode::Home => Key::Home,
+        KeyCode::End => Key::End,
+        KeyCode::PageUp => Key::PageUp,
+        KeyCode::PageDown => Key::PageDown,
+        KeyCode::Esc => Key::Esc,
+        KeyCode::F(n) => Key::F(n),
+        _ => Key::Null,
+    };
+
+    Input {
+        key: textarea_key,
+        ctrl,
+        alt,
+        shift,
+    }
+}
+
 fn main() -> Result<()> {
     let cwd = env::current_dir().context("Failed to get current directory")?;
     let backend = Arc::new(JjCliBackend::new(&cwd).context("Failed to open jj workspace")?);
@@ -217,6 +255,14 @@ fn run_loop(
             if let Some(action) = action {
                 let effects = dispatch(state, action);
                 execute_effects(terminal, state, executor, effects);
+            } else if let Some(lajjzy_tui::modal::Modal::Describe { ref mut editor, .. }) =
+                state.modal
+            {
+                // Unhandled key in describe modal — forward to tui-textarea.
+                // Convert crossterm 0.29 KeyEvent to tui-textarea's Input manually
+                // since tui-textarea 0.7 uses crossterm 0.28.
+                let input = key_event_to_textarea_input(key_event);
+                editor.input(input);
             }
         }
 

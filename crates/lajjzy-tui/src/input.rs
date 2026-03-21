@@ -67,6 +67,18 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
 
 /// Map a key event when a modal is active. Returns `None` to swallow the key.
 pub fn map_modal_event(event: KeyEvent, modal: &Modal) -> Option<Action> {
+    // Describe modal has its own key handling (intercepts Esc differently)
+    if let Modal::Describe { .. } = modal {
+        return match (event.code, event.modifiers) {
+            (KeyCode::Char('s') | KeyCode::Enter, KeyModifiers::CONTROL) => {
+                Some(Action::DescribeSave)
+            }
+            (KeyCode::Esc, _) => Some(Action::ModalDismiss),
+            (KeyCode::Char('E'), KeyModifiers::SHIFT) => Some(Action::DescribeEscalateEditor),
+            _ => None, // tui-textarea handles other keys
+        };
+    }
+
     // Common keys for ALL modals
     match event.code {
         KeyCode::Esc => return Some(Action::ModalDismiss),
