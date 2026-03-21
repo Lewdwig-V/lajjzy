@@ -446,10 +446,27 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.pending_background.insert(BackgroundKind::Fetch);
             return vec![Effect::GitFetch];
         }
+        Action::OpenDescribe => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                let text = state
+                    .selected_detail()
+                    .map(|d| d.description.clone())
+                    .unwrap_or_default();
+                return vec![Effect::SuspendForEditor {
+                    change_id: cid,
+                    initial_text: text,
+                }];
+            }
+        }
+        Action::EditorComplete { change_id, text } => {
+            state.pending_mutation = Some(MutationKind::Describe);
+            return vec![Effect::Describe { change_id, text }];
+        }
         // M2 actions — handled in later tasks; no-op for now.
-        Action::EditorComplete { .. }
-        | Action::OpenDescribe
-        | Action::OpenBookmarkSet
+        Action::OpenBookmarkSet
         | Action::BookmarkInputChar(_)
         | Action::BookmarkInputBackspace
         | Action::BookmarkInputConfirm
@@ -1562,5 +1579,90 @@ mod tests {
         assert!(state.pending_background.contains(&BackgroundKind::Push));
         // Fetch gate untouched
         assert!(state.pending_background.contains(&BackgroundKind::Fetch));
+    }
+
+    // --- OpenDescribe / EditorComplete tests ---
+
+    #[test]
+    fn open_describe_emits_suspend_for_editor() {
+        let mut state = AppState::new(sample_graph());
+        // Cursor starts at "abc" (working copy) with description "desc1"
+        assert_eq!(state.selected_change_id(), Some("abc"));
+        let effects = dispatch(&mut state, Action::OpenDescribe);
+        assert_eq!(
+            effects,
+            vec![Effect::SuspendForEditor {
+                change_id: "abc".into(),
+                initial_text: "desc1".into(),
+            }]
+        );
+        // pending_mutation NOT set — editor hasn't returned yet
+        assert!(state.pending_mutation.is_none());
+    }
+
+    #[test]
+    fn open_describe_with_empty_description() {
+        use lajjzy_core::types::{ChangeDetail, GraphLine};
+        let graph = GraphData::new(
+            vec![GraphLine {
+                raw: "◉  nodesc".into(),
+                change_id: Some("nodesc".into()),
+                glyph_prefix: String::new(),
+            }],
+            HashMap::from([(
+                "nodesc".into(),
+                ChangeDetail {
+                    commit_id: "n1".into(),
+                    author: "x".into(),
+                    email: "x@y".into(),
+                    timestamp: "0m".into(),
+                    description: String::new(),
+                    bookmarks: vec![],
+                    is_empty: true,
+                    has_conflict: false,
+                    files: vec![],
+                },
+            )]),
+            Some(0),
+        );
+        let mut state = AppState::new(graph);
+        let effects = dispatch(&mut state, Action::OpenDescribe);
+        assert_eq!(
+            effects,
+            vec![Effect::SuspendForEditor {
+                change_id: "nodesc".into(),
+                initial_text: String::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn open_describe_suppressed_while_pending() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Abandon);
+        let effects = dispatch(&mut state, Action::OpenDescribe);
+        assert!(effects.is_empty());
+        // Gate remains unchanged
+        assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
+    }
+
+    #[test]
+    fn editor_complete_emits_describe_effect() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(
+            &mut state,
+            Action::EditorComplete {
+                change_id: "abc".into(),
+                text: "updated message".into(),
+            },
+        );
+        assert_eq!(
+            effects,
+            vec![Effect::Describe {
+                change_id: "abc".into(),
+                text: "updated message".into(),
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::Describe));
     }
 }
