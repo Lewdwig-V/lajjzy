@@ -487,12 +487,66 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }];
             }
         }
-        // M2 actions — handled in later tasks; no-op for now.
-        Action::OpenBookmarkSet
-        | Action::BookmarkInputChar(_)
-        | Action::BookmarkInputBackspace
-        | Action::BookmarkInputConfirm
-        | Action::BookmarkDelete => {}
+        Action::OpenBookmarkSet => {
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                let existing = state
+                    .selected_detail()
+                    .and_then(|d| d.bookmarks.first().cloned())
+                    .unwrap_or_default();
+                let all_bookmarks: Vec<String> = state
+                    .graph
+                    .details
+                    .values()
+                    .flat_map(|d| d.bookmarks.iter().cloned())
+                    .collect();
+                state.modal = Some(Modal::BookmarkInput {
+                    change_id: cid,
+                    input: existing,
+                    completions: all_bookmarks,
+                    cursor: 0,
+                });
+            }
+        }
+        Action::BookmarkInputChar(c) => {
+            if let Some(Modal::BookmarkInput { input, .. }) = &mut state.modal {
+                input.push(c);
+            }
+        }
+        Action::BookmarkInputBackspace => {
+            if let Some(Modal::BookmarkInput { input, .. }) = &mut state.modal {
+                input.pop();
+            }
+        }
+        Action::BookmarkInputConfirm => {
+            if let Some(Modal::BookmarkInput {
+                change_id, input, ..
+            }) = state.modal.take()
+                && !input.is_empty()
+            {
+                state.pending_mutation = Some(MutationKind::BookmarkSet);
+                return vec![Effect::BookmarkSet {
+                    change_id,
+                    name: input,
+                }];
+            }
+        }
+        Action::BookmarkDelete => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
+            if let Some(Modal::BookmarkPicker {
+                ref bookmarks,
+                cursor,
+                ..
+            }) = state.modal
+                && let Some((name, _)) = bookmarks.get(cursor)
+            {
+                let name = name.clone();
+                state.modal = None;
+                state.pending_mutation = Some(MutationKind::BookmarkDelete);
+                return vec![Effect::BookmarkDelete { name }];
+            }
+        }
     }
 
     // Release-mode invariant check: cursor must point to a node line
@@ -1721,5 +1775,139 @@ mod tests {
             }]
         );
         assert_eq!(state.pending_mutation, Some(MutationKind::Describe));
+    }
+
+    // --- Bookmark set modal tests ---
+
+    #[test]
+    fn open_bookmark_set_opens_modal() {
+        let mut state = AppState::new(sample_graph_with_bookmarks());
+        // cursor is at "abc" which has bookmark "main"
+        let effects = dispatch(&mut state, Action::OpenBookmarkSet);
+        assert!(effects.is_empty());
+        match &state.modal {
+            Some(Modal::BookmarkInput {
+                change_id, input, ..
+            }) => {
+                assert_eq!(change_id, "abc");
+                assert_eq!(input, "main"); // pre-filled with existing bookmark
+            }
+            other => panic!("expected BookmarkInput modal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bookmark_input_char_appends() {
+        let mut state = AppState::new(sample_graph());
+        state.modal = Some(Modal::BookmarkInput {
+            change_id: "abc".into(),
+            input: "ma".into(),
+            completions: vec![],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::BookmarkInputChar('i'));
+        assert!(effects.is_empty());
+        match &state.modal {
+            Some(Modal::BookmarkInput { input, .. }) => assert_eq!(input, "mai"),
+            other => panic!("expected BookmarkInput modal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bookmark_input_backspace_removes() {
+        let mut state = AppState::new(sample_graph());
+        state.modal = Some(Modal::BookmarkInput {
+            change_id: "abc".into(),
+            input: "main".into(),
+            completions: vec![],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::BookmarkInputBackspace);
+        assert!(effects.is_empty());
+        match &state.modal {
+            Some(Modal::BookmarkInput { input, .. }) => assert_eq!(input, "mai"),
+            other => panic!("expected BookmarkInput modal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bookmark_input_confirm_emits_effect() {
+        let mut state = AppState::new(sample_graph());
+        state.modal = Some(Modal::BookmarkInput {
+            change_id: "abc".into(),
+            input: "new-branch".into(),
+            completions: vec![],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::BookmarkInputConfirm);
+        assert_eq!(
+            effects,
+            vec![Effect::BookmarkSet {
+                change_id: "abc".into(),
+                name: "new-branch".into(),
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::BookmarkSet));
+        assert!(
+            state.modal.is_none(),
+            "modal should be closed after confirm"
+        );
+    }
+
+    #[test]
+    fn bookmark_input_confirm_empty_does_nothing() {
+        let mut state = AppState::new(sample_graph());
+        state.modal = Some(Modal::BookmarkInput {
+            change_id: "abc".into(),
+            input: String::new(),
+            completions: vec![],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::BookmarkInputConfirm);
+        assert!(effects.is_empty(), "empty input must not emit effect");
+        assert!(
+            state.pending_mutation.is_none(),
+            "no pending mutation on empty confirm"
+        );
+        // modal is consumed by take() but no effect emitted — that is correct
+    }
+
+    #[test]
+    fn bookmark_delete_from_picker_emits_effect() {
+        let mut state = AppState::new(sample_graph_with_bookmarks());
+        state.modal = Some(Modal::BookmarkPicker {
+            bookmarks: vec![
+                ("main".into(), "abc".into()),
+                ("feature".into(), "def".into()),
+            ],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::BookmarkDelete);
+        assert_eq!(
+            effects,
+            vec![Effect::BookmarkDelete {
+                name: "main".into()
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::BookmarkDelete));
+        assert!(state.modal.is_none(), "modal should be closed after delete");
+    }
+
+    #[test]
+    fn bookmark_delete_suppressed_while_pending() {
+        let mut state = AppState::new(sample_graph_with_bookmarks());
+        state.pending_mutation = Some(MutationKind::Abandon);
+        state.modal = Some(Modal::BookmarkPicker {
+            bookmarks: vec![("main".into(), "abc".into())],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::BookmarkDelete);
+        assert!(
+            effects.is_empty(),
+            "delete should be suppressed while mutation pending"
+        );
+        // modal still open, pending unchanged
+        assert!(state.modal.is_some());
+        assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
     }
 }

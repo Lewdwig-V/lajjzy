@@ -37,6 +37,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         // Describe modal renders over the detail pane (right side)
         if matches!(state.modal, Some(Modal::Describe { .. })) {
             render_modal(frame, state, main[1]);
+        } else if matches!(state.modal, Some(Modal::BookmarkInput { .. })) {
+            // Lightweight input bar — no background dim, renders at bottom of screen
+            render_modal(frame, state, frame.area());
         } else {
             let dim = Style::default().add_modifier(Modifier::DIM);
             let area = outer[0];
@@ -100,8 +103,18 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
             let widget = crate::widgets::describe::DescribeWidget::new(editor);
             frame.render_widget(widget, area);
         }
-        // M2 modals — rendered in later tasks; no-op for now.
-        Modal::BookmarkInput { .. } => {}
+        Modal::BookmarkInput {
+            input, completions, ..
+        } => {
+            // Render as a bottom bar: 4 rows tall (border + input + completions + border)
+            let bar_height: u16 = 4;
+            let bar_y = area.y + area.height.saturating_sub(bar_height);
+            let bar_area = Rect::new(area.x, bar_y, area.width, bar_height.min(area.height));
+            frame.render_widget(Clear, bar_area);
+            let widget =
+                crate::widgets::bookmark_input::BookmarkInputWidget::new(input, completions);
+            frame.render_widget(widget, bar_area);
+        }
     }
 }
 

@@ -79,6 +79,22 @@ pub fn map_modal_event(event: KeyEvent, modal: &Modal) -> Option<Action> {
         };
     }
 
+    // BookmarkInput modal has its own key handling (intercepts Enter/Backspace/Char)
+    if let Modal::BookmarkInput { .. } = modal {
+        return match event.code {
+            KeyCode::Esc => Some(Action::ModalDismiss),
+            KeyCode::Enter => Some(Action::BookmarkInputConfirm),
+            KeyCode::Backspace => Some(Action::BookmarkInputBackspace),
+            KeyCode::Char(c)
+                if event.modifiers == KeyModifiers::NONE
+                    || event.modifiers == KeyModifiers::SHIFT =>
+            {
+                Some(Action::BookmarkInputChar(c))
+            }
+            _ => None,
+        };
+    }
+
     // Common keys for ALL modals
     match event.code {
         KeyCode::Esc => return Some(Action::ModalDismiss),
@@ -112,6 +128,11 @@ pub fn map_modal_event(event: KeyEvent, modal: &Modal) -> Option<Action> {
             (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Action::ModalDismiss),
             (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Action::ModalMoveDown),
             (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Action::ModalMoveUp),
+            (KeyCode::Char('d'), KeyModifiers::NONE)
+                if matches!(modal, Modal::BookmarkPicker { .. }) =>
+            {
+                Some(Action::BookmarkDelete)
+            }
             (KeyCode::Char('O'), _) if matches!(modal, Modal::OpLog { .. }) => {
                 Some(Action::ModalDismiss)
             }
@@ -380,6 +401,58 @@ mod tests {
         assert_eq!(
             map_modal_event(key(KeyCode::Char('?')), &modal),
             Some(Action::ModalDismiss)
+        );
+    }
+
+    #[test]
+    fn bookmark_input_key_routing() {
+        let modal = Modal::BookmarkInput {
+            change_id: "abc".into(),
+            input: "foo".into(),
+            completions: vec![],
+            cursor: 0,
+        };
+        // Enter confirms
+        assert_eq!(
+            map_modal_event(key(KeyCode::Enter), &modal),
+            Some(Action::BookmarkInputConfirm)
+        );
+        // Esc dismisses
+        assert_eq!(
+            map_modal_event(key(KeyCode::Esc), &modal),
+            Some(Action::ModalDismiss)
+        );
+        // Backspace removes last char
+        assert_eq!(
+            map_modal_event(key(KeyCode::Backspace), &modal),
+            Some(Action::BookmarkInputBackspace)
+        );
+        // Regular char appends
+        assert_eq!(
+            map_modal_event(key(KeyCode::Char('x')), &modal),
+            Some(Action::BookmarkInputChar('x'))
+        );
+        // Shift char appends (e.g. uppercase)
+        assert_eq!(
+            map_modal_event(key_mod(KeyCode::Char('X'), KeyModifiers::SHIFT), &modal),
+            Some(Action::BookmarkInputChar('X'))
+        );
+        // Ctrl-char is ignored
+        assert_eq!(
+            map_modal_event(key_mod(KeyCode::Char('c'), KeyModifiers::CONTROL), &modal),
+            None
+        );
+    }
+
+    #[test]
+    fn bookmark_picker_d_deletes() {
+        let modal = Modal::BookmarkPicker {
+            bookmarks: vec![("main".into(), "abc".into())],
+            cursor: 0,
+        };
+        assert_eq!(
+            map_modal_event(key(KeyCode::Char('d')), &modal),
+            Some(Action::BookmarkDelete)
         );
     }
 

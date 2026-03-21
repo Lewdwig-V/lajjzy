@@ -1,3 +1,4 @@
+pub mod bookmark_input;
 pub mod bookmark_picker;
 pub mod describe;
 pub mod diff_view;
