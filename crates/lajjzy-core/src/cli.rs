@@ -1009,7 +1009,7 @@ new mode 100755";
                 graph_before
                     .details
                     .get(*id)
-                    .map_or(false, |d| d.description == "first")
+                    .is_some_and(|d| d.description == "first")
             })
             .expect("should find 'first' change")
             .clone();
@@ -1081,7 +1081,7 @@ new mode 100755";
                 graph_after
                     .details
                     .get(*id)
-                    .map_or(false, |d| d.files.iter().any(|f| f.path == "child.txt"))
+                    .is_some_and(|d| d.files.iter().any(|f| f.path == "child.txt"))
             });
         assert!(
             surviving_id.is_some(),
