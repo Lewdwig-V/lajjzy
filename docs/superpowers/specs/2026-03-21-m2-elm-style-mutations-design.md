@@ -75,6 +75,11 @@ enum Action {
     RepoOpSuccess { op: MutationKind, message: String },
     RepoOpFailed { op: MutationKind, error: String },
     EditorComplete { change_id: String, text: String },
+
+    // BookmarkInput modal actions (analogous to FuzzyInput/FuzzyBackspace)
+    BookmarkInputChar(char),
+    BookmarkInputBackspace,
+    BookmarkInputConfirm,
 }
 
 enum MutationKind {
@@ -106,6 +111,8 @@ struct EffectExecutor {
     tx: mpsc::Sender<Action>,
 }
 ```
+
+**`Arc<JjCliBackend>` is safe for concurrent use.** `JjCliBackend` holds only an immutable `PathBuf` (workspace root) and all trait methods take `&self`. Each method spawns a separate `jj` subprocess — concurrent calls from multiple threads are independent OS processes, serialised by jj's own repo lock. No mutable state, no `Mutex` needed.
 
 **Every mutation runs on a thread.** No inline fast path for "probably quick" operations. The reason isn't latency speculation — it's that operation cost depends on repo state (`abandon` on a stack base triggers automatic rebasing of all descendants). One code path, uniform execution, no surprise jank.
 
@@ -157,10 +164,25 @@ if state.pending_mutation.is_some() {
 state.pending_mutation = Some(MutationKind::Abandon);
 vec![Effect::Abandon { change_id }]
 
-// On result:
+// On success — clear the appropriate gate:
 Action::RepoOpSuccess { op, message } => {
-    state.pending_mutation = None;
+    match op {
+        MutationKind::GitPush => { state.pending_background.remove(&BackgroundKind::Push); }
+        MutationKind::GitFetch => { state.pending_background.remove(&BackgroundKind::Fetch); }
+        _ => { state.pending_mutation = None; }
+    }
     state.status_message = Some(message);
+    vec![]
+}
+
+// On failure — also clear the gate, so the user isn't locked out:
+Action::RepoOpFailed { op, error } => {
+    match op {
+        MutationKind::GitPush => { state.pending_background.remove(&BackgroundKind::Push); }
+        MutationKind::GitFetch => { state.pending_background.remove(&BackgroundKind::Fetch); }
+        _ => { state.pending_mutation = None; }
+    }
+    state.error = Some(error);
     vec![]
 }
 ```
@@ -184,11 +206,11 @@ fn run_loop(
                 if key_event.kind != KeyEventKind::Press {
                     continue;
                 }
+                // Clear transient status on any keypress
+                state.status_message = None;
                 if let Some(action) = map_input(key_event, state) {
                     let effects = dispatch(state, action);
-                    for effect in effects {
-                        executor.execute(effect);
-                    }
+                    execute_effects(terminal, state, executor, &effects);
                 }
             }
         }
@@ -196,9 +218,7 @@ fn run_loop(
         // Drain all pending results before next render
         while let Ok(action) = rx.try_recv() {
             let effects = dispatch(state, action);
-            for effect in effects {
-                executor.execute(effect);
-            }
+            execute_effects(terminal, state, executor, &effects);
         }
 
         if state.should_quit {
@@ -211,7 +231,43 @@ fn run_loop(
 
 - **50ms poll timeout:** 20fps for spinner animation when idle. Immediate return when user is typing.
 - **Drain loop:** All channel actions processed before render. Ensures batched results appear in the same frame.
-- **`SuspendForEditor`:** Handled inline by the event loop (not the executor) since it needs the terminal. Restores terminal, spawns `$EDITOR`, re-inits terminal, feeds `EditorComplete` action back into dispatch.
+- **Status message clearing:** `status_message` is cleared on any user keypress (before dispatch), not on channel actions. Background completions that set a status message persist until the next keypress.
+
+**`SuspendForEditor` routing.** This effect is intercepted by `execute_effects` before reaching the executor, because it needs the terminal:
+
+```rust
+fn execute_effects(
+    terminal: &mut ratatui::DefaultTerminal,
+    state: &mut AppState,
+    executor: &EffectExecutor,
+    effects: &[Effect],
+) {
+    for effect in effects {
+        match effect {
+            Effect::SuspendForEditor { change_id, initial_text } => {
+                ratatui::restore();
+                let result = run_editor(initial_text);
+                *terminal = ratatui::init();
+                match result {
+                    Ok(text) => {
+                        let effects = dispatch(state, Action::EditorComplete {
+                            change_id: change_id.clone(),
+                            text,
+                        });
+                        execute_effects(terminal, state, executor, &effects);
+                    }
+                    Err(e) => {
+                        state.error = Some(format!("Editor failed: {e}"));
+                    }
+                }
+            }
+            other => executor.execute(other.clone()),
+        }
+    }
+}
+```
+
+The event loop and drain loop both call `execute_effects` instead of the executor directly. This ensures `SuspendForEditor` is always handled correctly regardless of whether it comes from a user keypress or a channel action.
 
 ## RepoBackend Trait Extension
 
@@ -239,7 +295,23 @@ pub trait RepoBackend: Send + Sync {
 
 Every mutation returns `Result<String>`. The string is jj's human-readable output for the status bar. The executor uses it for `RepoOpSuccess.message`.
 
-Cursor positioning after mutations relies on `GraphLoaded` + `working_copy_index`. After `jj new`, the new change becomes the working copy. After `jj abandon`, dispatch falls back to working copy or first node if the abandoned change's ID is gone. No structured return types needed.
+Cursor positioning after mutations relies on `GraphLoaded` + `working_copy_index`. No structured return types needed.
+
+**`GraphLoaded` cursor repositioning strategy** (single code path for all mutations):
+
+1. Save `state.selected_change_id()` before replacing the graph.
+2. Replace `state.graph` with the new graph.
+3. Try to find the saved change ID in the new graph's node indices. If found, cursor stays on it.
+4. If not found (change was abandoned, squashed away), fall back to `working_copy_index`.
+5. If no working copy, fall back to first node index.
+6. Call `state.reset_detail()`.
+
+This is correct for all 10 mutations:
+- **new:** Old change still exists, cursor stays on it. User sees the new change appear in the graph and can navigate to it. (Or: cursor moves to working copy if we prefer — configurable per the fallback chain.)
+- **edit:** Old change still exists, cursor stays on it. The `@` marker moves to reflect the new working copy.
+- **abandon:** Old change ID gone, falls back to working copy (which jj moves to the parent).
+- **squash:** Old change ID gone (squashed into parent), falls back to working copy.
+- **describe, bookmark set/delete, undo, redo, push, fetch:** Old change still exists, cursor stays on it.
 
 ## Mutations
 
@@ -286,6 +358,8 @@ jj's operation log makes every mutation non-destructive. `abandon` doesn't delet
 - `git fetch` (`f`): "Fetching..." with spinner. On completion, graph rebuilds. "Fetched N new changes from origin." Conflicts from remote changes surface in graph immediately.
 
 ### Key Bindings
+
+All mutation keys are **Graph-context-only** — they are mapped in `map_event` under `PanelFocus::Graph`, not as global keys. This avoids collisions with existing keys in other contexts (e.g., `n` is DiffNextHunk in DiffView, `f` is unused in Detail but could be claimed later). Modal-specific keys are routed through `map_modal_event` as with existing modals.
 
 | Key | Context | Action |
 |-----|---------|--------|
