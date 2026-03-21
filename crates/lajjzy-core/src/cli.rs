@@ -63,6 +63,16 @@ impl JjCliBackend {
     }
 }
 
+/// Truncate text to its first line, capped at 50 chars, for status bar display.
+fn first_line_preview(text: &str) -> String {
+    let first = text.lines().next().unwrap_or("");
+    if first.len() > 50 {
+        format!("{}...", &first[..47])
+    } else {
+        first.to_string()
+    }
+}
+
 /// Separator between display text and metadata in template output.
 const UNIT_SEP: char = '\x1F';
 /// Separator between fields within metadata.
@@ -415,55 +425,65 @@ impl RepoBackend for JjCliBackend {
     }
 
     fn describe(&self, change_id: &str, text: &str) -> Result<String> {
-        self.run_jj(&["describe", change_id, "-m", text])
+        self.run_jj(&["describe", change_id, "-m", text])?;
+        let preview = first_line_preview(text);
+        Ok(format!("Described {change_id}: \"{preview}\""))
     }
 
     fn new_change(&self, after: &str) -> Result<String> {
         // --insert-after rebases children onto the new change, inserting into
         // the stack rather than forking it. Plain `jj new <rev>` would create
         // a sibling branch on non-leaf changes.
-        self.run_jj(&["new", "--insert-after", after])
+        self.run_jj(&["new", "--insert-after", after])?;
+        Ok(format!("Created new change after {after}"))
     }
 
     fn edit_change(&self, change_id: &str) -> Result<String> {
-        self.run_jj(&["edit", change_id])
+        self.run_jj(&["edit", change_id])?;
+        Ok(format!("Now editing {change_id}"))
     }
 
     fn abandon(&self, change_id: &str) -> Result<String> {
-        self.run_jj(&["abandon", change_id])
+        self.run_jj(&["abandon", change_id])?;
+        Ok(format!("Abandoned {change_id}"))
     }
 
     fn squash(&self, change_id: &str) -> Result<String> {
         // `-u` / `--use-destination-message` prevents jj from opening an editor
         // to compose a combined description when both source and destination have
         // non-empty descriptions.
-        self.run_jj(&["squash", "-r", change_id, "-u"])
+        self.run_jj(&["squash", "-r", change_id, "-u"])?;
+        Ok(format!("Squashed {change_id} into parent"))
     }
 
-    /// Undo the most recent operation.
-    ///
     fn undo(&self) -> Result<String> {
-        self.run_jj(&["undo"])
+        self.run_jj(&["undo"])?;
+        Ok("Undid last operation".into())
     }
 
     fn redo(&self) -> Result<String> {
-        self.run_jj(&["redo"])
+        self.run_jj(&["redo"])?;
+        Ok("Redid last operation".into())
     }
 
     fn bookmark_set(&self, change_id: &str, name: &str) -> Result<String> {
-        self.run_jj(&["bookmark", "set", name, "-r", change_id])
+        self.run_jj(&["bookmark", "set", name, "-r", change_id])?;
+        Ok(format!("Set bookmark \"{name}\" on {change_id}"))
     }
 
     fn bookmark_delete(&self, name: &str) -> Result<String> {
-        self.run_jj(&["bookmark", "delete", name])
+        self.run_jj(&["bookmark", "delete", name])?;
+        Ok(format!("Deleted bookmark \"{name}\""))
     }
 
     fn git_push(&self, bookmark: &str) -> Result<String> {
-        self.run_jj(&["git", "push", "--bookmark", bookmark])
+        self.run_jj(&["git", "push", "--bookmark", bookmark])?;
+        Ok(format!("Pushed {bookmark}"))
     }
 
     fn git_fetch(&self) -> Result<String> {
-        self.run_jj(&["git", "fetch"])
+        self.run_jj(&["git", "fetch"])?;
+        Ok("Fetched from remote".into())
     }
 }
 
