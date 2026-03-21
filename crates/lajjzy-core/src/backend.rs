@@ -1,4 +1,4 @@
-use crate::types::GraphData;
+use crate::types::{FileDiff, GraphData};
 use anyhow::Result;
 
 /// Abstraction over jj repo access. Implementations may shell out to jj CLI
@@ -16,6 +16,10 @@ pub trait RepoBackend: Send + Sync {
     /// Compute diff hunks for a specific file in a change.
     /// Lazy — called only when user drills into a file.
     fn file_diff(&self, change_id: &str, path: &str) -> Result<Vec<crate::types::DiffHunk>>;
+
+    /// Return all file diffs for a change, grouped by file.
+    /// Each entry contains the file path and its parsed hunks.
+    fn change_diff(&self, change_id: &str) -> Result<Vec<FileDiff>>;
 
     /// Load the operation log.
     fn op_log(&self) -> Result<Vec<crate::types::OpLogEntry>>;

@@ -297,6 +297,108 @@ fn parse_diff_output(output: &str) -> Result<Vec<crate::types::DiffHunk>> {
     Ok(hunks)
 }
 
+/// Flush the accumulated state for the current file into `files`.
+///
+/// Handles the header-only case (chmod, binary, pure rename) by creating a
+/// synthetic hunk so the caller always sees at least one hunk per file.
+fn flush_file_diff(
+    files: &mut Vec<crate::types::FileDiff>,
+    path: Option<String>,
+    hunks: &mut Vec<crate::types::DiffHunk>,
+    open_hunk: &mut Option<crate::types::DiffHunk>,
+    header_lines: &mut Vec<crate::types::DiffLine>,
+) {
+    let Some(p) = path else { return };
+    if let Some(h) = open_hunk.take() {
+        hunks.push(h);
+    }
+    if hunks.is_empty() && !header_lines.is_empty() {
+        hunks.push(crate::types::DiffHunk {
+            header: String::new(),
+            lines: std::mem::take(header_lines),
+        });
+    }
+    header_lines.clear();
+    files.push(crate::types::FileDiff {
+        path: p,
+        hunks: std::mem::take(hunks),
+    });
+}
+
+/// Parse git-format diff output for an entire change, grouping hunks by file.
+///
+/// Splits on `diff --git a/<path> b/<path>` lines. Each file gets its own
+/// [`FileDiff`][crate::types::FileDiff]. Header-only diffs (chmod, binary,
+/// pure rename) produce a synthetic hunk so callers always see something.
+#[expect(clippy::unnecessary_wraps)] // Result kept for forward-compatibility with error paths
+fn parse_file_diffs(output: &str) -> Result<Vec<crate::types::FileDiff>> {
+    let mut files: Vec<crate::types::FileDiff> = Vec::new();
+
+    // State for the file currently being accumulated.
+    let mut current_path: Option<String> = None;
+    let mut current_hunks: Vec<crate::types::DiffHunk> = Vec::new();
+    let mut current_hunk: Option<crate::types::DiffHunk> = None;
+    let mut header_lines: Vec<crate::types::DiffLine> = Vec::new();
+
+    for line in output.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            // Flush the previous file before starting a new one.
+            flush_file_diff(
+                &mut files,
+                current_path.take(),
+                &mut current_hunks,
+                &mut current_hunk,
+                &mut header_lines,
+            );
+
+            // Extract path from `a/<path> b/<path>` — take the part after ` b/`.
+            let path = rest
+                .find(" b/")
+                .map_or_else(|| rest.to_string(), |i| rest[i + 3..].to_string());
+            current_path = Some(path);
+        } else if line.starts_with("@@") {
+            if let Some(h) = current_hunk.take() {
+                current_hunks.push(h);
+            }
+            current_hunk = Some(crate::types::DiffHunk {
+                header: line.to_string(),
+                lines: Vec::new(),
+            });
+        } else if let Some(ref mut hunk) = current_hunk {
+            let (kind, content) = if let Some(rest) = line.strip_prefix('+') {
+                (crate::types::DiffLineKind::Added, rest)
+            } else if let Some(rest) = line.strip_prefix('-') {
+                (crate::types::DiffLineKind::Removed, rest)
+            } else if let Some(rest) = line.strip_prefix(' ') {
+                (crate::types::DiffLineKind::Context, rest)
+            } else {
+                (crate::types::DiffLineKind::Context, line)
+            };
+            hunk.lines.push(crate::types::DiffLine {
+                kind,
+                content: content.to_string(),
+            });
+        } else if current_path.is_some() {
+            // Pre-@@ header lines (index, new file mode, --- +++, etc.)
+            header_lines.push(crate::types::DiffLine {
+                kind: crate::types::DiffLineKind::Header,
+                content: line.to_string(),
+            });
+        }
+    }
+
+    // Flush the last file.
+    flush_file_diff(
+        &mut files,
+        current_path.take(),
+        &mut current_hunks,
+        &mut current_hunk,
+        &mut header_lines,
+    );
+
+    Ok(files)
+}
+
 /// Parse the raw output of `jj op log` with our custom template into a list of `OpLogEntry`.
 ///
 /// Expected line format: `<id>\x1f<description>\x1e<timestamp>`
@@ -353,6 +455,24 @@ impl RepoBackend for JjCliBackend {
             String::from_utf8(output.stdout).context("jj diff output was not valid UTF-8")?;
 
         parse_diff_output(&stdout)
+    }
+
+    fn change_diff(&self, change_id: &str) -> Result<Vec<crate::types::FileDiff>> {
+        let output = Command::new("jj")
+            .args(["diff", "-r", change_id, "--git", "--color=never"])
+            .current_dir(&self.workspace_root)
+            .output()
+            .with_context(|| format!("Failed to run `jj diff` for {change_id}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("jj diff failed for {change_id}: {}", stderr.trim());
+        }
+
+        let stdout =
+            String::from_utf8(output.stdout).context("jj diff output was not valid UTF-8")?;
+
+        parse_file_diffs(&stdout)
     }
 
     fn load_graph(&self, revset: Option<&str>) -> Result<GraphData> {
@@ -1446,5 +1566,112 @@ new mode 100755";
             "after rebase_with_descendants, C should still be a child of B; parents={:?}",
             detail(&c_id).parents
         );
+    }
+
+    // ── parse_file_diffs tests ───────────────────────────────────────────────
+
+    #[test]
+    fn parse_file_diffs_empty() {
+        let files = parse_file_diffs("").unwrap();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn parse_file_diffs_multi_file() {
+        let output = "\
+diff --git a/foo.txt b/foo.txt
+new file mode 100644
+--- /dev/null
++++ b/foo.txt
+@@ -0,0 +1,1 @@
++hello
+diff --git a/bar.txt b/bar.txt
+new file mode 100644
+--- /dev/null
++++ b/bar.txt
+@@ -0,0 +1,1 @@
++world";
+        let files = parse_file_diffs(output).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "foo.txt");
+        assert_eq!(files[1].path, "bar.txt");
+        assert!(!files[0].hunks.is_empty());
+        assert!(!files[1].hunks.is_empty());
+    }
+
+    #[test]
+    fn parse_file_diffs_single_file_multi_hunk() {
+        let output = "\
+diff --git a/foo.txt b/foo.txt
+--- a/foo.txt
++++ b/foo.txt
+@@ -1,3 +1,3 @@
+ line1
+-old2
++new2
+ line3
+@@ -10,3 +10,3 @@
+ line10
+-old11
++new11
+ line12";
+        let files = parse_file_diffs(output).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "foo.txt");
+        assert_eq!(files[0].hunks.len(), 2);
+    }
+
+    #[test]
+    fn parse_file_diffs_header_only_file() {
+        // chmod-only diff: has headers but no @@ hunks — should produce a synthetic hunk.
+        let output = "\
+diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755";
+        let files = parse_file_diffs(output).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "script.sh");
+        assert_eq!(files[0].hunks.len(), 1);
+        assert!(files[0].hunks[0].header.is_empty());
+        assert_eq!(
+            files[0].hunks[0].lines[0].kind,
+            crate::types::DiffLineKind::Header
+        );
+    }
+
+    #[test]
+    fn parse_file_diffs_path_with_spaces() {
+        // Paths containing spaces: the ` b/` marker split must still work.
+        let output = "\
+diff --git a/my file.txt b/my file.txt
+--- a/my file.txt
++++ b/my file.txt
+@@ -1 +1 @@
+-old
++new";
+        let files = parse_file_diffs(output).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "my file.txt");
+    }
+
+    #[test]
+    fn change_diff_returns_grouped_file_diffs() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        std::fs::write(tmp.path().join("foo.txt"), "hello\n").unwrap();
+        std::fs::write(tmp.path().join("bar.txt"), "world\n").unwrap();
+        backend.describe("@", "add files").unwrap();
+
+        let files = backend.change_diff("@").unwrap();
+        assert!(files.len() >= 2);
+        assert!(files.iter().any(|f| f.path == "foo.txt"));
+        assert!(files.iter().any(|f| f.path == "bar.txt"));
+        for f in &files {
+            assert!(!f.hunks.is_empty(), "file {} should have hunks", f.path);
+        }
     }
 }
