@@ -2,13 +2,20 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{Action, DetailMode, Modal, PanelFocus, PickingMode};
 
+#[expect(clippy::too_many_lines)]
 pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) -> Option<Action> {
     // Global keys
     match (event.code, event.modifiers) {
-        (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL)
-            if detail_mode != DetailMode::HunkPicker =>
-        {
+        (KeyCode::Char('q'), KeyModifiers::NONE) if detail_mode != DetailMode::HunkPicker => {
             return Some(Action::Quit);
+        }
+        // Ctrl-C always works: quit normally, or cancel hunk picker
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            return Some(if detail_mode == DetailMode::HunkPicker {
+                Action::HunkCancel
+            } else {
+                Action::Quit
+            });
         }
         (KeyCode::Tab, _) if detail_mode != DetailMode::HunkPicker => {
             return Some(Action::TabFocus);
@@ -16,14 +23,24 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
         (KeyCode::BackTab, _) if detail_mode != DetailMode::HunkPicker => {
             return Some(Action::BackTabFocus);
         }
-        (KeyCode::Char('R'), m) if !m.contains(KeyModifiers::CONTROL) => {
+        (KeyCode::Char('R'), m)
+            if !m.contains(KeyModifiers::CONTROL) && detail_mode != DetailMode::HunkPicker =>
+        {
             return Some(Action::Refresh);
         }
-        (KeyCode::Char('@'), _) => return Some(Action::JumpToWorkingCopy),
-        (KeyCode::Char('O'), _) => return Some(Action::ToggleOpLog),
-        (KeyCode::Char('b'), KeyModifiers::NONE) => return Some(Action::OpenBookmarks),
-        (KeyCode::Char('/'), _) => return Some(Action::OpenOmnibar),
-        (KeyCode::Char('?'), _) => return Some(Action::OpenHelp),
+        (KeyCode::Char('@'), _) if detail_mode != DetailMode::HunkPicker => {
+            return Some(Action::JumpToWorkingCopy);
+        }
+        (KeyCode::Char('O'), _) if detail_mode != DetailMode::HunkPicker => {
+            return Some(Action::ToggleOpLog);
+        }
+        (KeyCode::Char('b'), KeyModifiers::NONE) if detail_mode != DetailMode::HunkPicker => {
+            return Some(Action::OpenBookmarks);
+        }
+        (KeyCode::Char('/'), _) if detail_mode != DetailMode::HunkPicker => {
+            return Some(Action::OpenOmnibar);
+        }
+        (KeyCode::Char('?'), _) => return Some(Action::OpenHelp), // help always available
         _ => {}
     }
 
@@ -756,10 +773,10 @@ mod tests {
     fn quit_suppressed_during_hunk_picker() {
         // q is suppressed during hunk picker
         assert_eq!(map_hunk_picker(key(KeyCode::Char('q'))), None);
-        // Ctrl-C is also suppressed
+        // Ctrl-C cancels the picker (emergency exit), not quit
         assert_eq!(
             map_hunk_picker(key_mod(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            None
+            Some(Action::HunkCancel)
         );
         // q works normally in other detail modes
         assert_eq!(map_file_list(key(KeyCode::Char('q'))), Some(Action::Quit));

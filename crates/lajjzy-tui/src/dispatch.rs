@@ -687,7 +687,11 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::ChangeDiffLoaded { operation, result } => match result {
             Ok(file_diffs) => {
                 if file_diffs.is_empty() || file_diffs.iter().all(|f| f.hunks.is_empty()) {
-                    state.error = Some("Nothing to split: change is empty".into());
+                    let op_name = match &operation {
+                        HunkPickerOp::Split { .. } => "split",
+                        HunkPickerOp::Squash { .. } => "squash",
+                    };
+                    state.error = Some(format!("Nothing to {op_name}: change is empty"));
                 } else {
                     state.hunk_picker = Some(build_hunk_picker(operation, file_diffs));
                     state.detail_mode = DetailMode::HunkPicker;
