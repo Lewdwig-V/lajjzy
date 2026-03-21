@@ -18,4 +18,37 @@ pub trait RepoBackend: Send + Sync {
 
     /// Load the operation log.
     fn op_log(&self) -> Result<Vec<crate::types::OpLogEntry>>;
+
+    /// Set the description on a change.
+    fn describe(&self, change_id: &str, text: &str) -> Result<String>;
+
+    /// Create a new empty change after the given revision.
+    fn new_change(&self, after: &str) -> Result<String>;
+
+    /// Move the working copy to the given change.
+    fn edit_change(&self, change_id: &str) -> Result<String>;
+
+    /// Abandon (delete) the given change.
+    fn abandon(&self, change_id: &str) -> Result<String>;
+
+    /// Squash the given change into its parent.
+    fn squash(&self, change_id: &str) -> Result<String>;
+
+    /// Undo the most recent operation (`jj op restore @-`).
+    fn undo(&self) -> Result<String>;
+
+    /// Redo the most recently undone operation (`jj op revert @`).
+    fn redo(&self) -> Result<String>;
+
+    /// Create or move a bookmark to the given revision.
+    fn bookmark_set(&self, change_id: &str, name: &str) -> Result<String>;
+
+    /// Delete a bookmark by name.
+    fn bookmark_delete(&self, name: &str) -> Result<String>;
+
+    /// Push a bookmark to its remote.
+    fn git_push(&self, bookmark: &str) -> Result<String>;
+
+    /// Fetch all remotes.
+    fn git_fetch(&self) -> Result<String>;
 }
