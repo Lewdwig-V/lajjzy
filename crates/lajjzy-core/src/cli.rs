@@ -442,20 +442,12 @@ impl RepoBackend for JjCliBackend {
 
     /// Undo the most recent operation.
     ///
-    /// jj 0.39.0 has no `jj op undo` subcommand. The equivalent is
-    /// `jj op restore @-`, which creates a new operation that restores the
-    /// repo to the state before the last operation.
     fn undo(&self) -> Result<String> {
-        self.run_jj(&["op", "restore", "@-"])
+        self.run_jj(&["undo"])
     }
 
-    /// Redo the most recently undone operation.
-    ///
-    /// jj 0.39.0 has no `jj op redo` subcommand. The equivalent is
-    /// `jj op revert @`, which inverts the most recent operation (typically an
-    /// undo/restore), restoring the repo to the state before the undo.
     fn redo(&self) -> Result<String> {
-        self.run_jj(&["op", "revert", "@"])
+        self.run_jj(&["redo"])
     }
 
     fn bookmark_set(&self, change_id: &str, name: &str) -> Result<String> {
