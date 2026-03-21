@@ -22,6 +22,7 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let graph_widget = GraphWidget::new(&state.graph, state.cursor());
+    let graph_widget =
+        GraphWidget::new(&state.graph, state.cursor()).with_target_pick(state.target_pick.as_ref());
     frame.render_widget(graph_widget, inner);
 }

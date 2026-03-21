@@ -34,8 +34,10 @@ impl HelpWidget {
                 ("e", "Edit description (inline)"),
                 ("Ctrl-E", "Switch working copy (edit)"),
                 ("S", "Squash into parent"),
+                ("r", "Rebase (single revision)"),
+                ("Ctrl-R", "Rebase with descendants"),
                 ("u", "Undo last operation"),
-                ("Ctrl-R", "Redo"),
+                ("Ctrl-Shift-R", "Redo"),
                 ("B", "Set bookmark"),
                 ("P", "Git push"),
                 ("f", "Git fetch"),
@@ -86,7 +88,7 @@ impl Widget for HelpWidget {
                 Span::raw(desc),
             ];
             let line = Line::from(spans);
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation)]
             let y = inner.y + row as u16;
             buf.set_line(inner.x, y, &line, inner.width);
         }

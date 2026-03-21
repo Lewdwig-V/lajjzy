@@ -52,4 +52,10 @@ pub trait RepoBackend: Send + Sync {
 
     /// Fetch all remotes.
     fn git_fetch(&self) -> Result<String>;
+
+    /// Rebase a single revision onto a new parent, reparenting its descendants.
+    fn rebase_single(&self, source: &str, destination: &str) -> Result<String>;
+
+    /// Rebase a revision and all of its descendants onto a new parent.
+    fn rebase_with_descendants(&self, source: &str, destination: &str) -> Result<String>;
 }

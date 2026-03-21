@@ -51,7 +51,7 @@ impl Widget for FileListWidget<'_> {
                 break;
             }
 
-            #[allow(clippy::cast_possible_truncation)] // i bounded by area.height (u16)
+            #[expect(clippy::cast_possible_truncation)] // i bounded by area.height (u16)
             let y = area.y + i as u16;
             let line_text = format!("  {} {}", file.status, file.path);
             let color = Self::status_color(file.status);

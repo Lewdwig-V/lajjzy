@@ -156,9 +156,9 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
             let metadata = &raw_line[sep_pos + UNIT_SEP.len_utf8()..];
             let fields: Vec<&str> = metadata.split(RECORD_SEP).collect();
 
-            if fields.len() < 10 {
+            if fields.len() < 11 {
                 bail!(
-                    "Expected 10 metadata fields, got {}: {:?}",
+                    "Expected 11 metadata fields, got {}: {:?}",
                     fields.len(),
                     fields
                 );
@@ -195,6 +195,11 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
                     is_empty: fields[7] == "true",
                     has_conflict: fields[8] == "true",
                     files: vec![],
+                    parents: if fields[10].is_empty() {
+                        vec![]
+                    } else {
+                        fields[10].split(' ').map(String::from).collect()
+                    },
                 },
             );
 
@@ -238,7 +243,7 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
 /// collected. If the diff has no `@@` hunks (chmod-only, binary, pure rename),
 /// a single hunk with these header lines is returned so the user sees something
 /// rather than "(empty diff)".
-#[allow(clippy::unnecessary_wraps)] // Result kept for forward-compatibility with error paths
+#[expect(clippy::unnecessary_wraps)] // Result kept for forward-compatibility with error paths
 fn parse_diff_output(output: &str) -> Result<Vec<crate::types::DiffHunk>> {
     let mut hunks = Vec::new();
     let mut current_hunk: Option<crate::types::DiffHunk> = None;
@@ -379,6 +384,7 @@ impl RepoBackend for JjCliBackend {
             " ++ \"\\x1e\" ++ empty",
             " ++ \"\\x1e\" ++ conflict",
             " ++ \"\\x1e\" ++ if(self.current_working_copy(), \"@\", \"\")",
+            " ++ \"\\x1e\" ++ parents.map(|p| p.change_id().short()).join(\" \")",
             " ++ \"\\n\"",
         );
 
@@ -491,6 +497,16 @@ impl RepoBackend for JjCliBackend {
         self.run_jj(&["git", "fetch"])?;
         Ok("Fetched from remote".into())
     }
+
+    fn rebase_single(&self, source: &str, destination: &str) -> Result<String> {
+        self.run_jj(&["rebase", "-r", source, "--onto", destination])?;
+        Ok(format!("Rebased {source} onto {destination}"))
+    }
+
+    fn rebase_with_descendants(&self, source: &str, destination: &str) -> Result<String> {
+        self.run_jj(&["rebase", "-s", source, "--onto", destination])?;
+        Ok(format!("Rebased {source} + descendants onto {destination}"))
+    }
 }
 
 #[cfg(test)]
@@ -534,9 +550,9 @@ mod tests {
     #[test]
     fn parse_graph_output_basic() {
         let output = "\
-◉  abc12 alice 2m ago\x1Fabc12\x1Eaaa11\x1Ealice\x1Ealice@ex.com\x1E2m ago\x1Efix bug\x1Emain\x1Efalse\x1Efalse\x1E@
+◉  abc12 alice 2m ago\x1Fabc12\x1Eaaa11\x1Ealice\x1Ealice@ex.com\x1E2m ago\x1Efix bug\x1Emain\x1Efalse\x1Efalse\x1E@\x1E
 │  fix bug
-◉  def45 bob 1h ago\x1Fdef45\x1Ebbb22\x1Ebob\x1Ebob@ex.com\x1E1h ago\x1Eadd feature\x1E\x1Efalse\x1Efalse\x1E
+◉  def45 bob 1h ago\x1Fdef45\x1Ebbb22\x1Ebob\x1Ebob@ex.com\x1E1h ago\x1Eadd feature\x1E\x1Efalse\x1Efalse\x1E\x1E
 │  add feature";
 
         let graph = parse_graph_output(output, String::new()).unwrap();
@@ -555,7 +571,7 @@ mod tests {
     #[test]
     fn parse_graph_output_connector_lines_have_no_change_id() {
         let output = "\
-◉  abc12 alice 2m ago\x1Fabc12\x1Eaaa11\x1Ealice\x1Ea@b.c\x1E2m\x1Edesc\x1E\x1Efalse\x1Efalse\x1E@
+◉  abc12 alice 2m ago\x1Fabc12\x1Eaaa11\x1Ealice\x1Ea@b.c\x1E2m\x1Edesc\x1E\x1Efalse\x1Efalse\x1E@\x1E
 │  some description
 │";
 
@@ -567,7 +583,7 @@ mod tests {
 
     #[test]
     fn parse_graph_output_empty_bookmarks() {
-        let output = "◉  x y 1m\x1Fx\x1Ey\x1Ez\x1Ea@b\x1E1m\x1Ed\x1E\x1Efalse\x1Efalse\x1E";
+        let output = "◉  x y 1m\x1Fx\x1Ey\x1Ez\x1Ea@b\x1E1m\x1Ed\x1E\x1Efalse\x1Efalse\x1E\x1E";
         let graph = parse_graph_output(output, String::new()).unwrap();
         assert!(graph.details.get("x").unwrap().bookmarks.is_empty());
     }
@@ -577,7 +593,7 @@ mod tests {
         let output = "◉  x y 1m\x1Fx\x1Ey"; // only 2 fields
         let result = parse_graph_output(output, String::new());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Expected 10"));
+        assert!(result.unwrap_err().to_string().contains("Expected 11"));
     }
 
     #[test]
@@ -590,12 +606,12 @@ mod tests {
     #[test]
     fn parse_graph_output_with_file_summary() {
         let output = "\
-@  mpvponzr add bar\x1Fmpvponzr\x1Edbd5259e\x1ELewdwig\x1Etest@test.com\x1E1m ago\x1Eadd bar\x1E\x1Efalse\x1Efalse\x1E@
+@  mpvponzr add bar\x1Fmpvponzr\x1Edbd5259e\x1ELewdwig\x1Etest@test.com\x1E1m ago\x1Eadd bar\x1E\x1Efalse\x1Efalse\x1E@\x1E
 │  A bar.txt
 │  M foo.txt
-○  mrvmvrsz add foo\x1Fmrvmvrsz\x1Ecbfd5aa0\x1ELewdwig\x1Etest@test.com\x1E2m ago\x1Eadd foo\x1E\x1Efalse\x1Efalse\x1E
+○  mrvmvrsz add foo\x1Fmrvmvrsz\x1Ecbfd5aa0\x1ELewdwig\x1Etest@test.com\x1E2m ago\x1Eadd foo\x1E\x1Efalse\x1Efalse\x1E\x1E
 │  A foo.txt
-◆  zzzzzzzz (no description)\x1Fzzzzzzzz\x1E000000000000\x1E\x1E\x1E56y ago\x1E\x1E\x1Etrue\x1Efalse\x1E";
+◆  zzzzzzzz (no description)\x1Fzzzzzzzz\x1E000000000000\x1E\x1E\x1E56y ago\x1E\x1E\x1Etrue\x1Efalse\x1E\x1E";
 
         let graph = parse_graph_output(output, String::new()).unwrap();
 
@@ -620,7 +636,7 @@ mod tests {
     #[test]
     fn parse_graph_output_rename() {
         let output = "\
-@  abc rename\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Erename\x1E\x1Efalse\x1Efalse\x1E@
+@  abc rename\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Erename\x1E\x1Efalse\x1Efalse\x1E@\x1E
 │  R {foo.txt => bar.txt}";
 
         let graph = parse_graph_output(output, String::new()).unwrap();
@@ -635,7 +651,7 @@ mod tests {
         // jj uses `~` to indicate elided revisions; file lines after it must
         // still be compacted into the detail, not leak into graph lines.
         let output = "\
-◆  zuk root\x1Fzuk\x1E000\x1ELewdwig\x1Ea@b\x1E8h ago\x1E\x1E\x1Efalse\x1Efalse\x1E
+◆  zuk root\x1Fzuk\x1E000\x1ELewdwig\x1Ea@b\x1E8h ago\x1E\x1E\x1Efalse\x1Efalse\x1E\x1E
 ~  A LICENSE";
 
         let graph = parse_graph_output(output, String::new()).unwrap();
@@ -650,7 +666,7 @@ mod tests {
     #[test]
     fn parse_graph_output_no_files_for_empty_change() {
         let output = "\
-@  abc (no description)\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1E\x1E\x1Etrue\x1Efalse\x1E@";
+@  abc (no description)\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1E\x1E\x1Etrue\x1Efalse\x1E@\x1E";
 
         let graph = parse_graph_output(output, String::new()).unwrap();
         let detail = graph.details.get("abc").unwrap();
@@ -1273,5 +1289,162 @@ new mode 100755";
         let backend = JjCliBackend::new(tmp.path()).unwrap();
         let result = backend.load_graph(Some("not_a_valid_revset!!!"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_graph_includes_parent_ids() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        backend.describe("@", "parent").unwrap();
+        backend.new_change("@").unwrap();
+        backend.describe("@", "child").unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+        let child_detail = graph
+            .node_indices()
+            .iter()
+            .find_map(|&i| {
+                let cid = graph.lines[i].change_id.as_ref()?;
+                let detail = graph.details.get(cid)?;
+                if detail.description == "child" {
+                    Some(detail)
+                } else {
+                    None
+                }
+            })
+            .expect("child change not found");
+        assert!(
+            !child_detail.parents.is_empty(),
+            "child should have parent IDs"
+        );
+    }
+
+    /// Build a 4-node stack: root → A → B → C.
+    /// Returns `(backend, root_id, a_id, b_id, c_id)`.
+    fn build_stack(tmp: &tempfile::TempDir) -> (JjCliBackend, String, String, String, String) {
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Initial working copy is root-level — label it A.
+        backend.describe("@", "commit-A").unwrap();
+        backend.new_change("@").unwrap();
+        backend.describe("@", "commit-B").unwrap();
+        backend.new_change("@").unwrap();
+        backend.describe("@", "commit-C").unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+
+        let find_id = |desc: &str| -> String {
+            graph
+                .node_indices()
+                .iter()
+                .find_map(|&i| {
+                    let cid = graph.lines[i].change_id.as_ref()?;
+                    let detail = graph.details.get(cid)?;
+                    if detail.description == desc {
+                        Some(cid.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| panic!("change '{desc}' not found in graph"))
+        };
+
+        let a_id = find_id("commit-A");
+        let b_id = find_id("commit-B");
+        let c_id = find_id("commit-C");
+
+        // Identify root: it has an empty description and no parents.
+        let root_id = graph
+            .node_indices()
+            .iter()
+            .find_map(|&i| {
+                let change_id = graph.lines[i].change_id.as_ref()?;
+                let detail = graph.details.get(change_id)?;
+                if detail.description.is_empty() {
+                    Some(change_id.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("root change not found");
+
+        (backend, root_id, a_id, b_id, c_id)
+    }
+
+    #[test]
+    fn rebase_single_moves_b_leaves_c_under_a() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let (backend, root_id, a_id, b_id, c_id) = build_stack(&tmp);
+
+        // Rebase B onto root: B should become a child of root.
+        // C (descendant of B) is reparented onto A (B's old parent).
+        backend.rebase_single(&b_id, &root_id).unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+
+        let detail = |id: &str| -> &crate::types::ChangeDetail {
+            graph
+                .details
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} not in graph"))
+        };
+
+        // B's parent should now be root.
+        assert!(
+            detail(&b_id).parents.contains(&root_id),
+            "after rebase_single, B should have root as parent; parents={:?}",
+            detail(&b_id).parents
+        );
+
+        // C should be reparented onto A (descendants are spliced).
+        assert!(
+            detail(&c_id).parents.contains(&a_id),
+            "after rebase_single, C should have A as parent; parents={:?}",
+            detail(&c_id).parents
+        );
+    }
+
+    #[test]
+    fn rebase_with_descendants_moves_b_and_c_under_root() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let (backend, root_id, _a_id, b_id, c_id) = build_stack(&tmp);
+
+        // Rebase B + descendants onto root: both B and C should move under root.
+        backend.rebase_with_descendants(&b_id, &root_id).unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+
+        let detail = |id: &str| -> &crate::types::ChangeDetail {
+            graph
+                .details
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} not in graph"))
+        };
+
+        // B's parent should be root.
+        assert!(
+            detail(&b_id).parents.contains(&root_id),
+            "after rebase_with_descendants, B should have root as parent; parents={:?}",
+            detail(&b_id).parents
+        );
+
+        // C's parent should be B (preserved relative order).
+        assert!(
+            detail(&c_id).parents.contains(&b_id),
+            "after rebase_with_descendants, C should still be a child of B; parents={:?}",
+            detail(&c_id).parents
+        );
     }
 }

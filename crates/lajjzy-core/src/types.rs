@@ -50,6 +50,7 @@ pub struct ChangeDetail {
     pub is_empty: bool,
     pub has_conflict: bool,
     pub files: Vec<FileChange>,
+    pub parents: Vec<String>,
 }
 
 /// A file changed in a change (parsed from `jj log --summary`).
@@ -184,6 +185,7 @@ mod tests {
                         is_empty: false,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 ),
                 (
@@ -198,6 +200,7 @@ mod tests {
                         is_empty: false,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 ),
                 (
@@ -212,6 +215,7 @@ mod tests {
                         is_empty: true,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 ),
             ]),

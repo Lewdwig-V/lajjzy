@@ -31,6 +31,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         status_message,
         active_revset,
         &state.pending_background,
+        state.target_pick.as_ref(),
     );
     frame.render_widget(status_widget, outer[1]);
 

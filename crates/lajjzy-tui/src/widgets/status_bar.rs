@@ -8,7 +8,8 @@ use ratatui::widgets::Widget;
 
 use lajjzy_core::types::ChangeDetail;
 
-use crate::action::BackgroundKind;
+use crate::action::{BackgroundKind, RebaseMode};
+use crate::app::{PickingMode, TargetPick};
 
 pub struct StatusBarWidget<'a> {
     change_id: Option<&'a str>,
@@ -17,6 +18,7 @@ pub struct StatusBarWidget<'a> {
     status_message: Option<&'a str>,
     active_revset: Option<&'a str>,
     pending_background: &'a HashSet<BackgroundKind>,
+    target_pick: Option<&'a TargetPick>,
 }
 
 impl<'a> StatusBarWidget<'a> {
@@ -27,6 +29,7 @@ impl<'a> StatusBarWidget<'a> {
         status_message: Option<&'a str>,
         active_revset: Option<&'a str>,
         pending_background: &'a HashSet<BackgroundKind>,
+        target_pick: Option<&'a TargetPick>,
     ) -> Self {
         Self {
             change_id,
@@ -35,6 +38,7 @@ impl<'a> StatusBarWidget<'a> {
             status_message,
             active_revset,
             pending_background,
+            target_pick,
         }
     }
 }
@@ -45,7 +49,31 @@ impl Widget for StatusBarWidget<'_> {
             return;
         }
 
-        // Priority: error (red) > status_message (green) > active_revset (cyan) > pending indicator > normal info
+        // Priority: picking mode (yellow) > error (red) > status_message (green) > active_revset (cyan) > pending indicator > normal info
+        if let Some(pick) = self.target_pick {
+            let mode_str = match pick.mode {
+                RebaseMode::Single => format!("Rebase {} onto →", pick.source),
+                RebaseMode::WithDescendants => format!(
+                    "Rebase {} + {} descendant{} onto →",
+                    pick.source,
+                    pick.descendant_count,
+                    if pick.descendant_count == 1 { "" } else { "s" },
+                ),
+            };
+            let text = match &pick.picking {
+                PickingMode::Browsing => {
+                    format!("{mode_str}  (j/k navigate, Enter confirm, Esc cancel)")
+                }
+                PickingMode::Filtering { query } => {
+                    format!("{mode_str}  filter: {query}  (Enter confirm, Esc cancel)")
+                }
+            };
+            let style = Style::default().fg(Color::Yellow);
+            let line = Line::styled(text, style);
+            buf.set_line(area.x, area.y, &line, area.width);
+            return;
+        }
+
         if let Some(err) = self.error {
             let style = Style::default().fg(Color::Red);
             let line = Line::styled(err, style);
@@ -141,6 +169,7 @@ mod tests {
             is_empty: false,
             has_conflict: false,
             files: vec![],
+            parents: vec![],
         }
     }
 
@@ -148,7 +177,8 @@ mod tests {
     fn renders_change_detail() {
         let detail = sample_detail();
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(Some("abc12"), Some(&detail), None, None, None, &bg);
+        let widget =
+            StatusBarWidget::new(Some("abc12"), Some(&detail), None, None, None, &bg, None);
         let area = Rect::new(0, 0, 60, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -169,8 +199,15 @@ mod tests {
     #[test]
     fn renders_error_in_red() {
         let bg = empty_bg();
-        let widget =
-            StatusBarWidget::new(None, None, Some("Refresh failed: timeout"), None, None, &bg);
+        let widget = StatusBarWidget::new(
+            None,
+            None,
+            Some("Refresh failed: timeout"),
+            None,
+            None,
+            &bg,
+            None,
+        );
         let area = Rect::new(0, 0, 40, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -185,7 +222,7 @@ mod tests {
     #[test]
     fn renders_nothing_when_no_detail_and_no_error() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None);
         let area = Rect::new(0, 0, 40, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -199,7 +236,7 @@ mod tests {
     #[test]
     fn renders_status_message_in_green() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -214,8 +251,15 @@ mod tests {
     #[test]
     fn error_takes_priority_over_status_message() {
         let bg = empty_bg();
-        let widget =
-            StatusBarWidget::new(None, None, Some("fatal error"), Some("all good"), None, &bg);
+        let widget = StatusBarWidget::new(
+            None,
+            None,
+            Some("fatal error"),
+            Some("all good"),
+            None,
+            &bg,
+            None,
+        );
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -232,7 +276,7 @@ mod tests {
     fn renders_pushing_indicator_in_cyan() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -248,7 +292,7 @@ mod tests {
     fn renders_fetching_indicator_in_cyan() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Fetch);
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -265,7 +309,7 @@ mod tests {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
         bg.insert(BackgroundKind::Fetch);
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -280,7 +324,7 @@ mod tests {
     fn status_message_takes_priority_over_pending_indicator() {
         let mut bg: HashSet<BackgroundKind> = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -295,7 +339,8 @@ mod tests {
     #[test]
     fn status_bar_shows_active_revset() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, None, None, Some("mine() & ~empty()"), &bg);
+        let widget =
+            StatusBarWidget::new(None, None, None, None, Some("mine() & ~empty()"), &bg, None);
         let area = Rect::new(0, 0, 60, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -314,7 +359,7 @@ mod tests {
     fn active_revset_takes_priority_over_pending_indicator() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, None, Some("mine()"), &bg);
+        let widget = StatusBarWidget::new(None, None, None, None, Some("mine()"), &bg, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -324,5 +369,110 @@ mod tests {
             .collect();
         assert!(line0.contains("revset: mine()"));
         assert!(!line0.contains("Pushing..."));
+    }
+
+    fn sample_pick_single() -> TargetPick {
+        TargetPick {
+            source: "abc".into(),
+            mode: RebaseMode::Single,
+            excluded: std::collections::HashSet::from(["abc".into()]),
+            picking: PickingMode::Browsing,
+            original_change_id: "abc".into(),
+            descendant_count: 0,
+        }
+    }
+
+    fn sample_pick_with_descendants() -> TargetPick {
+        TargetPick {
+            source: "def".into(),
+            mode: RebaseMode::WithDescendants,
+            excluded: std::collections::HashSet::from(["def".into(), "abc".into()]),
+            picking: PickingMode::Browsing,
+            original_change_id: "def".into(),
+            descendant_count: 1,
+        }
+    }
+
+    #[test]
+    fn status_bar_shows_picking_mode_text() {
+        let bg = empty_bg();
+        let pick = sample_pick_single();
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick));
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..80)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains("Rebase abc onto →"),
+            "expected picking text, got: {line0:?}"
+        );
+        assert_eq!(
+            buf[(0, 0)].style().fg,
+            Some(Color::Yellow),
+            "picking mode text should be yellow"
+        );
+    }
+
+    #[test]
+    fn status_bar_shows_blast_radius() {
+        let bg = empty_bg();
+        let pick = sample_pick_with_descendants();
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick));
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..80)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains("Rebase def + 1 descendant onto →"),
+            "expected blast radius text, got: {line0:?}"
+        );
+        assert_eq!(buf[(0, 0)].style().fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn status_bar_shows_filter_query_in_picking_mode() {
+        let bg = empty_bg();
+        let mut pick = sample_pick_single();
+        pick.picking = PickingMode::Filtering {
+            query: "main".into(),
+        };
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick));
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..80)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains("filter: main"),
+            "expected filter query in text, got: {line0:?}"
+        );
+    }
+
+    #[test]
+    fn picking_mode_takes_priority_over_error() {
+        let bg = empty_bg();
+        let pick = sample_pick_single();
+        let widget =
+            StatusBarWidget::new(None, None, Some("some error"), None, None, &bg, Some(&pick));
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..80)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains("Rebase abc onto →"),
+            "picking mode must beat error, got: {line0:?}"
+        );
+        assert!(!line0.contains("some error"));
     }
 }

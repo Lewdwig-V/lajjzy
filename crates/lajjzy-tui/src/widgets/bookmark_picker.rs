@@ -70,7 +70,7 @@ impl Widget for BookmarkPickerWidget<'_> {
                 Span::styled(desc, Style::default().fg(Color::DarkGray)),
             ];
             let line = Line::from(spans);
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation)]
             let y = inner.y + row as u16;
             buf.set_line(inner.x, y, &line, inner.width);
 
@@ -107,6 +107,7 @@ mod tests {
                 is_empty: false,
                 has_conflict: false,
                 files: vec![],
+                parents: vec![],
             },
         );
         details.insert(
@@ -121,6 +122,7 @@ mod tests {
                 is_empty: false,
                 has_conflict: false,
                 files: vec![],
+                parents: vec![],
             },
         );
 

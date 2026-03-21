@@ -14,7 +14,7 @@ use lajjzy_tui::action::{Action, MutationKind};
 use lajjzy_tui::app::AppState;
 use lajjzy_tui::dispatch::dispatch;
 use lajjzy_tui::effect::Effect;
-use lajjzy_tui::input::{map_event, map_modal_event};
+use lajjzy_tui::input::{map_event, map_modal_event, map_picking_event};
 use lajjzy_tui::render::render;
 
 struct EffectExecutor {
@@ -35,7 +35,7 @@ impl EffectExecutor {
     /// `let _ = tx.send(...)` is intentional: if the receiver is dropped (event loop
     /// exited or panicked), the send fails harmlessly. The spawned thread has no other
     /// work to do and will exit. This is the expected shutdown race, not a silent failure.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn execute(&self, effect: Effect) {
         let backend = Arc::clone(&self.backend);
         let tx = self.tx.clone();
@@ -186,6 +186,34 @@ impl EffectExecutor {
                 });
             }
 
+            // Rebase effects
+            Effect::RebaseSingle {
+                source,
+                destination,
+            } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::RebaseSingle,
+                    generation,
+                    &active_revset,
+                    || backend.rebase_single(&source, &destination),
+                );
+            }
+            Effect::RebaseWithDescendants {
+                source,
+                destination,
+            } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::RebaseWithDescendants,
+                    generation,
+                    &active_revset,
+                    || backend.rebase_with_descendants(&source, &destination),
+                );
+            }
+
             // SuspendForEditor is intercepted before reaching the executor
             Effect::SuspendForEditor { .. } => {
                 unreachable!("SuspendForEditor must be intercepted by execute_effects")
@@ -209,8 +237,12 @@ impl EffectExecutor {
             | Effect::BookmarkDelete { .. }
             | Effect::GitPush { .. }
             | Effect::GitFetch
-            | Effect::EvalRevset { .. } => self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1,
-            _ => 0,
+            | Effect::EvalRevset { .. }
+            | Effect::RebaseSingle { .. }
+            | Effect::RebaseWithDescendants { .. } => {
+                self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1
+            }
+            Effect::LoadOpLog | Effect::LoadFileDiff { .. } | Effect::SuspendForEditor { .. } => 0,
         }
     }
 }
@@ -384,6 +416,22 @@ fn run_loop(
                 continue;
             }
             state.status_message = None;
+
+            // Picking mode intercepts all keys before modal/normal routing.
+            if state.target_pick.is_some() {
+                let picking = state.target_pick.as_ref().unwrap().picking.clone();
+                if let Some(action) = map_picking_event(key_event, &picking) {
+                    let effects = dispatch(state, action);
+                    executor
+                        .active_revset
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone_from(&state.active_revset);
+                    execute_effects(terminal, state, executor, effects);
+                }
+                continue; // swallow unhandled keys during picking
+            }
+
             let action = if let Some(ref modal) = state.modal {
                 map_modal_event(key_event, modal)
             } else {

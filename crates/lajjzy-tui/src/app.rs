@@ -2,8 +2,27 @@ use std::collections::HashSet;
 
 use lajjzy_core::types::{ChangeDetail, DiffHunk, GraphData};
 
+use crate::action::RebaseMode;
 pub use crate::action::{Action, BackgroundKind, DetailMode, MutationKind, PanelFocus};
 pub use crate::modal::{HelpContext, Modal};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PickingMode {
+    Browsing,
+    Filtering { query: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetPick {
+    pub source: String,
+    pub mode: RebaseMode,
+    pub excluded: HashSet<String>,
+    pub picking: PickingMode,
+    /// Change ID at cursor when picking started — restored by identity on cancel.
+    /// Using ID rather than index survives graph refreshes that shift positions.
+    pub original_change_id: String,
+    pub descendant_count: usize,
+}
 
 pub struct AppState {
     pub graph: GraphData,
@@ -27,6 +46,7 @@ pub struct AppState {
     pub active_revset: Option<String>,
     /// Saved cursor position for restoring focus when exiting a revset filter.
     pub(crate) omnibar_fallback_idx: Option<usize>,
+    pub target_pick: Option<TargetPick>,
 }
 
 impl AppState {
@@ -52,6 +72,7 @@ impl AppState {
             graph_generation: 0,
             active_revset: None,
             omnibar_fallback_idx: None,
+            target_pick: None,
         }
     }
 

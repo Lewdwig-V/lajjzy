@@ -1,6 +1,12 @@
 use lajjzy_core::types::{DiffHunk, GraphData, OpLogEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RebaseMode {
+    Single,
+    WithDescendants,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelFocus {
     Graph,
     Detail,
@@ -25,6 +31,8 @@ pub enum MutationKind {
     BookmarkDelete,
     GitPush,
     GitFetch,
+    RebaseSingle,
+    RebaseWithDescendants,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -112,4 +120,10 @@ pub enum Action {
     GitFetch,
     DescribeSave,
     DescribeEscalateEditor,
+    RebaseSingle,
+    RebaseWithDescendants,
+    PickConfirm,
+    PickCancel,
+    PickFilterChar(char),
+    PickFilterBackspace,
 }

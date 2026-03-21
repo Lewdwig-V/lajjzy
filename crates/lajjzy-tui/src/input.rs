@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{Action, DetailMode, Modal, PanelFocus};
+use crate::app::{Action, DetailMode, Modal, PanelFocus, PickingMode};
 
 pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) -> Option<Action> {
     // Global keys
@@ -10,7 +10,9 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
         }
         (KeyCode::Tab, _) => return Some(Action::TabFocus),
         (KeyCode::BackTab, _) => return Some(Action::BackTabFocus),
-        (KeyCode::Char('R'), _) => return Some(Action::Refresh),
+        (KeyCode::Char('R'), m) if !m.contains(KeyModifiers::CONTROL) => {
+            return Some(Action::Refresh);
+        }
         (KeyCode::Char('@'), _) => return Some(Action::JumpToWorkingCopy),
         (KeyCode::Char('O'), _) => return Some(Action::ToggleOpLog),
         (KeyCode::Char('b'), KeyModifiers::NONE) => return Some(Action::OpenBookmarks),
@@ -31,7 +33,13 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
             (KeyCode::Char('e'), KeyModifiers::NONE) => Some(Action::OpenDescribe),
             (KeyCode::Char('S'), _) => Some(Action::Squash),
             (KeyCode::Char('u'), KeyModifiers::NONE) => Some(Action::Undo),
-            (KeyCode::Char('r'), KeyModifiers::CONTROL) => Some(Action::Redo),
+            (KeyCode::Char('r'), KeyModifiers::NONE) => Some(Action::RebaseSingle),
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => Some(Action::RebaseWithDescendants),
+            (KeyCode::Char('r'), m) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
+                Some(Action::Redo)
+            }
+            // Some terminals report Ctrl-Shift-R as Ctrl+uppercase-R
+            (KeyCode::Char('R'), KeyModifiers::CONTROL) => Some(Action::Redo),
             (KeyCode::Char('B'), _) => Some(Action::OpenBookmarkSet),
             (KeyCode::Char('P'), _) => Some(Action::GitPush),
             (KeyCode::Char('f'), KeyModifiers::NONE) => Some(Action::GitFetch),
@@ -142,6 +150,39 @@ pub fn map_modal_event(event: KeyEvent, modal: &Modal) -> Option<Action> {
             }
             _ => None,
         }
+    }
+}
+
+pub fn map_picking_event(event: KeyEvent, picking: &PickingMode) -> Option<Action> {
+    match picking {
+        PickingMode::Browsing => match (event.code, event.modifiers) {
+            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => Some(Action::MoveDown),
+            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => Some(Action::MoveUp),
+            (KeyCode::Enter, _) => Some(Action::PickConfirm),
+            (KeyCode::Esc, _) => Some(Action::PickCancel),
+            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                Some(Action::PickFilterChar(c))
+            }
+            _ => None,
+        },
+        PickingMode::Filtering { .. } => match event.code {
+            KeyCode::Char('j') if event.modifiers == KeyModifiers::CONTROL => {
+                Some(Action::MoveDown)
+            }
+            KeyCode::Char('k') if event.modifiers == KeyModifiers::CONTROL => Some(Action::MoveUp),
+            KeyCode::Down => Some(Action::MoveDown),
+            KeyCode::Up => Some(Action::MoveUp),
+            KeyCode::Enter => Some(Action::PickConfirm),
+            KeyCode::Esc => Some(Action::PickCancel),
+            KeyCode::Backspace => Some(Action::PickFilterBackspace),
+            KeyCode::Char(c)
+                if event.modifiers == KeyModifiers::NONE
+                    || event.modifiers == KeyModifiers::SHIFT =>
+            {
+                Some(Action::PickFilterChar(c))
+            }
+            _ => None,
+        },
     }
 }
 
@@ -480,10 +521,10 @@ mod tests {
         );
         // Undo
         assert_eq!(map_graph(key(KeyCode::Char('u'))), Some(Action::Undo));
-        // Redo (Ctrl-R)
+        // RebaseWithDescendants (Ctrl-R; Redo moved to Ctrl-Shift-R)
         assert_eq!(
             map_graph(key_mod(KeyCode::Char('r'), KeyModifiers::CONTROL)),
-            Some(Action::Redo)
+            Some(Action::RebaseWithDescendants)
         );
         // OpenBookmarkSet (capital B)
         assert_eq!(
@@ -522,6 +563,101 @@ mod tests {
         assert_ne!(
             map_graph(key_mod(KeyCode::Char('e'), KeyModifiers::CONTROL)),
             Some(Action::OpenDescribe)
+        );
+    }
+
+    #[test]
+    fn rebase_keys_in_graph_context() {
+        assert_eq!(
+            map_graph(key(KeyCode::Char('r'))),
+            Some(Action::RebaseSingle)
+        );
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+            Some(Action::RebaseWithDescendants)
+        );
+    }
+
+    #[test]
+    fn redo_moved_to_ctrl_shift_r() {
+        let redo_key = key_mod(
+            KeyCode::Char('r'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(map_graph(redo_key), Some(Action::Redo));
+        // Verify Ctrl-R alone is NOT Redo anymore
+        assert_ne!(
+            map_graph(key_mod(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+            Some(Action::Redo)
+        );
+    }
+
+    #[test]
+    fn picking_mode_browsing_key_routing() {
+        let browsing = PickingMode::Browsing;
+        assert_eq!(
+            map_picking_event(key(KeyCode::Char('j')), &browsing),
+            Some(Action::MoveDown)
+        );
+        assert_eq!(
+            map_picking_event(key(KeyCode::Char('k')), &browsing),
+            Some(Action::MoveUp)
+        );
+        assert_eq!(
+            map_picking_event(key(KeyCode::Enter), &browsing),
+            Some(Action::PickConfirm)
+        );
+        assert_eq!(
+            map_picking_event(key(KeyCode::Esc), &browsing),
+            Some(Action::PickCancel)
+        );
+        // Any char starts filtering
+        assert_eq!(
+            map_picking_event(key(KeyCode::Char('a')), &browsing),
+            Some(Action::PickFilterChar('a'))
+        );
+    }
+
+    #[test]
+    fn picking_mode_filtering_key_routing() {
+        let filtering = PickingMode::Filtering {
+            query: "abc".into(),
+        };
+        // Ctrl-J/K for navigation in filter mode
+        assert_eq!(
+            map_picking_event(
+                key_mod(KeyCode::Char('j'), KeyModifiers::CONTROL),
+                &filtering
+            ),
+            Some(Action::MoveDown)
+        );
+        assert_eq!(
+            map_picking_event(key(KeyCode::Down), &filtering),
+            Some(Action::MoveDown)
+        );
+        assert_eq!(
+            map_picking_event(key(KeyCode::Backspace), &filtering),
+            Some(Action::PickFilterBackspace)
+        );
+        // Regular chars extend filter
+        assert_eq!(
+            map_picking_event(key(KeyCode::Char('x')), &filtering),
+            Some(Action::PickFilterChar('x'))
+        );
+    }
+
+    #[test]
+    fn picking_mode_blocks_global_keys() {
+        let browsing = PickingMode::Browsing;
+        // '/' in browsing mode becomes PickFilterChar('/'), not OpenOmnibar
+        assert_eq!(
+            map_picking_event(key(KeyCode::Char('/')), &browsing),
+            Some(Action::PickFilterChar('/'))
+        );
+        // '?' becomes PickFilterChar('?')
+        assert_eq!(
+            map_picking_event(key(KeyCode::Char('?')), &browsing),
+            Some(Action::PickFilterChar('?'))
         );
     }
 }
