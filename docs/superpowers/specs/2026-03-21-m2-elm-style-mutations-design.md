@@ -307,7 +307,7 @@ Cursor positioning after mutations relies on `GraphLoaded` + `working_copy_index
 6. Call `state.reset_detail()`.
 
 This is correct for all 10 mutations:
-- **new:** Old change still exists, cursor stays on it. User sees the new change appear in the graph and can navigate to it. (Or: cursor moves to working copy if we prefer — configurable per the fallback chain.)
+- **new:** Special case — after `jj new`, the new change becomes the working copy. Dispatch sets `cursor_follows_working_copy = true` before emitting the effect. When `GraphLoaded` arrives, if this flag is set, skip step 3 (find old change ID) and go directly to step 4 (working copy). This moves the cursor to the new change, matching the expected UX. The flag is cleared after use.
 - **edit:** Old change still exists, cursor stays on it. The `@` marker moves to reflect the new working copy.
 - **abandon:** Old change ID gone, falls back to working copy (which jj moves to the parent).
 - **squash:** Old change ID gone (squashed into parent), falls back to working copy.
