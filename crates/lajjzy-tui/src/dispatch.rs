@@ -31,8 +31,7 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
     }
 }
 
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::too_many_lines)]
 pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
     // Clear stale omnibar fallback on any action except RevsetLoaded.
     // Prevents a slow EvalRevset error from jumping the cursor after the
@@ -581,7 +580,12 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                         state.graph_generation = generation;
                         state.status_message = Some(format!("No changes match: {query}"));
                     } else {
+                        let count = new_graph.node_indices().len();
                         state.active_revset = Some(query);
+                        state.status_message = Some(format!(
+                            "{count} change{} matched",
+                            if count == 1 { "" } else { "s" }
+                        ));
                         let nested = dispatch(
                             state,
                             Action::GraphLoaded {

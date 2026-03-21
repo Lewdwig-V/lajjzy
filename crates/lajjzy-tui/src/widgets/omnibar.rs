@@ -108,7 +108,7 @@ impl Widget for OmnibarWidget<'_> {
                 Span::raw(desc),
             ];
             let line = Line::from(spans);
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation)]
             let y = results_y + row as u16;
             buf.set_line(inner.x, y, &line, inner.width);
 

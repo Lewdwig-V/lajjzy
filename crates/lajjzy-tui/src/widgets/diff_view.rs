@@ -66,7 +66,7 @@ impl Widget for DiffViewWidget<'_> {
                     .add_modifier(Modifier::BOLD),
             };
 
-            #[allow(clippy::cast_possible_truncation)] // row bounded by area.height (u16)
+            #[expect(clippy::cast_possible_truncation)] // row bounded by area.height (u16)
             let y = area.y + row as u16;
             let line = Line::styled(&text, style);
             buf.set_line(area.x, y, &line, area.width);

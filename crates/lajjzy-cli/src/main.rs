@@ -35,7 +35,7 @@ impl EffectExecutor {
     /// `let _ = tx.send(...)` is intentional: if the receiver is dropped (event loop
     /// exited or panicked), the send fails harmlessly. The spawned thread has no other
     /// work to do and will exit. This is the expected shutdown race, not a silent failure.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn execute(&self, effect: Effect) {
         let backend = Arc::clone(&self.backend);
         let tx = self.tx.clone();

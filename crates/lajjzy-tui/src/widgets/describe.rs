@@ -34,13 +34,13 @@ impl Widget for DescribeWidget<'_> {
         for (row, line_idx) in (0..height).zip(0..lines.len()) {
             let text = &lines[line_idx];
             let line = Line::raw(text);
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation)]
             let y = inner.y + row as u16;
             buf.set_line(inner.x, y, &line, inner.width);
 
             // Highlight the cursor position
             if line_idx == cursor_row {
-                #[allow(clippy::cast_possible_truncation)]
+                #[expect(clippy::cast_possible_truncation)]
                 let cx = inner.x + (cursor_col as u16).min(inner.width.saturating_sub(1));
                 if (cx as usize) < inner.x as usize + width {
                     buf[(cx, y)].set_style(

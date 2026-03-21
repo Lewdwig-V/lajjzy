@@ -238,7 +238,7 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
 /// collected. If the diff has no `@@` hunks (chmod-only, binary, pure rename),
 /// a single hunk with these header lines is returned so the user sees something
 /// rather than "(empty diff)".
-#[allow(clippy::unnecessary_wraps)] // Result kept for forward-compatibility with error paths
+#[expect(clippy::unnecessary_wraps)] // Result kept for forward-compatibility with error paths
 fn parse_diff_output(output: &str) -> Result<Vec<crate::types::DiffHunk>> {
     let mut hunks = Vec::new();
     let mut current_hunk: Option<crate::types::DiffHunk> = None;

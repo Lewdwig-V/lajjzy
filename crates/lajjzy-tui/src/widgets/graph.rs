@@ -155,7 +155,7 @@ impl Widget for GraphWidget<'_> {
                 ))
             };
 
-            #[allow(clippy::cast_possible_truncation)] // row bounded by area.height (u16)
+            #[expect(clippy::cast_possible_truncation)] // row bounded by area.height (u16)
             let y = area.y + row as u16;
             buf.set_line(area.x, y, &display, area.width);
 
