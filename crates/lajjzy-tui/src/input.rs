@@ -70,7 +70,8 @@ pub fn map_modal_event(event: KeyEvent, modal: &Modal) -> Option<Action> {
     // Describe modal has its own key handling (intercepts Esc differently)
     if let Modal::Describe { .. } = modal {
         return match (event.code, event.modifiers) {
-            (KeyCode::Char('s') | KeyCode::Enter, KeyModifiers::CONTROL) => {
+            (KeyCode::Char('s'), KeyModifiers::CONTROL)
+            | (KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 Some(Action::DescribeSave)
             }
             (KeyCode::Esc, _) => Some(Action::ModalDismiss),

@@ -20,7 +20,7 @@ impl Widget for DescribeWidget<'_> {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow))
-            .title(" Describe (Ctrl-S save | Esc cancel | Shift-E editor) ");
+            .title(" Describe (Alt-Enter/Ctrl-S save | Esc cancel | Shift-E editor) ");
         let inner = block.inner(area);
         block.render(area, buf);
 
