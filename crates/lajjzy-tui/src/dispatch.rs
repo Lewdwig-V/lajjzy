@@ -419,6 +419,33 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.error = Some(error);
         }
+        Action::GitPush => {
+            if state.pending_background.contains(&BackgroundKind::Push) {
+                return vec![];
+            }
+            let bookmark = state
+                .selected_detail()
+                .and_then(|d| d.bookmarks.first())
+                .cloned();
+            match bookmark {
+                Some(b) => {
+                    state.pending_background.insert(BackgroundKind::Push);
+                    return vec![Effect::GitPush { bookmark: b }];
+                }
+                None => {
+                    if state.selected_detail().is_some() {
+                        state.error = Some("No bookmark on selected change".into());
+                    }
+                }
+            }
+        }
+        Action::GitFetch => {
+            if state.pending_background.contains(&BackgroundKind::Fetch) {
+                return vec![];
+            }
+            state.pending_background.insert(BackgroundKind::Fetch);
+            return vec![Effect::GitFetch];
+        }
         // M2 actions — handled in later tasks; no-op for now.
         Action::EditorComplete { .. }
         | Action::OpenDescribe
@@ -427,8 +454,6 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         | Action::BookmarkInputBackspace
         | Action::BookmarkInputConfirm
         | Action::BookmarkDelete
-        | Action::GitPush
-        | Action::GitFetch
         | Action::DescribeSave
         | Action::DescribeEscalateEditor => {}
     }
@@ -1428,5 +1453,114 @@ mod tests {
         assert_eq!(state.selected_change_id(), Some("def"));
         // Gate untouched
         assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
+    }
+
+    // --- Background mutation (push/fetch) tests ---
+
+    fn sample_graph_bookmarked() -> GraphData {
+        GraphData::new(
+            vec![GraphLine {
+                raw: "◉  abc".into(),
+                change_id: Some("abc".into()),
+                glyph_prefix: String::new(),
+            }],
+            HashMap::from([(
+                "abc".into(),
+                ChangeDetail {
+                    commit_id: "a1".into(),
+                    author: "alice".into(),
+                    email: "alice@example.com".into(),
+                    timestamp: "1m".into(),
+                    description: "feat: add thing".into(),
+                    bookmarks: vec!["main".into()],
+                    is_empty: false,
+                    has_conflict: false,
+                    files: vec![],
+                },
+            )]),
+            Some(0),
+        )
+    }
+
+    #[test]
+    fn push_uses_background_gate() {
+        let mut state = AppState::new(sample_graph_bookmarked());
+        let effects = dispatch(&mut state, Action::GitPush);
+        assert_eq!(
+            effects,
+            vec![Effect::GitPush {
+                bookmark: "main".into()
+            }]
+        );
+        assert!(state.pending_background.contains(&BackgroundKind::Push));
+        // pending_mutation lane untouched
+        assert!(state.pending_mutation.is_none());
+    }
+
+    #[test]
+    fn push_suppressed_while_pushing() {
+        let mut state = AppState::new(sample_graph_bookmarked());
+        state.pending_background.insert(BackgroundKind::Push);
+        let effects = dispatch(&mut state, Action::GitPush);
+        assert!(effects.is_empty());
+        // Gate still set, nothing changed
+        assert!(state.pending_background.contains(&BackgroundKind::Push));
+    }
+
+    #[test]
+    fn push_no_bookmark_sets_error() {
+        // sample_graph has no bookmarks on "abc"
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::GitPush);
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("No bookmark"));
+        assert!(!state.pending_background.contains(&BackgroundKind::Push));
+    }
+
+    #[test]
+    fn fetch_uses_background_gate() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::GitFetch);
+        assert_eq!(effects, vec![Effect::GitFetch]);
+        assert!(state.pending_background.contains(&BackgroundKind::Fetch));
+        assert!(state.pending_mutation.is_none());
+    }
+
+    #[test]
+    fn fetch_suppressed_while_fetching() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_background.insert(BackgroundKind::Fetch);
+        let effects = dispatch(&mut state, Action::GitFetch);
+        assert!(effects.is_empty());
+        assert!(state.pending_background.contains(&BackgroundKind::Fetch));
+    }
+
+    #[test]
+    fn fetch_concurrent_with_local_mutation() {
+        // A local mutation is in flight; fetch must still proceed on its independent lane.
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Abandon);
+        let effects = dispatch(&mut state, Action::GitFetch);
+        assert_eq!(effects, vec![Effect::GitFetch]);
+        assert!(state.pending_background.contains(&BackgroundKind::Fetch));
+        // Local mutation gate untouched
+        assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
+    }
+
+    #[test]
+    fn push_concurrent_with_fetch() {
+        // Fetch is already in flight; push must still proceed independently.
+        let mut state = AppState::new(sample_graph_bookmarked());
+        state.pending_background.insert(BackgroundKind::Fetch);
+        let effects = dispatch(&mut state, Action::GitPush);
+        assert_eq!(
+            effects,
+            vec![Effect::GitPush {
+                bookmark: "main".into()
+            }]
+        );
+        assert!(state.pending_background.contains(&BackgroundKind::Push));
+        // Fetch gate untouched
+        assert!(state.pending_background.contains(&BackgroundKind::Fetch));
     }
 }

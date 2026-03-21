@@ -22,7 +22,14 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let change_id = state.selected_change_id();
     let detail = state.selected_detail();
     let error = state.error.as_deref();
-    let status_widget = StatusBarWidget::new(change_id, detail, error);
+    let status_message = state.status_message.as_deref();
+    let status_widget = StatusBarWidget::new(
+        change_id,
+        detail,
+        error,
+        status_message,
+        &state.pending_background,
+    );
     frame.render_widget(status_widget, outer[1]);
 
     // Modal overlay
