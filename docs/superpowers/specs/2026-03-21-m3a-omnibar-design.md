@@ -118,6 +118,8 @@ enum Effect {
 
 Separate from `LoadGraph` because the dispatch handler is different: `RevsetLoaded` sets `active_revset` on success and falls back to fuzzy jump on failure. `GraphLoaded` does neither.
 
+**Generation counter:** `Effect::EvalRevset` must be added to the executor's `next_graph_generation` match arm alongside `LoadGraph` and all mutation effects. Without this, the generation would be 0 and the result would always be rejected as stale by `GraphLoaded`'s generation check.
+
 ## Dispatch Logic
 
 ### `OpenOmnibar`
@@ -134,11 +136,24 @@ Action::OpenOmnibar => {
 }
 ```
 
+### `Refresh` respects active revset
+
+```rust
+Action::Refresh => {
+    state.error = None;
+    return vec![Effect::LoadGraph { revset: state.active_revset.clone() }];
+}
+```
+
+If a revset filter is active, Refresh reloads with the same filter rather than silently reverting to the default view.
+
 ### `OmnibarInput` / `OmnibarBackspace`
 
 Identical to current `FuzzyInput` / `FuzzyBackspace` — update `query`, recompute `matches`, reset cursor.
 
 ### `ModalEnter` for Omnibar
+
+The modal closes immediately on Enter. The omnibar disappears and the user sees the graph (possibly with a brief "evaluating..." status). This matches the existing modal Enter pattern (bookmark picker, fuzzy-find all close on Enter).
 
 ```rust
 Some(Modal::Omnibar { query, matches, cursor }) => {
@@ -161,12 +176,22 @@ Some(Modal::Omnibar { query, matches, cursor }) => {
 
 ```rust
 Action::RevsetLoaded { query, generation, result } => {
+    // Always clear the fallback index — consumed or stale
+    state.omnibar_fallback_idx = None;
+
     match result {
         Ok(new_graph) => {
-            state.active_revset = Some(query);
-            // Install graph via recursive dispatch (reuses cursor positioning logic)
-            let nested = dispatch(state, Action::GraphLoaded { generation, result: Ok(new_graph) });
-            debug_assert!(nested.is_empty());
+            if new_graph.node_indices().is_empty() {
+                // Valid revset but matches nothing — show feedback, don't replace graph
+                state.status_message = Some(format!("No changes match: {query}"));
+            } else {
+                state.active_revset = Some(query);
+                // Install graph via recursive dispatch (reuses cursor positioning logic)
+                let nested = dispatch(state, Action::GraphLoaded {
+                    generation, result: Ok(new_graph),
+                });
+                debug_assert!(nested.is_empty());
+            }
         }
         Err(_) => {
             // Not a valid revset — fall back to fuzzy jump
@@ -178,6 +203,8 @@ Action::RevsetLoaded { query, generation, result } => {
     }
 }
 ```
+
+Note: `omnibar_fallback_idx` is cleared at the top of `RevsetLoaded` (both success and failure paths). No separate clearing logic needed elsewhere — the index is only meaningful between omnibar Enter and the `RevsetLoaded` response.
 
 ## Backend Changes
 
@@ -297,6 +324,6 @@ When `active_revset` is `Some`, the status bar shows it. Priority: error > statu
 | `crates/lajjzy-tui/src/widgets/fuzzy_find.rs` | Rename to `omnibar.rs`. Update title logic. |
 | `crates/lajjzy-tui/src/widgets/mod.rs` | Rename module. |
 | `crates/lajjzy-tui/src/widgets/status_bar.rs` | Show `active_revset` breadcrumb. |
-| `crates/lajjzy-core/src/backend.rs` | `load_graph` gains `revset: Option<&str>` |
-| `crates/lajjzy-core/src/cli.rs` | Pass `-r <revset>` to `jj log` when `Some`. |
-| `crates/lajjzy-cli/src/main.rs` | Add `active_revset: Mutex<Option<String>>` to executor. Handle `EvalRevset` effect. Update `run_mutation` to read active revset. |
+| `crates/lajjzy-core/src/backend.rs` | `load_graph` gains `revset: Option<&str>` parameter |
+| `crates/lajjzy-core/src/cli.rs` | `load_graph` implementation: pass `-r <revset>` to `jj log` when `Some`. All test call sites updated. |
+| `crates/lajjzy-cli/src/main.rs` | **All `load_graph()` call sites updated:** (1) `Effect::LoadGraph` handler — read `revset` from effect, pass to `backend.load_graph(revset.as_deref())`. (2) `run_mutation` — read active revset from `Mutex`, pass to `backend.load_graph(revset.as_deref())`. (3) Initial load in `main()` — call `backend.load_graph(None)`. (4) Add `EvalRevset` to `next_graph_generation` match arm. (5) Add `active_revset: Mutex<Option<String>>` to executor. (6) New `Effect::EvalRevset` handler that calls `backend.load_graph(Some(&query))` and sends `RevsetLoaded`. |
