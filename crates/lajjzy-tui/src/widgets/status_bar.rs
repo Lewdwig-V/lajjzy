@@ -570,6 +570,7 @@ mod tests {
             }],
             cursor: 0,
             scroll: 0,
+            viewport_height: 20,
         }
     }
 
@@ -596,6 +597,7 @@ mod tests {
             }],
             cursor: 0,
             scroll: 0,
+            viewport_height: 20,
         }
     }
 

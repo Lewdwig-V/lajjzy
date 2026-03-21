@@ -199,6 +199,7 @@ mod tests {
             files,
             cursor: 0,
             scroll: 0,
+            viewport_height: 20,
         }
     }
 

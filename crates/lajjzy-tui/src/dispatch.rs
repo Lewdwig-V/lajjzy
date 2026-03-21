@@ -176,6 +176,42 @@ fn picker_prev_file_index(picker: &HunkPicker) -> Option<usize> {
     last_file_offset
 }
 
+/// Compute the render row for a given flat cursor index.
+/// Each file header = 1 row, each hunk = 1 header row + N diff line rows.
+fn picker_cursor_render_row(picker: &HunkPicker) -> usize {
+    let mut render_row = 0;
+    let mut flat_idx = 0;
+    for file in &picker.files {
+        if flat_idx == picker.cursor {
+            return render_row;
+        }
+        render_row += 1; // file header
+        flat_idx += 1;
+        for hunk in &file.hunks {
+            if flat_idx == picker.cursor {
+                return render_row;
+            }
+            render_row += 1; // hunk header
+            render_row += hunk.lines.len(); // diff lines
+            flat_idx += 1;
+        }
+    }
+    render_row
+}
+
+/// Adjust `picker.scroll` to keep the cursor visible within `viewport_height` rows.
+fn picker_ensure_cursor_visible(picker: &mut HunkPicker, viewport_height: usize) {
+    if viewport_height == 0 {
+        return;
+    }
+    let cursor_row = picker_cursor_render_row(picker);
+    if cursor_row < picker.scroll {
+        picker.scroll = cursor_row;
+    } else if cursor_row >= picker.scroll + viewport_height {
+        picker.scroll = cursor_row - viewport_height + 1;
+    }
+}
+
 /// Convert `Vec<FileDiff>` into `HunkPicker` state with all hunks unselected.
 fn build_hunk_picker(
     operation: HunkPickerOp,
@@ -201,6 +237,7 @@ fn build_hunk_picker(
         files,
         cursor: 0,
         scroll: 0,
+        viewport_height: 0, // set by event loop before dispatch
     }
 }
 
@@ -334,6 +371,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                     if picker.cursor < max {
                         picker.cursor += 1;
                     }
+                    picker_ensure_cursor_visible(picker, picker.viewport_height);
                 }
             } else if let Some(detail) = state.selected_detail() {
                 let max = detail.files.len().saturating_sub(1);
@@ -346,6 +384,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             if state.detail_mode == DetailMode::HunkPicker {
                 if let Some(ref mut picker) = state.hunk_picker {
                     picker.cursor = picker.cursor.saturating_sub(1);
+                    picker_ensure_cursor_visible(picker, picker.viewport_height);
                 }
             } else {
                 state.detail_cursor = state.detail_cursor.saturating_sub(1);
@@ -746,6 +785,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 && let Some(idx) = picker_next_file_index(picker)
             {
                 picker.cursor = idx;
+                picker_ensure_cursor_visible(picker, picker.viewport_height);
             }
         }
         // --- HunkPrevFile ---
@@ -754,6 +794,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 && let Some(idx) = picker_prev_file_index(picker)
             {
                 picker.cursor = idx;
+                picker_ensure_cursor_visible(picker, picker.viewport_height);
             }
         }
         // --- HunkConfirm ---

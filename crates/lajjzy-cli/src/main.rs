@@ -436,6 +436,14 @@ fn run_loop(
     loop {
         terminal.draw(|frame| render(frame, state))?;
 
+        // Update hunk picker viewport height from terminal size so dispatch
+        // can adjust scroll. The detail pane is ~2/3 width, full height minus
+        // status bar (2) and borders (2). Approximate with terminal height - 4.
+        if let Some(ref mut hp) = state.hunk_picker {
+            let term_height = terminal.size().map_or(20, |s| s.height as usize);
+            hp.viewport_height = term_height.saturating_sub(4);
+        }
+
         if crossterm::event::poll(Duration::from_millis(50))?
             && let Event::Key(key_event) = event::read()?
         {

@@ -30,6 +30,9 @@ pub struct HunkPicker {
     pub files: Vec<PickerFile>,
     pub cursor: usize,
     pub scroll: usize,
+    /// Viewport height for scroll computation. Set by the event loop
+    /// before dispatching, so dispatch can adjust scroll after cursor movement.
+    pub viewport_height: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
