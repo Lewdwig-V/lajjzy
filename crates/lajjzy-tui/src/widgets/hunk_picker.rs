@@ -13,16 +13,18 @@ use crate::app::{HunkPicker, PickerFile, PickerHunk};
 enum PickerItem<'a> {
     FileHeader {
         file: &'a PickerFile,
+        /// Dispatch-model flat index (file headers count too)
+        flat_idx: usize,
     },
     Hunk {
         hunk: &'a PickerHunk,
-        /// Global flat-list index (used for cursor comparison)
+        /// Dispatch-model flat index
         flat_idx: usize,
     },
     DiffLine {
         kind: DiffLineKind,
         content: &'a str,
-        /// Global flat-list index of the *hunk* that owns this line (for bg tinting)
+        /// Flat index of the *hunk* that owns this line (for bg tinting)
         hunk_flat_idx: usize,
         hunk_selected: bool,
     },
@@ -43,7 +45,8 @@ impl<'a> HunkPickerWidget<'a> {
         let mut flat_idx: usize = 0;
 
         for file in &self.picker.files {
-            items.push(PickerItem::FileHeader { file });
+            items.push(PickerItem::FileHeader { file, flat_idx });
+            flat_idx += 1; // file headers count in the dispatch flat index
 
             for hunk in &file.hunks {
                 let hunk_flat_idx = flat_idx;
@@ -86,13 +89,17 @@ impl Widget for HunkPickerWidget<'_> {
             let y = area.y + row as u16;
 
             match item {
-                PickerItem::FileHeader { file } => {
+                PickerItem::FileHeader { file, flat_idx } => {
                     let total = file.hunks.len();
                     let selected_count = file.hunks.iter().filter(|h| h.selected).count();
                     let text = format!("▸ {}  [{}/{}]", file.path, selected_count, total);
-                    let style = Style::default()
+                    let is_cursor = *flat_idx == self.picker.cursor;
+                    let mut style = Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD);
+                    if is_cursor {
+                        style = style.add_modifier(Modifier::REVERSED);
+                    }
                     let line = Line::styled(text, style);
                     buf.set_line(area.x, y, &line, area.width);
                 }
@@ -311,7 +318,7 @@ mod tests {
             ],
         };
         let mut picker = make_picker(vec![file]);
-        picker.cursor = 1; // second hunk (flat index 1)
+        picker.cursor = 2; // second hunk (flat: 0=file header, 1=hunk0, 2=hunk1)
         let widget = HunkPickerWidget::new(&picker);
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);

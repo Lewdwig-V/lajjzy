@@ -66,7 +66,7 @@ impl Widget for StatusBarWidget<'_> {
             let text = match &hp.operation {
                 HunkPickerOp::Split { source } => {
                     format!(
-                        "Split: {selected}/{total} hunks selected → new change after {source}  (Space toggle, a/d all/none, Enter confirm, Esc cancel)"
+                        "Split: {selected}/{total} hunks selected → new change after {source}  (Space toggle, a/A all/none, Enter confirm, Esc cancel)"
                     )
                 }
                 HunkPickerOp::Squash {
@@ -74,7 +74,7 @@ impl Widget for StatusBarWidget<'_> {
                     destination,
                 } => {
                     format!(
-                        "Squash: {selected}/{total} hunks from {source} → into {destination}  (Space toggle, a/d all/none, Enter confirm, Esc cancel)"
+                        "Squash: {selected}/{total} hunks from {source} → into {destination}  (Space toggle, a/A all/none, Enter confirm, Esc cancel)"
                     )
                 }
             };

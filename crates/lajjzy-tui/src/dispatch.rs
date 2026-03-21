@@ -775,15 +775,24 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                         return vec![];
                     }
                 }
-                // Build selections
+                // Build selections — include ALL files so backend can compute complement
+                // (split needs unselected files to know what stays in original)
                 let selections: Vec<FileHunkSelection> = picker
                     .files
                     .iter()
-                    .filter(|f| f.hunks.iter().any(|h| h.selected))
-                    .map(|f| FileHunkSelection {
-                        path: f.path.clone(),
-                        selected_hunks: (0..f.hunks.len()).collect(),
-                        total_hunks: f.hunks.len(),
+                    .map(|f| {
+                        let selected: Vec<usize> = f
+                            .hunks
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, h)| h.selected)
+                            .map(|(i, _)| i)
+                            .collect();
+                        FileHunkSelection {
+                            path: f.path.clone(),
+                            selected_hunks: selected,
+                            total_hunks: f.hunks.len(),
+                        }
                     })
                     .collect();
                 let effect = match &picker.operation {
@@ -3598,15 +3607,22 @@ mod tests {
         dispatch(&mut state, Action::HunkToggle); // cursor 0 = main.rs header
         let effects = dispatch(&mut state, Action::HunkConfirm);
         assert_eq!(effects.len(), 1);
-        assert!(matches!(
-            &effects[0],
-            Effect::Split { change_id, selections }
-                if change_id == "abc"
-                && selections.len() == 1
-                && selections[0].path == "src/main.rs"
-                && selections[0].selected_hunks == vec![0, 1]
-                && selections[0].total_hunks == 2
-        ));
+        // ALL files included in selections (backend needs complement for split)
+        if let Effect::Split {
+            change_id,
+            selections,
+        } = &effects[0]
+        {
+            assert_eq!(change_id, "abc");
+            assert_eq!(selections.len(), 2); // both files sent
+            let main_rs = selections.iter().find(|s| s.path == "src/main.rs").unwrap();
+            assert_eq!(main_rs.selected_hunks, vec![0, 1]); // selected
+            assert_eq!(main_rs.total_hunks, 2);
+            let lib_rs = selections.iter().find(|s| s.path == "src/lib.rs").unwrap();
+            assert!(lib_rs.selected_hunks.is_empty()); // NOT selected
+        } else {
+            panic!("expected Effect::Split");
+        }
         assert_eq!(state.pending_mutation, Some(MutationKind::Split));
         assert_eq!(state.detail_mode, DetailMode::FileList);
         assert!(state.hunk_picker.is_none());
