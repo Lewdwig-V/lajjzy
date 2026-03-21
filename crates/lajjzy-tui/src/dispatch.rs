@@ -771,6 +771,7 @@ mod tests {
                         is_empty: false,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 ),
                 (
@@ -785,6 +786,7 @@ mod tests {
                         is_empty: false,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 ),
                 (
@@ -799,6 +801,7 @@ mod tests {
                         is_empty: false,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 ),
             ]),
@@ -844,6 +847,7 @@ mod tests {
                                 status: FileStatus::Added,
                             },
                         ],
+                        parents: vec![],
                     },
                 ),
                 (
@@ -858,6 +862,7 @@ mod tests {
                         is_empty: false,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 ),
             ]),
@@ -898,6 +903,7 @@ mod tests {
                         is_empty: false,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 ),
                 (
@@ -912,6 +918,7 @@ mod tests {
                         is_empty: false,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 ),
             ]),
@@ -944,6 +951,7 @@ mod tests {
                         is_empty: false,
                         has_conflict: false,
                         files: vec![],
+                        parents: vec![],
                     },
                 )
             })
@@ -1809,6 +1817,7 @@ mod tests {
                     is_empty: false,
                     has_conflict: false,
                     files: vec![],
+                    parents: vec![],
                 },
             )]),
             Some(0),
@@ -1940,6 +1949,7 @@ mod tests {
                     is_empty: true,
                     has_conflict: false,
                     files: vec![],
+                    parents: vec![],
                 },
             )]),
             Some(0),

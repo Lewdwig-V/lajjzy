@@ -107,6 +107,7 @@ mod tests {
                 is_empty: false,
                 has_conflict: false,
                 files: vec![],
+                parents: vec![],
             },
         );
         details.insert(
@@ -121,6 +122,7 @@ mod tests {
                 is_empty: false,
                 has_conflict: false,
                 files: vec![],
+                parents: vec![],
             },
         );
 
