@@ -83,6 +83,8 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
             let widget = crate::widgets::help::HelpWidget::new(*context, *scroll);
             frame.render_widget(widget, modal_area);
         }
+        // M2 modals — rendered in later tasks; no-op for now.
+        Modal::Describe { .. } | Modal::BookmarkInput { .. } => {}
     }
 }
 

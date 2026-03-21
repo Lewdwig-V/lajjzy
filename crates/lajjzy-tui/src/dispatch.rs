@@ -8,6 +8,7 @@ use crate::app::AppState;
 use crate::modal::{HelpContext, Modal};
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::needless_pass_by_value)]
 pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend) {
     match action {
         Action::MoveDown => {
@@ -252,6 +253,7 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
                             *scroll += 1;
                         }
                     }
+                    Modal::Describe { .. } | Modal::BookmarkInput { .. } => {}
                 }
             }
         }
@@ -266,6 +268,7 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
                     Modal::Help { scroll, .. } => {
                         *scroll = scroll.saturating_sub(1);
                     }
+                    Modal::Describe { .. } | Modal::BookmarkInput { .. } => {}
                 }
             }
         }
@@ -321,6 +324,29 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
                 *cursor = 0;
             }
         }
+        // M2 actions — handled in later tasks; no-op for now.
+        Action::GraphLoaded(_)
+        | Action::OpLogLoaded(_)
+        | Action::FileDiffLoaded(_)
+        | Action::RepoOpSuccess { .. }
+        | Action::RepoOpFailed { .. }
+        | Action::EditorComplete { .. }
+        | Action::Abandon
+        | Action::Squash
+        | Action::NewChange
+        | Action::EditChange
+        | Action::OpenDescribe
+        | Action::Undo
+        | Action::Redo
+        | Action::OpenBookmarkSet
+        | Action::BookmarkInputChar(_)
+        | Action::BookmarkInputBackspace
+        | Action::BookmarkInputConfirm
+        | Action::BookmarkDelete
+        | Action::GitPush
+        | Action::GitFetch
+        | Action::DescribeSave
+        | Action::DescribeEscalateEditor => {}
     }
 
     // Release-mode invariant check: cursor must point to a node line

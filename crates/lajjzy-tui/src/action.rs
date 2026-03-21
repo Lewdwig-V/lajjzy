@@ -1,3 +1,5 @@
+use lajjzy_core::types::{DiffHunk, GraphData, OpLogEntry};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelFocus {
     Graph,
@@ -10,8 +12,30 @@ pub enum DetailMode {
     DiffView,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MutationKind {
+    Describe,
+    New,
+    Edit,
+    Abandon,
+    Squash,
+    Undo,
+    Redo,
+    BookmarkSet,
+    BookmarkDelete,
+    GitPush,
+    GitFetch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BackgroundKind {
+    Push,
+    Fetch,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action {
+    // Navigation
     MoveUp,
     MoveDown,
     Quit,
@@ -39,4 +63,30 @@ pub enum Action {
     ModalEnter,
     FuzzyInput(char),
     FuzzyBackspace,
+
+    // Effect result actions
+    GraphLoaded(Result<GraphData, String>),
+    OpLogLoaded(Result<Vec<OpLogEntry>, String>),
+    FileDiffLoaded(Result<Vec<DiffHunk>, String>),
+    RepoOpSuccess { op: MutationKind, message: String },
+    RepoOpFailed { op: MutationKind, error: String },
+    EditorComplete { change_id: String, text: String },
+
+    // Mutation trigger actions
+    Abandon,
+    Squash,
+    NewChange,
+    EditChange,
+    OpenDescribe,
+    Undo,
+    Redo,
+    OpenBookmarkSet,
+    BookmarkInputChar(char),
+    BookmarkInputBackspace,
+    BookmarkInputConfirm,
+    BookmarkDelete,
+    GitPush,
+    GitFetch,
+    DescribeSave,
+    DescribeEscalateEditor,
 }

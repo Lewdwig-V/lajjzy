@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 /// An entry in the jj operation log.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OpLogEntry {
     pub id: String,
     pub description: String,
@@ -9,7 +9,7 @@ pub struct OpLogEntry {
 }
 
 /// Complete graph data returned by `load_graph()`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GraphData {
     /// All lines of graph output.
     pub lines: Vec<GraphLine>,
@@ -22,7 +22,7 @@ pub struct GraphData {
 }
 
 /// One line of jj's graph output.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GraphLine {
     /// The display string (graph glyphs + text), delimiter stripped.
     pub raw: String,
@@ -36,7 +36,7 @@ pub struct GraphLine {
 }
 
 /// Detailed info for the status bar.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChangeDetail {
     pub commit_id: String,
     pub author: String,
@@ -50,7 +50,7 @@ pub struct ChangeDetail {
 }
 
 /// A file changed in a change (parsed from `jj log --summary`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileChange {
     pub path: String,
     pub status: FileStatus,
@@ -80,13 +80,13 @@ impl std::fmt::Display for FileStatus {
 }
 
 /// A hunk from a file diff (parsed from `jj diff --git`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiffHunk {
     pub header: String,
     pub lines: Vec<DiffLine>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiffLine {
     pub kind: DiffLineKind,
     pub content: String,

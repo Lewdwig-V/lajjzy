@@ -1,4 +1,5 @@
 use lajjzy_core::types::OpLogEntry;
+use tui_textarea::TextArea;
 
 #[derive(Debug, Clone)]
 pub enum Modal {
@@ -19,6 +20,16 @@ pub enum Modal {
     Help {
         context: HelpContext,
         scroll: usize,
+    },
+    Describe {
+        change_id: String,
+        editor: Box<TextArea<'static>>,
+    },
+    BookmarkInput {
+        change_id: String,
+        input: String,
+        completions: Vec<String>,
+        cursor: usize,
     },
 }
 

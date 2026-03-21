@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use lajjzy_core::types::{ChangeDetail, DiffHunk, GraphData};
 
-pub use crate::action::{Action, DetailMode, PanelFocus};
+pub use crate::action::{Action, BackgroundKind, DetailMode, MutationKind, PanelFocus};
 pub use crate::modal::{HelpContext, Modal};
 
 pub struct AppState {
@@ -14,6 +16,10 @@ pub struct AppState {
     pub diff_scroll: usize,
     pub diff_data: Vec<DiffHunk>,
     pub modal: Option<Modal>,
+    pub pending_mutation: Option<MutationKind>,
+    pub pending_background: HashSet<BackgroundKind>,
+    pub status_message: Option<String>,
+    pub cursor_follows_working_copy: bool,
 }
 
 impl AppState {
@@ -32,6 +38,10 @@ impl AppState {
             diff_scroll: 0,
             diff_data: vec![],
             modal: None,
+            pending_mutation: None,
+            pending_background: HashSet::new(),
+            status_message: None,
+            cursor_follows_working_copy: false,
         }
     }
 
