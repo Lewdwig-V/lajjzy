@@ -5,11 +5,17 @@ use crate::app::{Action, DetailMode, Modal, PanelFocus, PickingMode};
 pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) -> Option<Action> {
     // Global keys
     match (event.code, event.modifiers) {
-        (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+        (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL)
+            if detail_mode != DetailMode::HunkPicker =>
+        {
             return Some(Action::Quit);
         }
-        (KeyCode::Tab, _) => return Some(Action::TabFocus),
-        (KeyCode::BackTab, _) => return Some(Action::BackTabFocus),
+        (KeyCode::Tab, _) if detail_mode != DetailMode::HunkPicker => {
+            return Some(Action::TabFocus);
+        }
+        (KeyCode::BackTab, _) if detail_mode != DetailMode::HunkPicker => {
+            return Some(Action::BackTabFocus);
+        }
         (KeyCode::Char('R'), m) if !m.contains(KeyModifiers::CONTROL) => {
             return Some(Action::Refresh);
         }
@@ -70,8 +76,22 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
                 (KeyCode::Esc, _) => Some(Action::DetailBack),
                 _ => None,
             },
-            // HunkPicker keys routed separately in Task 5
-            DetailMode::HunkPicker => None,
+            DetailMode::HunkPicker => match (event.code, event.modifiers) {
+                (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+                    Some(Action::DetailMoveDown)
+                }
+                (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+                    Some(Action::DetailMoveUp)
+                }
+                (KeyCode::Char('J'), _) => Some(Action::HunkNextFile),
+                (KeyCode::Char('K'), _) => Some(Action::HunkPrevFile),
+                (KeyCode::Char(' '), _) => Some(Action::HunkToggle),
+                (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::HunkSelectAll),
+                (KeyCode::Char('A'), _) => Some(Action::HunkDeselectAll),
+                (KeyCode::Enter, _) => Some(Action::HunkConfirm),
+                (KeyCode::Esc, _) => Some(Action::HunkCancel),
+                _ => None,
+            },
         },
     }
 }
@@ -663,6 +683,102 @@ mod tests {
         assert_eq!(
             map_picking_event(key(KeyCode::Char('?')), &browsing),
             Some(Action::PickFilterChar('?'))
+        );
+    }
+
+    fn map_hunk_picker(event: KeyEvent) -> Option<Action> {
+        map_event(event, PanelFocus::Detail, DetailMode::HunkPicker)
+    }
+
+    #[test]
+    fn hunk_picker_key_routing() {
+        // Navigation
+        assert_eq!(
+            map_hunk_picker(key(KeyCode::Char('j'))),
+            Some(Action::DetailMoveDown)
+        );
+        assert_eq!(
+            map_hunk_picker(key(KeyCode::Down)),
+            Some(Action::DetailMoveDown)
+        );
+        assert_eq!(
+            map_hunk_picker(key(KeyCode::Char('k'))),
+            Some(Action::DetailMoveUp)
+        );
+        assert_eq!(
+            map_hunk_picker(key(KeyCode::Up)),
+            Some(Action::DetailMoveUp)
+        );
+        // File-jump
+        assert_eq!(
+            map_hunk_picker(key_mod(KeyCode::Char('J'), KeyModifiers::SHIFT)),
+            Some(Action::HunkNextFile)
+        );
+        assert_eq!(
+            map_hunk_picker(key_mod(KeyCode::Char('K'), KeyModifiers::SHIFT)),
+            Some(Action::HunkPrevFile)
+        );
+        // Selection
+        assert_eq!(
+            map_hunk_picker(key(KeyCode::Char(' '))),
+            Some(Action::HunkToggle)
+        );
+        assert_eq!(
+            map_hunk_picker(key(KeyCode::Char('a'))),
+            Some(Action::HunkSelectAll)
+        );
+        assert_eq!(
+            map_hunk_picker(key_mod(KeyCode::Char('A'), KeyModifiers::SHIFT)),
+            Some(Action::HunkDeselectAll)
+        );
+        // Confirm / cancel
+        assert_eq!(
+            map_hunk_picker(key(KeyCode::Enter)),
+            Some(Action::HunkConfirm)
+        );
+        assert_eq!(map_hunk_picker(key(KeyCode::Esc)), Some(Action::HunkCancel));
+    }
+
+    #[test]
+    fn tab_suppressed_during_hunk_picker() {
+        // Tab is suppressed (returns None) when HunkPicker is active
+        assert_eq!(map_hunk_picker(key(KeyCode::Tab)), None);
+        assert_eq!(map_hunk_picker(key(KeyCode::BackTab)), None);
+        // Tab works normally outside hunk picker
+        assert_eq!(map_file_list(key(KeyCode::Tab)), Some(Action::TabFocus));
+        assert_eq!(
+            map_file_list(key(KeyCode::BackTab)),
+            Some(Action::BackTabFocus)
+        );
+    }
+
+    #[test]
+    fn quit_suppressed_during_hunk_picker() {
+        // q is suppressed during hunk picker
+        assert_eq!(map_hunk_picker(key(KeyCode::Char('q'))), None);
+        // Ctrl-C is also suppressed
+        assert_eq!(
+            map_hunk_picker(key_mod(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            None
+        );
+        // q works normally in other detail modes
+        assert_eq!(map_file_list(key(KeyCode::Char('q'))), Some(Action::Quit));
+    }
+
+    #[test]
+    fn s_and_s_keys_map_correctly() {
+        // s → Split in graph context
+        assert_eq!(map_graph(key(KeyCode::Char('s'))), Some(Action::Split));
+        // S → SquashPartial in graph context
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('S'), KeyModifiers::SHIFT)),
+            Some(Action::SquashPartial)
+        );
+        // Neither maps in detail context
+        assert_eq!(map_file_list(key(KeyCode::Char('s'))), None);
+        assert_eq!(
+            map_file_list(key_mod(KeyCode::Char('S'), KeyModifiers::SHIFT)),
+            None
         );
     }
 }
