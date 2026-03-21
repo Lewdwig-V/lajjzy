@@ -31,6 +31,7 @@ cargo fmt --check              # format check
 - **Effect executor boundary:** Effects executed in `lajjzy-cli` only. `lajjzy-tui` defines the `Effect` enum but never executes effects.
 - **Mutation gate:** At most one local mutation in flight, enforced by `AppState.pending_mutation`. Background ops (push/fetch) gated independently.
 - **Interaction patterns:** Every mutation declares its slot (Instant, Mini-modal, Background). New patterns require design justification.
+- **Working-copy gate for filesystem ops:** Any operation that reads or writes repo files on disk (file editing, merge tools, anything that touches the working tree) requires the target change to be `@`. If it is not, dispatch must emit `Effect::Edit` first to switch the working copy, then proceed. This is visible to the user — the `@` marker moves before the tool launches.
 
 ## Key Patterns
 
