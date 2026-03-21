@@ -13,7 +13,7 @@ Rebase is jj's primary tool for reorganizing change history. Without it, the TUI
 ### In scope (M3b)
 
 - `jj rebase -r` (single revision) via `r` key
-- `jj rebase -s` (source + descendants) via `R` key
+- `jj rebase -s` (source + descendants) via `Ctrl-R` key
 - In-graph target picking mode with inline filtering
 - Excluded changes (source + descendants) dimmed and navigation-skipped
 - Status bar blast radius preview for `-s` mode
