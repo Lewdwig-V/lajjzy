@@ -136,13 +136,86 @@ A "stack" is a contiguous linear chain of changes. `lajjzy` treats stacks as a f
 
 ### 4.4 Conflict Resolution
 
-jj treats conflicts as first-class data rather than an error state. `lajjzy` leans into this:
+jj treats conflicts as first-class data rather than an error state. `lajjzy` leans into this with a dedicated conflict workflow that activates automatically.
 
-- Conflicts appear as annotated nodes in the graph with a `⚠` marker.
-- Selecting a conflicted change shows the conflict hunks inline in the detail pane.
-- A built-in 3-way merge view (two sides + base) allows resolution without leaving the TUI.
-- Alternatively, `e` opens the configured external merge tool.
-- Resolving and amending is a single operation — no separate "mark resolved" step.
+**Graph view — conflict markers:**
+
+Conflicted changes display a `⚠` marker in the graph. The marker includes a count: `⚠3` means 3 conflicted files. This is drawn from `ChangeInfo::conflicts`, loaded eagerly — no backend call to discover conflict state.
+
+```
+  ◉  ksqxwpml  martin@…  2m ago  ⚠3
+  │  rebase: move provisioner onto new base
+  ◉  ytoqrzxn  martin@…  15m ago  main@origin
+  │  refactor: extract provisioner trait
+```
+
+**Detail pane — conflict mode:**
+
+When the cursor lands on a conflicted change, the detail pane automatically switches to **conflict mode**. This replaces the normal file list with a conflict-focused layout:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ [1] Change Graph  │ [2] Conflicts (3 files)             │
+│                   │                                     │
+│  ◉ ksqxwpml ⚠3   │  ✗ src/provisioner.rs    (2-way)    │
+│  ◉ ytoqrzxn ...   │  ✗ src/retry.rs          (2-way)    │
+│  ◉ vlpmrokx ...   │  ✓ src/config.rs         resolved   │
+│                   │                                     │
+│                   │                                     │
+│───────────────────│─────────────────────────────────────│
+│ [3] Conflicts: 2 remaining │ Op log: 5 operations       │
+└─────────────────────────────────────────────────────────┘
+```
+
+The conflict file list shows:
+
+- `✗` for unresolved files, `✓` for resolved files.
+- Merge type (2-way, 3-way) from `ConflictInfo::num_sides`.
+- Resolved files sort to the bottom; unresolved files are ordered by path.
+
+**Conflict file navigation:**
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Move between conflicted files |
+| `Enter` | Open 3-way merge view for selected file |
+| `e` | Open file in `$EDITOR` (for manual conflict resolution) |
+| `m` | Open configured external merge tool |
+| `n` / `N` | Jump to next / previous unresolved file |
+| `R` | Refresh conflict state (re-check which files are resolved) |
+
+**3-way merge view:**
+
+When `Enter` is pressed on a conflicted file, the detail pane switches to a 3-way merge layout — three vertical columns:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ [1] Graph │ [2] Left (ours)  │ [3] Base   │ [4] Right   │
+│           │                  │            │  (theirs)    │
+│  ◉ ks ⚠3  │  fn provision(   │ fn setup(  │ fn provision(│
+│  ◉ yt     │    &self,        │   &self,   │   &self,     │
+│           │    host: &Host,  │   host: &H │   host: &Host│
+│           │+   retries: u32, │            │              │
+│           │  ) -> Result {   │ ) -> Res { │ ) -> Result {│
+│───────────│──────────────────│────────────│──────────────│
+│ [5] Conflicts: 2 remaining │ src/provisioner.rs (1/3)   │
+└──────────────────────────────────────────────────────────┘
+```
+
+This is the most complex widget in the TUI and is deliberately deferred to M4. The graph panel narrows to a slim column to make room. Key bindings within the merge view:
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Scroll all three panes in sync |
+| `n` / `N` | Jump to next / previous conflict hunk |
+| `1` / `2` | Accept left / right for current hunk |
+| `Escape` | Exit merge view → back to conflict file list |
+
+**Resolve-and-amend flow:**
+
+When all conflicts in a file are resolved (either via the merge view, `$EDITOR`, or external tool), the file's status flips to `✓`. When *all* files in the change are resolved, the change automatically loses its `⚠` marker — jj detects this on the next snapshot. `lajjzy` calls `load_graph()` after a resolution action to pick up the updated state.
+
+There is no separate "mark resolved" command. Resolution is detected from the file content, not from user declaration. This matches jj's semantics exactly.
 
 ### 4.5 Operation Log and Undo
 
@@ -150,6 +223,48 @@ jj treats conflicts as first-class data rather than an error state. `lajjzy` lea
 - **`u`** — undo the last operation (equivalent to `jj op undo`). Repeatable.
 - **`Ctrl-R`** — redo (restore an undone operation).
 - Each op log entry shows a human-readable summary of what changed.
+
+### 4.6 Revset Bar
+
+One of jj's defining features is its revset query language — a way to express sets of changes like `ancestors(main) & ~immutable()` or `mine() & description(wip)`. `lajjzy` exposes this as a combined search/filter bar.
+
+**Activation:** `/` opens the bar at the bottom of the screen (same position as the bookmark-name input — a one-line input modal).
+
+**Dual-mode input:** The bar accepts either a revset expression or a plain text search string. The backend determines which:
+
+1. The input is passed to `RepoBackend::load_graph(Some(input))`.
+2. The `JjBackend` attempts to parse it as a revset. If it parses and evaluates successfully, the graph refilters to show only matching changes.
+3. If it fails to parse as a revset, the TUI falls back to client-side fuzzy matching against change descriptions and IDs within the current graph. This means typos and partial strings still work — they just filter the current view rather than querying the repo.
+
+This dual-mode is invisible to the user: they type, the graph updates. Revset syntax is a power-user affordance that's always available but never required.
+
+**Interaction:**
+
+| Key | Action |
+|-----|--------|
+| `/` | Open revset bar |
+| `Enter` | Apply filter (revset or fuzzy match) |
+| `Escape` | Close bar, restore previous graph |
+| `Ctrl-U` | Clear input |
+| `Ctrl-R` | Show revset history (last 10 queries) |
+
+**Live preview (M3+ stretch):** As the user types, the graph updates incrementally. This requires debounced re-evaluation — not needed for M1, where Enter commits the query.
+
+**Graph state:**
+
+`AppState` tracks the current revset filter:
+
+```rust
+pub struct AppState {
+    // ...
+    
+    /// The active revset filter, if any. None means "default revset."
+    /// Displayed in the status bar so the user knows the view is filtered.
+    pub active_revset: Option<String>,
+}
+```
+
+When a revset is active, the status bar shows it: `revset: mine() & ~empty()`. `Escape` from the revset bar, or pressing `/` and submitting an empty string, clears the filter and restores the default view.
 
 ---
 
@@ -208,20 +323,36 @@ pub struct ChangeInfo {
     /// Files touched by this change — loaded eagerly with the graph.
     /// This avoids a backend round-trip on every cursor move.
     pub files: Vec<FileChange>,
+    /// Per-file conflict status. Non-empty only when has_conflict is true.
+    /// Loaded eagerly so the detail pane can show conflict state without
+    /// a backend round-trip.
+    pub conflicts: Vec<ConflictInfo>,
 }
 
 pub struct FileChange { /* path, status (M/A/D/R), size delta */ }
 pub struct DiffHunk  { /* header, lines, context */ }
+
+/// Per-file conflict metadata, loaded eagerly with the graph.
+pub struct ConflictInfo {
+    pub path: RepoPath,
+    pub num_sides: usize,     // typically 2 (two-way merge)
+    pub is_resolved: bool,    // true if conflict markers have been edited away
+}
 
 /// The facade trait. Every method returns Result<T, RepoError> (C2).
 pub trait RepoBackend: Send + Sync {
     /// Discover and open a jj workspace from a directory.
     fn open_workspace(&self, path: &Path) -> Result<(), RepoError>;
 
-    /// Load the change graph: all visible changes with parent relationships
-    /// and per-change file lists. This is the only call required for initial
-    /// render — cursor movement within the graph never triggers a backend call.
-    fn load_graph(&self) -> Result<Vec<ChangeInfo>, RepoError>;
+    /// Load the change graph filtered by a revset expression.
+    /// All visible changes with parent relationships, per-change file lists,
+    /// and per-file conflict status. This is the only call required for
+    /// initial render — cursor movement within the graph never triggers
+    /// a backend call.
+    ///
+    /// If `revset` is None, uses the default revset (configurable,
+    /// defaults to jj's built-in default: the user's working set).
+    fn load_graph(&self, revset: Option<&str>) -> Result<Vec<ChangeInfo>, RepoError>;
 
     /// Compute diff hunks for a file in a change. This is the one read-path
     /// call that remains lazy — hunk-level detail is only needed when the
@@ -269,13 +400,12 @@ lajjzy-cli
   ├── lajjzy-tui
   │     ├── lajjzy-core       (RepoBackend trait + domain types ONLY)
   │     ├── ratatui
-  │     ├── crossterm
-  │     └── tokio
+  │     └── crossterm
   └── lajjzy-core             (wires up JjBackend as the concrete impl)
-        └── jj-lib            (+ jj-lib's transitive deps)
+        └── jj-lib            (+ jj-lib's transitive deps, including tokio)
 ```
 
-The key constraint: `lajjzy-tui/Cargo.toml` lists `lajjzy-core` but **not** `jj-lib` (C1). The binary crate (`lajjzy-cli`) constructs the concrete `JjBackend` and passes `&dyn RepoBackend` to the TUI.
+The key constraint: `lajjzy-tui/Cargo.toml` lists `lajjzy-core` but **not** `jj-lib` or `tokio` (C1). Background work uses `std::thread` + `std::sync::mpsc` — no async runtime in the TUI. The binary crate (`lajjzy-cli`) constructs the concrete `JjBackend` and passes `&dyn RepoBackend` to the TUI.
 
 Key external crates:
 
@@ -284,14 +414,15 @@ Key external crates:
 | `jj-lib` | Repo operations, change model, merge, diff | `lajjzy-core` only |
 | `ratatui` | Terminal rendering framework | `lajjzy-tui` |
 | `crossterm` | Cross-platform terminal backend | `lajjzy-tui` |
-| `tokio` | Async runtime for background tasks | `lajjzy-tui`, `lajjzy-core` |
 | `tui-textarea` | Multi-line text editing (descriptions) | `lajjzy-tui` |
-| `nucleo` / `fuzzy-matcher` | Fuzzy-find for change/file/bookmark picker | `lajjzy-tui` |
+| `nucleo` / `fuzzy-matcher` | Fuzzy-find for revset bar and pickers | `lajjzy-tui` |
 | `similar` | Fallback inline diff if jj-lib's diff API is insufficient | `lajjzy-core` |
+
+Note: `tokio` is a transitive dependency via `jj-lib` — it exists in the build but `lajjzy-tui` does not depend on it directly. Background work in the TUI uses `std::thread` + `std::sync::mpsc`.
 
 ### 5.4 Event Loop
 
-The main loop follows the standard ratatui pattern, extended with an async task channel:
+The main loop follows the standard ratatui pattern, extended with a background task channel:
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -300,7 +431,7 @@ The main loop follows the standard ratatui pattern, extended with an async task 
 │   ┌──────────┐   ┌──────────┐   ┌────────────────┐      │
 │   │ Terminal  │   │  Tick    │   │  Background    │      │
 │   │  Input    │──▶│  Merge   │◀──│  Task Results  │      │
-│   │ (crossterm│   │          │   │  (tokio mpsc)  │      │
+│   │ (crossterm│   │          │   │  (std mpsc)    │      │
 │   └──────────┘   └────┬─────┘   └────────────────┘      │
 │                       │                                  │
 │                       ▼                                  │
@@ -332,15 +463,222 @@ The main loop follows the standard ratatui pattern, extended with an async task 
 - **Effect Executor** (M2+) processes effects: repo mutations via `RepoBackend`, spawning background tasks, or triggering a re-render.
 - **Render** is a pure function of `AppState` — standard immediate-mode ratatui.
 
-### 5.5 Repo Access Model
+### 5.5 Effect and Action Types (M2+)
+
+Dispatch is a pure function: `(AppState, Action) → (AppState, Vec<Effect>)`. The effect executor consumes effects and feeds results back as actions. This section defines the full vocabulary.
+
+#### Effects (dispatch → executor)
+
+```rust
+/// Effects returned by dispatch. The executor handles these;
+/// dispatch never sees the executor or the backend.
+pub enum Effect {
+    // --- Repo mutations (all run on std::thread) ---
+    Abandon(ChangeId),
+    Squash(ChangeId),
+    New { after: ChangeId },
+    Edit(ChangeId),
+    SetDescription(ChangeId, String),
+    BookmarkSet { change: ChangeId, name: String },
+    BookmarkDelete(String),
+    OpUndo,
+    OpRedo,
+
+    // --- Background (std::thread, longer-lived) ---
+    GitPush { bookmark: String },
+    GitFetch,
+
+    // --- TUI lifecycle ---
+    RefreshGraph,
+    SuspendForEditor { change: ChangeId, current_text: String },
+    Quit,
+}
+```
+
+#### Actions (executor → dispatch)
+
+```rust
+/// Actions fed back into dispatch from the executor.
+/// These are the *only* way external results enter the state machine.
+pub enum Action {
+    // --- Input ---
+    Key(KeyEvent),
+    Resize(u16, u16),
+
+    // --- Repo operation results ---
+    RepoOpSuccess(OpSuccess),
+    RepoOpFailed(OpFailure),
+
+    // --- Background completion ---
+    BackgroundComplete(BackgroundResult),
+
+    // --- Editor return ---
+    EditorReturned { change: ChangeId, new_text: String },
+    EditorCancelled,
+
+    // --- Internal ---
+    GraphLoaded(Vec<ChangeInfo>),
+    Tick,
+}
+```
+
+#### Result types
+
+```rust
+/// Structured success — enough context for the status bar message.
+pub struct OpSuccess {
+    pub op: OpKind,
+    pub description: String,  // e.g. "Abandoned ksqxwpml"
+}
+
+/// Structured failure — enough context for user-facing error (C6).
+pub struct OpFailure {
+    pub op: OpKind,
+    pub error: RepoError,
+}
+
+pub enum OpKind {
+    Abandon(ChangeId),
+    Squash(ChangeId),
+    New(ChangeId),
+    Edit(ChangeId),
+    Describe(ChangeId),
+    BookmarkSet(String),
+    BookmarkDelete(String),
+    Undo,
+    Redo,
+}
+
+pub enum BackgroundResult {
+    PushSuccess { bookmark: String, remote: String },
+    PushFailed(RepoError),
+    FetchSuccess { new_changes: usize },
+    FetchFailed(RepoError),
+}
+```
+
+#### Executor cycle
+
+Every repo-mutating effect follows the same cycle: executor calls the `RepoBackend` method on a spawned thread, then always calls `load_graph()` after success, and sends both result actions back on the channel. Dispatch processes them before the next render — the user sees the updated graph and status message in the same frame.
+
+```
+dispatch(state, Action::Key('d'))
+  → (state with pending_mutation set, vec![Effect::Abandon(id)])
+
+executor: std::thread::spawn → backend.abandon(&id)
+  → Ok:  tx.send(RepoOpSuccess { ... })
+         tx.send(GraphLoaded(backend.load_graph(revset)?))
+  → Err: tx.send(RepoOpFailed { ... })
+
+dispatch(state, Action::RepoOpSuccess(op))
+  → (state with status bar message, pending_mutation cleared, vec![])
+
+dispatch(state, Action::GraphLoaded(changes))
+  → (state with new graph, vec![])
+```
+
+Background effects (push, fetch) work identically but are expected to take longer. The UI remains fully interactive during their execution.
+
+### 5.6 Mutation UX Patterns
+
+Every M2 mutation falls into one of three interaction patterns. New mutations in M3+ must declare which pattern they use — introducing a new pattern is a design decision, not an implementation detail.
+
+| Pattern | Trigger | UI during | Status bar after | Examples |
+|---------|---------|-----------|------------------|----------|
+| **Instant** | Single keypress | Graph rebuilds immediately | "Abandoned ksqxwpml" | abandon, squash, new, edit, undo, redo, bookmark delete |
+| **Mini-modal** | Keypress → input → confirm | One-line input or text editor overlay | "Updated description for ksqxwpml" | describe (tui-textarea), bookmark set (name input) |
+| **Background** | Keypress → spinner → callback | Spinner in status bar, UI responsive | "Pushed main → origin" | push, fetch |
+
+**No confirmation dialogs.** jj's operation log makes every local mutation non-destructive — `undo` reverses any of them. This eliminates "are you sure?" prompts, which is a deliberate departure from lazygit's git-shaped caution.
+
+**Per-operation detail:**
+
+- **abandon** (`d`) — Instant. Change removed from graph. Cursor moves to parent. "Abandoned ksqxwpml."
+- **squash** (`Shift-S`) — Instant. Change disappears, parent absorbs content. Cursor moves to parent. "Squashed ksqxwpml into ytoqrzxn."
+- **new** (`n`) — Instant. New empty change created after selected. Cursor moves to new change. No description prompt — hit `e` to describe. "Created new change after ytoqrzxn."
+- **edit** (`Ctrl-E`) — Instant. Working-copy marker (`@`) moves. "Now editing ksqxwpml."
+- **undo** (`u`) / **redo** (`Ctrl-R`) — Instant. Graph rebuilds from op log. "Undid: abandon ksqxwpml."
+- **bookmark set** (`B`) — Mini-modal. One-line input at bottom of screen, pre-filled if bookmark exists, with fuzzy completion against existing names. Enter confirms, Escape cancels.
+- **bookmark delete** — Instant (from bookmark picker: `b` → select → `d`). "Deleted bookmark main."
+- **describe** (`e`) — Mini-modal. `tui-textarea` overlay replaces detail pane content (maintains spatial context). Pre-filled with current description. `Ctrl-S` saves, `Escape` discards, `Shift-E` escalates to `$EDITOR`.
+- **push** (`P`) — Background. "Pushing…" spinner. On success: "Pushed main → origin." On failure: error in status bar (C6). Note: `undo` after push undoes the local op log entry but cannot un-push from the remote — status bar notes "Undid push (remote unchanged)."
+- **fetch** (`f`) — Background. "Fetching…" spinner. On completion: "Fetched 3 new changes from origin." If fetch surfaces conflicts, they appear in the graph immediately.
+
+### 5.7 Mutation Gating
+
+All mutations run on `std::thread` — no inline execution, uniform code path. This means concurrent mutations are possible at the thread level. The state machine prevents this with gating fields in `AppState`.
+
+Three independent lanes, never blocking each other:
+
+| Lane | Gate field | Concurrent with |
+|------|-----------|-----------------|
+| Local mutations | `pending_mutation: Option<OpKind>` | Push, Fetch |
+| Push | `pending_background: HashSet{Push}` | Fetch, local mutations |
+| Fetch | `pending_background: HashSet{Fetch}` | Push, local mutations |
+
+**Dispatch logic:** When a mutation-triggering key is pressed and the corresponding gate is occupied, dispatch swallows the keypress and optionally flashes "Operation in progress…" in the status bar. Navigation, rendering, and ungated lanes remain responsive.
+
+```rust
+// Local mutation — gated by pending_mutation only
+Action::Key('d') if state.pending_mutation.is_some() => {
+    (state, vec![])  // swallow
+}
+
+// Fetch — gated independently, does not check pending_mutation
+Action::Key('f') if state.pending_background.contains(&Fetch) => {
+    (state, vec![])  // already fetching
+}
+```
+
+On completion, the corresponding gate clears:
+
+```rust
+Action::RepoOpSuccess(op) => {
+    new_state.pending_mutation = None;
+    // ...
+}
+Action::BackgroundComplete(FetchSuccess { .. }) => {
+    new_state.pending_background.remove(&Fetch);
+    // ...
+}
+```
+
+**Why push and fetch are independent of local mutations:** `jj-lib` serialises on its repo lock — concurrent calls won't corrupt anything. `GraphLoaded` always reflects the repo state at the time `load_graph()` runs, so the last one to arrive wins and is always the most complete picture. Blocking fetch during a local mutation would mean "sorry, can't check for remote changes because you're abandoning a change." That's hostile.
+
+### 5.8 $EDITOR Suspend/Resume
+
+The `$EDITOR` path is an `Effect::SuspendForEditor` → `Action::EditorReturned` cycle:
+
+```
+dispatch(state, Action::Key('E'))  // Shift-E from within describe modal
+  → (state with modal closed, vec![Effect::SuspendForEditor { change, current_text }])
+
+executor receives SuspendForEditor:
+  1. Writes current_text to a tempfile.
+  2. Suspends TUI (ratatui LeaveAlternateScreen).
+  3. Runs $EDITOR on tempfile via std::process::Command. Blocks.
+  4. Reads tempfile contents on editor exit.
+  5. Resumes TUI (EnterAlternateScreen).
+  6. Sends Action::EditorReturned { change, new_text }.
+
+dispatch(state, Action::EditorReturned { change, new_text })
+  → (state with describe modal re-opened, pre-filled with new_text, vec![])
+  // User reviews editor output, then Ctrl-S to save or Escape to discard.
+```
+
+**C1 exception:** `$EDITOR` launch is the one permitted subprocess in `lajjzy-tui`. It is for user-facing text editing only, never for repo operations. This is documented in CLAUDE.md.
+
+**Note:** The `RepoBackend` lock is *not* held during editing. The editor edits a tempfile; `Effect::SetDescription` fires only after the user confirms in the describe modal. No lock contention.
+
+### 5.9 Repo Access Model
 
 `jj-lib` requires careful handling: repo operations take a mutable lock, and some (like `rebase`) can be expensive.
 
 - **Read path:** The graph view is built from data returned by `RepoBackend::load_graph()`, which returns all visible changes *with their file lists* in a single batch. This means cursor navigation never triggers a backend call. Internally, `load_graph()` takes a read-only snapshot — cheap thanks to jj's copy-on-write store. The only lazy read is `file_diff()`, called when the user drills into a specific file's hunks.
-- **Write path:** Mutations go through `RepoBackend` methods, which internally acquire the repo lock, perform the operation, record an op, and return. The TUI then calls `load_graph()` again to rebuild its model from the new state.
-- **Background tasks:** Fetch/push run on a separate tokio task. On completion, they send a message to the event loop, which triggers a `load_graph()` refresh.
+- **Write path:** Mutations go through `RepoBackend` methods, which internally acquire the repo lock, perform the operation, record an op, and return. The executor always calls `load_graph()` after a successful mutation and sends `GraphLoaded` as a separate action — dispatch never does surgery on its graph model, it replaces the whole thing.
+- **Background tasks:** Fetch/push run on a spawned `std::thread` with results sent back via `mpsc`. On completion, the event loop triggers a `load_graph()` refresh.
 
-### 5.6 Forge Integration (Gerrit / GitHub / GitLab)
+### 5.10 Forge Integration (Gerrit / GitHub / GitLab)
 
 A `Forge` trait abstracts code-review backends. This is a separate trait from `RepoBackend` — forges are about review workflows, not repo operations.
 
@@ -381,7 +719,7 @@ Global:
 | `?` | Show contextual help overlay |
 | `u` | Undo last operation |
 | `Ctrl-R` | Redo |
-| `/` | Fuzzy-find changes |
+| `/` | Revset bar (revset expression or fuzzy-find) |
 | `b` | Bookmark picker |
 | `O` | Toggle operation log |
 | `R` | Refresh (re-read repo) |
@@ -462,6 +800,19 @@ pub struct AppState {
 
     /// Last error from a RepoBackend call, displayed in status bar (C2, C6).
     pub last_error: Option<RepoError>,
+
+    /// Active revset filter. None = default revset. Displayed in status bar
+    /// so the user knows the view is filtered.
+    pub active_revset: Option<String>,
+
+    /// Gates local repo mutations — at most one in flight.
+    /// Navigation and background ops are unaffected.
+    pub pending_mutation: Option<OpKind>,
+
+    /// Gates background operations independently. Push and fetch can
+    /// each be in flight simultaneously, but not two pushes or two fetches.
+    pub pending_background: HashSet<BackgroundKind>,
+}
 }
 ```
 
@@ -504,27 +855,17 @@ pub struct AppState {
 - CI pipeline with C1/C2/C5 checks.
 - No mutations.
 
-### M1a — Detail Pane and Panel Focus (weeks 3–4)
+### M1 — Read-Only Explorer (weeks 3–4)
 
 **Constraints active:** all M0 constraints.
 
-- Split layout: change graph (left) + detail pane (right).
-- Panel focus system: `Tab` / `Shift-Tab` cycles focus between graph and detail pane. Focused panel has a distinct border/highlight.
-- File list view: selecting a change in the graph shows its changed files in the detail pane. File data is loaded eagerly with the graph (no backend call on cursor move).
-- `RepoBackend` extended: `load_graph()` now returns per-change file lists. New types: `FileChange` (path, status M/A/D/R).
-- Hunk diff view: pressing `Enter` on a file in the detail pane shows its diff hunks. This is the one lazy backend call (`file_diff`).
-- `RepoBackend` extended: `file_diff(change_id, path) -> Vec<DiffHunk>`.
-- Detail pane keybindings: `j`/`k` navigate files, `Enter` drills into diff, `Esc` returns to file list.
-
-### M1b — Overlays and Pickers (weeks 5–6)
-
-**Constraints active:** all M0/M1a constraints.
-
-- Op log viewer: `O` toggles a full-screen overlay showing the operation history. Read-only for now (undo/redo is M2).
-- `RepoBackend` extended: `op_log() -> Vec<OpLogEntry>`.
-- Bookmark list: `b` opens a picker showing all bookmarks with their target changes.
-- Fuzzy-find: `/` opens a fuzzy-find overlay across changes (by description, change ID, author).
-- Help overlay: `?` shows contextual keybindings for the current panel/mode.
+- `RepoBackend` extended: `file_diff`, `op_log`.
+- Detail pane: hunk diff view when drilling into a specific file (lazy `file_diff` call — the one read-path call that remains on-demand).
+- Op log viewer (read-only).
+- Bookmark list.
+- Revset bar (`/`): accepts revset expressions or falls back to fuzzy matching on descriptions/IDs. Calls `load_graph(Some(input))` on Enter. Status bar shows active filter.
+- Conflict mode in detail pane: when cursor lands on a conflicted change, the detail pane automatically switches to show the conflict file list (from eager `ChangeInfo::conflicts`). No merge view yet — that's M4.
+- Status bar shows error context from failed backend calls (C6).
 
 ### M2 — Core Mutations (weeks 5–7)
 
@@ -533,32 +874,42 @@ pub struct AppState {
 **Constraints active:** all M0/M1 constraints + C3 (dispatch becomes pure), C4.
 
 - Dispatch refactored: `(AppState, Action) → (AppState, Vec<Effect>)` (C3).
-- Effect executor handles `RepoOp`, `SpawnTask`, `Quit`.
+- Effect executor: `std::thread::spawn` + `mpsc` for all mutations. Three gating lanes: `pending_mutation`, `pending_background{Push}`, `pending_background{Fetch}`.
 - `RepoBackend` extended with mutation methods (signatures validated by C4 audit).
-- Edit description, amend, new change, abandon.
-- Squash (full and partial via hunk selection).
-- Split (interactive).
-- Undo / redo via op log.
-- Inline status notifications for success and failure.
+- Instant mutations: `describe`, `new`, `edit`, `abandon`, `squash` (full change only), `undo`, `redo`, `bookmark set`, `bookmark delete`.
+- Background mutations: `git push`, `git fetch` (proves the async effect path under real network latency).
+- Describe UX: inline `tui-textarea` modal with `Shift-E` escalation to `$EDITOR`. C1 exception for editor subprocess documented in CLAUDE.md.
+- Inline status notifications for success and failure (C6).
+- No confirmation dialogs — undo is the safety net.
+
+**Not in M2 scope:** `split` (needs interactive hunk picker widget), `rebase` (needs target picker modal), partial squash (needs hunk selection). These require new UI primitives and belong in M3.
 
 ### M3 — Stack Workflows (weeks 8–10)
 
-- Stack detection and visual grouping.
-- Stack mode: reorder, bulk squash, bulk rebase.
+- Stack detection and visual grouping in graph view.
+- Stack mode (`S`): zoomed view of a single stack with reorder (`Shift-J`/`Shift-K`), bulk squash, bulk rebase.
+- Rebase with target picker modal (fuzzy-find change to rebase onto).
+- Split with interactive hunk picker (the hardest widget — select hunks to extract into a new change).
+- Partial squash (squash selected files/hunks, not the whole change).
 - Push stack to remote (git-native, no forge API yet).
 
 ### M4 — Conflict Handling (weeks 11–12)
 
-- Conflict markers in graph view.
-- Inline 3-way merge view.
-- External merge tool launch.
-- Resolve-and-amend flow.
+- Conflict file navigation in detail pane: `j`/`k` between files, `n`/`N` to jump between unresolved files, `R` to refresh resolution state.
+- 3-way merge view widget: three-column layout (left/base/right) with synchronised scrolling, hunk-level conflict navigation (`n`/`N`), and accept-left/accept-right (`1`/`2`) per hunk.
+- External merge tool launch (`m` from conflict file list).
+- `$EDITOR` escape hatch (`e` from conflict file list) for manual resolution.
+- Resolve-and-amend flow: resolution detected from file content (no "mark resolved" command), graph refreshes automatically via `load_graph()`.
+- Graph narrows to slim column when merge view is active, restores on `Escape`.
 
-### M5 — Forge Integration (weeks 13–16)
+### M5 — Forge Integration: Foundations (weeks 13–16)
 
-- `Forge` trait and Gerrit implementation.
-- GitHub PR integration (status display, push-for-review).
-- Review comments in detail pane (stretch).
+- `Forge` trait defined in `lajjzy-core` with implementations for Gerrit, GitHub, GitLab.
+- Forge detection from remote URL patterns, manual override via config.
+- Auth: delegate to `ssh-agent` (Gerrit), `gh auth` (GitHub), `glab auth` (GitLab). No credential management in lajjzy.
+- Review status annotations in graph view (per-change badges: pending, approved, changes-requested).
+- Push-for-review via `Forge::push_for_review()`: Gerrit implementation uses `jj gerrit upload` semantics (which handles Change-Id footer insertion automatically from the jj change ID); GitHub creates one PR per stack change.
+- Review comments in detail pane (read-only, stretch).
 
 ### M6 — Polish and Release (ongoing)
 
@@ -566,32 +917,47 @@ pub struct AppState {
 - Theming (base16 / terminal colours).
 - Mouse support (optional, not primary input).
 - Packaging: `cargo install`, AUR, Homebrew, Nix flake.
+- Effect cancellation: `TaskHandle` with `cancel()` method, `Effect::Cancel(TaskId)` for long-running background tasks.
+- Live revset preview (debounced graph update as user types in revset bar).
 
-### M7 - implement **complete** UI/UX for jj's branchless and safe history editing
+### M7 — Parallel Branches (git-butler model)
 
-* Automatic Commits & No Index: There is no git add or staging area. Every change in your working directory is automatically recorded as a "working copy" commit.
-* Stable Change IDs: Unlike Git hashes that change when you rebase or amend, jj uses permanent Change IDs. This allows the tool to automatically rebase all descendant changes whenever a parent is modified.
-* First-Class Conflicts: Conflicts do not stop your workflow. They are stored in the commit tree as metadata, allowing you to resolve them whenever it is convenient rather than immediately during a merge.
-* Operation Log & Undo: Every command can be undone. jj maintains a full history of operations (like a supercharged reflog), making experimentation and history rewriting fearless.
+**Prerequisite:** M3 (stack workflows) and tree-shaped stack support resolved as an open question.
 
-### M8 - implement UI/UX for GitButler-inspired Simultaneous Parallel Work using jj
+jj's DAG natively supports multiple concurrent lines of work branching off trunk. What it lacks — and what git-butler provides as a GUI — is a visual metaphor for managing them simultaneously. M7 adds this.
 
-* Virtual Branch Lanes: You can work on multiple independent features simultaneously in the same working directory. Changes can be moved into different "lanes" (branches) like a Kanban board.
-* Early Conflict Detection: Conflicts are surfaced as soon as you apply a teammate's branch locally, rather than waiting until the final merge into the main branch.
-* Branch Composition: You can apply and test multiple branches at once without leaving your current coding context or performing complex checkouts.
+- **Lane view:** A horizontal split showing parallel branches as vertical lanes (like kanban columns). Each lane is a bookmark or stack rooted on trunk. The user sees all their active work at once, not just one stack.
+- **Hunk-level move between lanes:** Select hunks in the working-copy change and assign them to different lanes. This is jj's `jj split` + `jj squash` composed into a drag-and-drop interaction. The hardest UX problem in this milestone — it needs a hunk picker that shows the target lane, not just "new change."
+- **Cross-lane conflict detection:** Background task that checks whether any pair of active lanes would conflict if merged into trunk. Surfaces early warnings in the lane view: "Lane A and Lane B both modify src/config.rs." This is a `load_graph()` call with a synthetic merge revset, run periodically on a background thread.
+- **Lane composition for testing:** Temporarily merge selected lanes into a synthetic working-copy change to test them together. This is `jj new lane_a lane_b` — a multi-parent change. Clearly marked as ephemeral; abandon it when done.
 
-### M9 - implement UI/UX for Gerrit-inspired Atomic, Commit-Level Reviews using jj
+**What this is NOT:** git-butler's "virtual branches" are an overlay on top of git. lajjzy's lanes are a *view* of jj's native DAG — no custom metadata, no shadow state. Every operation is a standard jj operation (new, squash, split, rebase), composed and visualised in a way that makes parallel work feel natural.
 
-* Commit-by-Commit Review: Every single commit is treated as a separate reviewable unit. This encourages small, self-contained changes rather than monolithic pull requests.
-* Automated Review Branches: When you push a commit, Gerrit automatically creates temporary, "invisible" branches to hold the change for review.
-* Change Tracking Across Force Pushes: Gerrit excels at showing the difference between different versions of the same commit (patchsets), even if you've rebased or amended it.
+### M8 — Gerrit Depth
 
-### M10 - Implement UI/UX for Graphite-inspired Automated Stacked Pull Requests using jj
+**Prerequisite:** M5 (forge foundations, Gerrit implementation).
 
-* Automatic Restacking: If you modify a commit in the middle of a "stack" of dependent branches, Graphite automatically rebases all "downstack" (child) branches for you.
-* One Command Submission: Use gt stack submit to push an entire sequence of dependent branches and create individual GitHub PRs for each, all at once.
-* Stack-Aware Review UI: It provides a custom web interface that understands the relationship between PRs, allowing reviewers to navigate through the logical sequence of a feature.
-* Merge Queues: A built-in merge queue batches multiple PRs together to test them in parallel, ensuring they land on the main branch without conflicts or breaking CI.
+M5 establishes connectivity to Gerrit. M8 adds the workflow depth that makes lajjzy a serious Gerrit client.
+
+- **Patchset comparison:** Gerrit tracks versions of the same change (patchsets). When viewing a change, show a patchset selector: "v1 → v2 → v3 (current)." Selecting two patchsets shows their interdiff — what changed between review rounds. This requires a Gerrit REST API call (`/changes/{id}/revisions`) and a diff view that understands "patchset A vs patchset B" rather than "change vs parent."
+- **Review actions:** Submit a review score from within lajjzy: Code-Review +1/+2, Verified +1, Submit. These are Gerrit REST API calls. Displayed as a mini-modal: select a label, select a score, optional comment, confirm.
+- **Inline comments:** View review comments positioned next to the relevant diff hunks. Write new comments from the diff view. Comment threads with reply support.
+- **Topic support:** Gerrit topics group related changes across repos. Show topic membership in the graph view; push-for-review assigns a topic.
+- **Change-Id mapping:** As of jj 0.30, jj writes a `change-id` header into every Git commit object by default (`git.write-change-id-header = true`). jj, GitButler, and Gerrit have agreed on a shared format: a 32-character reverse-hex ID stored as a Git commit header. `jj gerrit upload` already bridges the gap today by adding a Gerrit-style `Change-Id` footer derived from the jj change ID. Gerrit has an accepted design doc for native header support, pending upstream Git adoption of the header (Git currently strips unknown headers on rewrite operations like `git rebase`). For lajjzy, this means: use `jj gerrit upload` semantics (or the equivalent jj-lib API) rather than inventing a custom mapping. The graph view can show Gerrit review state by looking up the change via its jj change ID → Gerrit Change-Id mapping, which `jj gerrit upload` maintains automatically.
+
+### M9 — GitHub/GitLab Stacked PRs (Graphite model)
+
+**Prerequisite:** M5 (forge foundations, GitHub/GitLab implementation), M3 (stack workflows).
+
+M5 establishes basic PR creation. M9 adds the Graphite-style stack-aware workflow.
+
+- **Stack-aware PR creation:** `Push stack` creates one PR per change in the stack, with each PR targeting the previous PR's branch (not main). PR descriptions are auto-generated from change descriptions, with a stack overview table injected at the top: "This is change 2/4 in a stack. ← parent PR | child PR →."
+- **Automatic restacking:** When a change in the middle of a stack is amended, jj automatically rebases descendants. M9 detects this and force-pushes all affected PR branches, updating PR descriptions to reflect the new stack state.
+- **Stack submission:** A single "submit stack" action that merges PRs bottom-up: merge the base PR, wait for CI, merge the next, etc. This requires polling the forge API for merge status. Displayed as a multi-step progress view in the status bar.
+- **Stack-aware review navigation:** When viewing a stack, show per-change PR status (draft, review-requested, approved, merged). Navigate to the next change needing review with a single keypress.
+- **PR interdiff:** Like Gerrit's patchset comparison — show what changed between force-pushes of the same PR. The shared `change-id` header (now written by jj by default) means forges can track change identity across force-pushes natively as they adopt the header. Until then, lajjzy can compute interdiffs from jj's local evolution log (`jj evolog`), which tracks all previous versions of a change regardless of forge support.
+
+**Out of scope:** Merge queues are a forge-side feature (GitHub's merge queue, Graphite's merge queue service). lajjzy can *trigger* a merge queue entry by merging a PR, but the queue itself is not implemented in the TUI.
 
 ---
 
@@ -599,9 +965,32 @@ pub struct AppState {
 
 1. **jj-lib stability.** `jj-lib` doesn't promise a stable API yet. Strategy: pin to a specific jj release per `lajjzy` release; the `RepoBackend` trait absorbs API churn so only `jj_backend.rs` needs updating.
 2. **Working copy integration.** jj snapshots the working copy on every operation. How much of this should `lajjzy` surface vs. keep implicit? Lazygit shows the working tree diff prominently; jj's model is different — there's always a "working-copy change" that auto-snapshots.
-3. **Tree-shaped stacks.** git-butler supports "virtual branches" (parallel stacks). jj's model naturally supports this via the DAG. Should stack mode handle tree-shaped stacks from day one, or start linear-only?
-4. **Forge auth.** Gerrit uses SSH keys; GitHub/GitLab need tokens or OAuth. Defer to `gh`/`glab` CLI auth? Or manage credentials independently?
+3. **Tree-shaped stacks.** M3 starts with linear stacks. M7 (parallel branches) requires tree-shaped stack support. When does the graph widget learn to render and navigate branching stacks? Early investment (M3) vs. deferred complexity (M7)?
+4. **Forge auth.** M5 delegates to `ssh-agent`/`gh`/`glab`. Is this sufficient for CI/headless environments, or does lajjzy eventually need its own token management?
 5. **Backend swappability.** The `RepoBackend` trait opens the door to non-jj backends (e.g. raw git via `git2`). Is this a goal or an accidental affordance? For now, treat it as an accidental affordance — the trait exists for testability and facade isolation, not as a plugin system.
+6. **Lane view layout (M7).** Horizontal lanes (columns) or vertical lanes (rows)? Horizontal is the git-butler metaphor but constrains terminal width. Vertical stacks more naturally in a TUI. Needs prototyping.
+7. **Interdiff computation (M8/M9).** Patchset comparison requires diffing two versions of the same change. jj's `evolog` tracks local evolution; Gerrit's REST API exposes patchset diffs; GitHub has no native equivalent yet. For the local case, `jj-lib` likely exposes enough via evolog to compute interdiffs without forge API calls. The C4 audit should verify this if M8 is in scope.
+8. **Stack PR branch naming (M9).** What naming scheme for the one-branch-per-change model? Graphite uses `gt/user/stack-name/N`. lajjzy needs a convention that doesn't collide with user bookmarks and is recognisable as machine-managed.
+9. **Git header adoption timeline.** The `change-id` header is written by jj and agreed upon by jj/GitButler/Gerrit, but Git itself doesn't preserve unknown headers on rewrite operations yet. Some forges (e.g. Harness) fail on the header entirely. This affects M9 (GitHub/GitLab stacked PRs): until forges read the header, interdiff and change-tracking across force-pushes must fall back to local computation via `jj evolog`. Monitor the Git mailing list thread and forge adoption.
+
+### Resolved Questions
+
+- ~~**Naming.**~~ `lajjzy`.
+- ~~**Async runtime.**~~ `std::thread` + `std::sync::mpsc`. No tokio in the TUI.
+- ~~**M2 scope.**~~ Describe, new, edit, abandon, squash, undo/redo, bookmark set/delete, push, fetch. Dispatch becomes pure. Effect executor with three gating lanes.
+- ~~**Describe UX.**~~ Inline `tui-textarea` with `Shift-E` escalation to `$EDITOR`.
+- ~~**Eager vs lazy loading.**~~ File lists eager (in `load_graph()`), hunk diffs lazy (`file_diff()`).
+- ~~**Gerrit Change-Id mapping (M8).**~~ Solved by the jj/GitButler/Gerrit standardization effort. As of jj 0.30, jj writes a `change-id` header into Git commit objects by default. `jj gerrit upload` handles the jj-change-id → Gerrit-Change-Id footer mapping automatically. Gerrit has an accepted design doc for native header support, pending upstream Git adoption. lajjzy should use `jj gerrit upload` semantics, not invent a custom mapping.
+### Why There Is No "M7: jj Branchless Workflow" Milestone
+
+An earlier draft proposed a milestone for "jj's branchless and safe history editing" covering automatic commits, stable Change IDs, first-class conflicts, and operation log undo. This was absorbed into M0–M4 because these are not features to *add* — they are jj's native semantics that the TUI *already surfaces*:
+
+- Automatic commits / no staging area → the working-copy change is visible in the graph from M0. There is no "add" or "stage" operation to implement.
+- Stable Change IDs → the graph uses change IDs as the primary identifier from M0. This is the data model, not a feature.
+- First-class conflicts → M4 implements conflict navigation and resolution UI.
+- Operation log and undo → M2 implements undo/redo as instant actions.
+
+A separate milestone for these would be a restatement of work already scoped. The genuinely new workflow that extends beyond jj's CLI is M7 (parallel branches), which adds a *visual metaphor* for capabilities jj already has but that are hard to use without spatial navigation.
 
 ---
 
