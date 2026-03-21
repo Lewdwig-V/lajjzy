@@ -497,6 +497,16 @@ impl RepoBackend for JjCliBackend {
         self.run_jj(&["git", "fetch"])?;
         Ok("Fetched from remote".into())
     }
+
+    fn rebase_single(&self, source: &str, destination: &str) -> Result<String> {
+        self.run_jj(&["rebase", "-r", source, "--onto", destination])?;
+        Ok(format!("Rebased {source} onto {destination}"))
+    }
+
+    fn rebase_with_descendants(&self, source: &str, destination: &str) -> Result<String> {
+        self.run_jj(&["rebase", "-s", source, "--onto", destination])?;
+        Ok(format!("Rebased {source} + descendants onto {destination}"))
+    }
 }
 
 #[cfg(test)]
@@ -1310,6 +1320,131 @@ new mode 100755";
         assert!(
             !child_detail.parents.is_empty(),
             "child should have parent IDs"
+        );
+    }
+
+    /// Build a 4-node stack: root → A → B → C.
+    /// Returns `(backend, root_id, a_id, b_id, c_id)`.
+    fn build_stack(tmp: &tempfile::TempDir) -> (JjCliBackend, String, String, String, String) {
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Initial working copy is root-level — label it A.
+        backend.describe("@", "commit-A").unwrap();
+        backend.new_change("@").unwrap();
+        backend.describe("@", "commit-B").unwrap();
+        backend.new_change("@").unwrap();
+        backend.describe("@", "commit-C").unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+
+        let find_id = |desc: &str| -> String {
+            graph
+                .node_indices()
+                .iter()
+                .find_map(|&i| {
+                    let cid = graph.lines[i].change_id.as_ref()?;
+                    let detail = graph.details.get(cid)?;
+                    if detail.description == desc {
+                        Some(cid.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| panic!("change '{desc}' not found in graph"))
+        };
+
+        let a_id = find_id("commit-A");
+        let b_id = find_id("commit-B");
+        let c_id = find_id("commit-C");
+
+        // Identify root: it has an empty description and no parents.
+        let root_id = graph
+            .node_indices()
+            .iter()
+            .find_map(|&i| {
+                let change_id = graph.lines[i].change_id.as_ref()?;
+                let detail = graph.details.get(change_id)?;
+                if detail.description.is_empty() {
+                    Some(change_id.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("root change not found");
+
+        (backend, root_id, a_id, b_id, c_id)
+    }
+
+    #[test]
+    fn rebase_single_moves_b_leaves_c_under_a() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let (backend, root_id, a_id, b_id, c_id) = build_stack(&tmp);
+
+        // Rebase B onto root: B should become a child of root.
+        // C (descendant of B) is reparented onto A (B's old parent).
+        backend.rebase_single(&b_id, &root_id).unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+
+        let detail = |id: &str| -> &crate::types::ChangeDetail {
+            graph
+                .details
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} not in graph"))
+        };
+
+        // B's parent should now be root.
+        assert!(
+            detail(&b_id).parents.contains(&root_id),
+            "after rebase_single, B should have root as parent; parents={:?}",
+            detail(&b_id).parents
+        );
+
+        // C should be reparented onto A (descendants are spliced).
+        assert!(
+            detail(&c_id).parents.contains(&a_id),
+            "after rebase_single, C should have A as parent; parents={:?}",
+            detail(&c_id).parents
+        );
+    }
+
+    #[test]
+    fn rebase_with_descendants_moves_b_and_c_under_root() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let (backend, root_id, _a_id, b_id, c_id) = build_stack(&tmp);
+
+        // Rebase B + descendants onto root: both B and C should move under root.
+        backend.rebase_with_descendants(&b_id, &root_id).unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+
+        let detail = |id: &str| -> &crate::types::ChangeDetail {
+            graph
+                .details
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} not in graph"))
+        };
+
+        // B's parent should be root.
+        assert!(
+            detail(&b_id).parents.contains(&root_id),
+            "after rebase_with_descendants, B should have root as parent; parents={:?}",
+            detail(&b_id).parents
+        );
+
+        // C's parent should be B (preserved relative order).
+        assert!(
+            detail(&c_id).parents.contains(&b_id),
+            "after rebase_with_descendants, C should still be a child of B; parents={:?}",
+            detail(&c_id).parents
         );
     }
 }
