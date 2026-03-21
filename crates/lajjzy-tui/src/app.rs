@@ -20,6 +20,9 @@ pub struct AppState {
     pub pending_background: HashSet<BackgroundKind>,
     pub status_message: Option<String>,
     pub cursor_follows_working_copy: bool,
+    /// Monotonic counter for graph snapshot versioning.
+    /// Dispatch rejects `GraphLoaded` with generation < this value.
+    pub graph_generation: u64,
 }
 
 impl AppState {
@@ -42,6 +45,7 @@ impl AppState {
             pending_background: HashSet::new(),
             status_message: None,
             cursor_follows_working_copy: false,
+            graph_generation: 0,
         }
     }
 

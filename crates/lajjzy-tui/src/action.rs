@@ -65,7 +65,12 @@ pub enum Action {
     FuzzyBackspace,
 
     // Effect result actions
-    GraphLoaded(Result<GraphData, String>),
+    /// `generation` is a monotonic counter assigned by the executor at load time.
+    /// Dispatch rejects snapshots with generation < current to prevent stale overwrites.
+    GraphLoaded {
+        generation: u64,
+        result: Result<GraphData, String>,
+    },
     OpLogLoaded(Result<Vec<OpLogEntry>, String>),
     FileDiffLoaded(Result<Vec<DiffHunk>, String>),
     RepoOpSuccess {
@@ -73,7 +78,8 @@ pub enum Action {
         message: String,
         /// Refreshed graph bundled with success so gate clears atomically
         /// with graph replacement. None only if `load_graph` failed post-mutation.
-        graph: Option<Result<GraphData, String>>,
+        /// The `u64` is the generation counter for staleness rejection.
+        graph: Option<(u64, Result<GraphData, String>)>,
     },
     RepoOpFailed {
         op: MutationKind,

@@ -19,6 +19,9 @@ pub struct GraphData {
     pub working_copy_index: Option<usize>,
     /// Pre-computed indices of node lines (lines with a `change_id`).
     cached_node_indices: Vec<usize>,
+    /// jj operation ID at the time this snapshot was taken.
+    /// Used to identify which repo state this graph represents.
+    pub op_id: String,
 }
 
 /// One line of jj's graph output.
@@ -105,6 +108,7 @@ impl GraphData {
         lines: Vec<GraphLine>,
         details: HashMap<String, ChangeDetail>,
         working_copy_index: Option<usize>,
+        op_id: String,
     ) -> Self {
         let cached_node_indices = lines
             .iter()
@@ -116,6 +120,7 @@ impl GraphData {
             details,
             working_copy_index,
             cached_node_indices,
+            op_id,
         }
     }
 
@@ -211,6 +216,7 @@ mod tests {
                 ),
             ]),
             Some(0),
+            String::new(),
         )
     }
 

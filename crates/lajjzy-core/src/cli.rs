@@ -132,7 +132,7 @@ fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
 }
 
 /// Parse the raw output of `jj log` with our custom template into `GraphData`.
-fn parse_graph_output(output: &str) -> Result<GraphData> {
+fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
     let mut lines = Vec::new();
     let mut details = std::collections::HashMap::new();
     let mut working_copy_index = None;
@@ -217,7 +217,7 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
         );
     }
 
-    Ok(GraphData::new(lines, details, working_copy_index))
+    Ok(GraphData::new(lines, details, working_copy_index, op_id))
 }
 
 /// Parse git-format diff output into hunks.
@@ -339,6 +339,18 @@ impl RepoBackend for JjCliBackend {
     }
 
     fn load_graph(&self) -> Result<GraphData> {
+        // Capture current operation head for snapshot versioning.
+        let op_id = self
+            .run_jj(&[
+                "op",
+                "log",
+                "--limit=1",
+                "--no-graph",
+                "-T",
+                "self.id().short(16)",
+            ])
+            .unwrap_or_else(|_| "unknown".to_string());
+
         // `working_copies` is empty in jj 0.39.0; use self.current_working_copy() instead.
         let template = concat!(
             "change_id.short() ++ \" \" ++ ",
@@ -372,7 +384,7 @@ impl RepoBackend for JjCliBackend {
         let stdout =
             String::from_utf8(output.stdout).context("jj log output was not valid UTF-8")?;
 
-        parse_graph_output(&stdout)
+        parse_graph_output(&stdout, op_id)
     }
 
     fn op_log(&self) -> Result<Vec<crate::types::OpLogEntry>> {
@@ -506,7 +518,7 @@ mod tests {
 ◉  def45 bob 1h ago\x1Fdef45\x1Ebbb22\x1Ebob\x1Ebob@ex.com\x1E1h ago\x1Eadd feature\x1E\x1Efalse\x1Efalse\x1E
 │  add feature";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         assert_eq!(graph.lines.len(), 4);
         assert_eq!(graph.node_indices(), vec![0, 2]);
         assert_eq!(graph.working_copy_index, Some(0));
@@ -526,7 +538,7 @@ mod tests {
 │  some description
 │";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         assert!(graph.lines[0].change_id.is_some());
         assert!(graph.lines[1].change_id.is_none());
         assert!(graph.lines[2].change_id.is_none());
@@ -535,21 +547,21 @@ mod tests {
     #[test]
     fn parse_graph_output_empty_bookmarks() {
         let output = "◉  x y 1m\x1Fx\x1Ey\x1Ez\x1Ea@b\x1E1m\x1Ed\x1E\x1Efalse\x1Efalse\x1E";
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         assert!(graph.details.get("x").unwrap().bookmarks.is_empty());
     }
 
     #[test]
     fn parse_graph_output_rejects_incomplete_metadata() {
         let output = "◉  x y 1m\x1Fx\x1Ey"; // only 2 fields
-        let result = parse_graph_output(output);
+        let result = parse_graph_output(output, String::new());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Expected 10"));
     }
 
     #[test]
     fn parse_graph_output_empty_input() {
-        let graph = parse_graph_output("").unwrap();
+        let graph = parse_graph_output("", String::new()).unwrap();
         assert!(graph.lines.is_empty());
         assert!(graph.node_indices().is_empty());
     }
@@ -564,7 +576,7 @@ mod tests {
 │  A foo.txt
 ◆  zzzzzzzz (no description)\x1Fzzzzzzzz\x1E000000000000\x1E\x1E\x1E56y ago\x1E\x1E\x1Etrue\x1Efalse\x1E";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
 
         // File lines are compacted out of graph.lines; only node lines remain.
         assert_eq!(graph.lines.len(), 3);
@@ -590,7 +602,7 @@ mod tests {
 @  abc rename\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Erename\x1E\x1Efalse\x1Efalse\x1E@
 │  R {foo.txt => bar.txt}";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         let detail = graph.details.get("abc").unwrap();
         assert_eq!(detail.files.len(), 1);
         assert_eq!(detail.files[0].status, crate::types::FileStatus::Renamed);
@@ -605,7 +617,7 @@ mod tests {
 ◆  zuk root\x1Fzuk\x1E000\x1ELewdwig\x1Ea@b\x1E8h ago\x1E\x1E\x1Efalse\x1Efalse\x1E
 ~  A LICENSE";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         // Only the node line — the file line is compacted out.
         assert_eq!(graph.lines.len(), 1);
         let detail = graph.details.get("zuk").unwrap();
@@ -619,7 +631,7 @@ mod tests {
         let output = "\
 @  abc (no description)\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1E\x1E\x1Etrue\x1Efalse\x1E@";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         let detail = graph.details.get("abc").unwrap();
         assert!(detail.files.is_empty());
     }

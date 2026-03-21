@@ -50,38 +50,47 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.error = None;
             return vec![Effect::LoadGraph { revset: None }];
         }
-        Action::GraphLoaded(result) => match result {
-            Ok(new_graph) => {
-                let prev_id = state.selected_change_id().map(String::from);
-                state.graph = new_graph;
-                state.reset_detail();
+        Action::GraphLoaded { generation, result } => {
+            // Reject stale snapshots from concurrent loads
+            if generation < state.graph_generation {
+                return vec![];
+            }
+            state.graph_generation = generation;
+            match result {
+                Ok(new_graph) => {
+                    let prev_id = state.selected_change_id().map(String::from);
+                    state.graph = new_graph;
+                    state.reset_detail();
 
-                if state.cursor_follows_working_copy {
-                    state.cursor_follows_working_copy = false;
-                    state.cursor = state
-                        .graph
-                        .working_copy_index
-                        .or_else(|| state.graph.node_indices().first().copied())
-                        .unwrap_or(0);
-                } else {
-                    let nodes = state.graph.node_indices();
-                    state.cursor = prev_id
-                        .as_deref()
-                        .and_then(|id| {
-                            nodes
-                                .iter()
-                                .find(|&&i| state.graph.lines[i].change_id.as_deref() == Some(id))
-                                .copied()
-                        })
-                        .or(state.graph.working_copy_index)
-                        .or_else(|| nodes.first().copied())
-                        .unwrap_or(0);
+                    if state.cursor_follows_working_copy {
+                        state.cursor_follows_working_copy = false;
+                        state.cursor = state
+                            .graph
+                            .working_copy_index
+                            .or_else(|| state.graph.node_indices().first().copied())
+                            .unwrap_or(0);
+                    } else {
+                        let nodes = state.graph.node_indices();
+                        state.cursor = prev_id
+                            .as_deref()
+                            .and_then(|id| {
+                                nodes
+                                    .iter()
+                                    .find(|&&i| {
+                                        state.graph.lines[i].change_id.as_deref() == Some(id)
+                                    })
+                                    .copied()
+                            })
+                            .or(state.graph.working_copy_index)
+                            .or_else(|| nodes.first().copied())
+                            .unwrap_or(0);
+                    }
+                }
+                Err(e) => {
+                    state.error = Some(format!("Failed to load graph: {e}"));
                 }
             }
-            Err(e) => {
-                state.error = Some(format!("Failed to load graph: {e}"));
-            }
-        },
+        }
         Action::TabFocus | Action::BackTabFocus => {
             state.focus = match state.focus {
                 PanelFocus::Graph => PanelFocus::Detail,
@@ -394,9 +403,15 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::RepoOpSuccess { op, message, graph } => {
             // Install refreshed graph BEFORE clearing the gate so no mutation
             // can fire against stale state between gate-clear and graph-replace.
-            if let Some(graph_result) = graph {
+            if let Some((generation, graph_result)) = graph {
                 // Reuse the GraphLoaded logic via recursive dispatch
-                let nested = dispatch(state, Action::GraphLoaded(graph_result));
+                let nested = dispatch(
+                    state,
+                    Action::GraphLoaded {
+                        generation,
+                        result: graph_result,
+                    },
+                );
                 debug_assert!(nested.is_empty(), "GraphLoaded should not produce effects");
             }
             match op {
@@ -679,6 +694,7 @@ mod tests {
                 ),
             ]),
             Some(0),
+            String::new(),
         )
     }
 
@@ -737,6 +753,7 @@ mod tests {
                 ),
             ]),
             Some(0),
+            String::new(),
         )
     }
 
@@ -790,6 +807,7 @@ mod tests {
                 ),
             ]),
             Some(0),
+            String::new(),
         )
     }
 
@@ -821,7 +839,7 @@ mod tests {
                 )
             })
             .collect();
-        GraphData::new(lines, details, Some(0))
+        GraphData::new(lines, details, Some(0), String::new())
     }
 
     // --- Navigation tests ---
@@ -908,7 +926,13 @@ mod tests {
     fn graph_loaded_success_updates_graph() {
         let mut state = AppState::new(sample_graph());
         let new_graph = test_graph_with_changes(&["xxx", "yyy"]);
-        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        let effects = dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(new_graph),
+            },
+        );
         assert!(effects.is_empty());
         assert_eq!(state.graph.lines.len(), 2);
         assert_eq!(state.selected_change_id(), Some("xxx"));
@@ -917,7 +941,13 @@ mod tests {
     #[test]
     fn graph_loaded_error_sets_error() {
         let mut state = AppState::new(sample_graph());
-        let effects = dispatch(&mut state, Action::GraphLoaded(Err("boom".into())));
+        let effects = dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Err("boom".into()),
+            },
+        );
         assert!(effects.is_empty());
         assert!(state.error.as_deref().unwrap().contains("boom"));
         // Graph unchanged
@@ -929,7 +959,13 @@ mod tests {
         let mut state = AppState::new(sample_graph());
         state.set_cursor_for_test(2); // at "def"
         let new_graph = sample_graph();
-        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        let effects = dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(new_graph),
+            },
+        );
         assert!(effects.is_empty());
         assert_eq!(state.cursor(), 2);
         assert_eq!(state.selected_change_id(), Some("def"));
@@ -947,9 +983,15 @@ mod tests {
         lines.remove(2);
         let mut details = sg.details;
         details.remove("def");
-        let new_graph = GraphData::new(lines, details, sg.working_copy_index);
+        let new_graph = GraphData::new(lines, details, sg.working_copy_index, String::new());
 
-        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        let effects = dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(new_graph),
+            },
+        );
         assert!(effects.is_empty());
         assert_eq!(state.cursor(), 0);
         assert_eq!(state.selected_change_id(), Some("abc"));
@@ -961,7 +1003,13 @@ mod tests {
         state.cursor_follows_working_copy = true;
         // New graph has working copy at index 0 (first node)
         let new_graph = test_graph_with_changes(&["zzz", "yyy"]);
-        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        let effects = dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(new_graph),
+            },
+        );
         assert!(effects.is_empty());
         assert!(!state.cursor_follows_working_copy); // flag cleared
         assert_eq!(state.cursor(), 0);
@@ -974,11 +1022,46 @@ mod tests {
         state.detail_mode = DetailMode::DiffView;
         state.diff_scroll = 5;
         let new_graph = sample_graph();
-        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        let effects = dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(new_graph),
+            },
+        );
         assert!(effects.is_empty());
         assert_eq!(state.detail_mode, DetailMode::FileList);
         assert_eq!(state.diff_scroll, 0);
         assert_eq!(state.detail_cursor(), 0);
+    }
+
+    #[test]
+    fn stale_graph_loaded_rejected() {
+        let mut state = AppState::new(sample_graph());
+        // Accept a fresh graph at generation 2
+        let new_graph = test_graph_with_changes(&["xxx"]);
+        dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 2,
+                result: Ok(new_graph),
+            },
+        );
+        assert_eq!(state.graph_generation, 2);
+        assert_eq!(state.selected_change_id(), Some("xxx"));
+
+        // A stale graph at generation 1 arrives later — must be rejected
+        let stale_graph = test_graph_with_changes(&["stale"]);
+        dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(stale_graph),
+            },
+        );
+        // Graph unchanged — stale snapshot was dropped
+        assert_eq!(state.graph_generation, 2);
+        assert_eq!(state.selected_change_id(), Some("xxx"));
     }
 
     #[test]
@@ -1482,7 +1565,7 @@ mod tests {
             Action::RepoOpSuccess {
                 op: MutationKind::Abandon,
                 message: "abandoned".into(),
-                graph: Some(Ok(sample_graph())),
+                graph: Some((1, Ok(sample_graph()))),
             },
         );
         assert!(effects.is_empty());
@@ -1519,7 +1602,7 @@ mod tests {
             Action::RepoOpSuccess {
                 op: MutationKind::Abandon,
                 message: "abandoned".into(),
-                graph: Some(Ok(new_graph)),
+                graph: Some((1, Ok(new_graph))),
             },
         );
 
@@ -1556,7 +1639,7 @@ mod tests {
             Action::RepoOpSuccess {
                 op: MutationKind::GitPush,
                 message: "pushed".into(),
-                graph: Some(Ok(sample_graph())),
+                graph: Some((1, Ok(sample_graph()))),
             },
         );
         assert!(!state.pending_background.contains(&BackgroundKind::Push));
@@ -1618,6 +1701,7 @@ mod tests {
                 },
             )]),
             Some(0),
+            String::new(),
         )
     }
 
@@ -1748,6 +1832,7 @@ mod tests {
                 },
             )]),
             Some(0),
+            String::new(),
         );
         let mut state = AppState::new(graph);
         let effects = dispatch(&mut state, Action::OpenDescribe);

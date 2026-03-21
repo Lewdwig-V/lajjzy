@@ -1,5 +1,6 @@
 use std::env;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -19,17 +20,22 @@ use lajjzy_tui::render::render;
 struct EffectExecutor {
     backend: Arc<JjCliBackend>,
     tx: mpsc::Sender<Action>,
+    /// Monotonic counter for graph snapshot versioning.
+    /// Incremented before each `load_graph()` call so later loads get higher generations.
+    graph_generation: AtomicU64,
 }
 
 impl EffectExecutor {
     fn execute(&self, effect: Effect) {
         let backend = Arc::clone(&self.backend);
         let tx = self.tx.clone();
+        // Assign generation BEFORE spawning thread — ordering reflects intent, not completion.
+        let generation = self.next_graph_generation(&effect);
         thread::spawn(move || match effect {
             // Read-only effects
             Effect::LoadGraph { revset: _ } => {
                 let result = backend.load_graph().map_err(|e| e.to_string());
-                let _ = tx.send(Action::GraphLoaded(result));
+                let _ = tx.send(Action::GraphLoaded { generation, result });
             }
             Effect::LoadOpLog => {
                 let result = backend.op_log().map_err(|e| e.to_string());
@@ -44,53 +50,61 @@ impl EffectExecutor {
 
             // Mutation effects
             Effect::Describe { change_id, text } => {
-                run_mutation(&backend, &tx, MutationKind::Describe, || {
+                run_mutation(&backend, &tx, MutationKind::Describe, generation, || {
                     backend.describe(&change_id, &text)
                 });
             }
             Effect::New { after } => {
-                run_mutation(&backend, &tx, MutationKind::New, || {
+                run_mutation(&backend, &tx, MutationKind::New, generation, || {
                     backend.new_change(&after)
                 });
             }
             Effect::Edit { change_id } => {
-                run_mutation(&backend, &tx, MutationKind::Edit, || {
+                run_mutation(&backend, &tx, MutationKind::Edit, generation, || {
                     backend.edit_change(&change_id)
                 });
             }
             Effect::Abandon { change_id } => {
-                run_mutation(&backend, &tx, MutationKind::Abandon, || {
+                run_mutation(&backend, &tx, MutationKind::Abandon, generation, || {
                     backend.abandon(&change_id)
                 });
             }
             Effect::Squash { change_id } => {
-                run_mutation(&backend, &tx, MutationKind::Squash, || {
+                run_mutation(&backend, &tx, MutationKind::Squash, generation, || {
                     backend.squash(&change_id)
                 });
             }
             Effect::Undo => {
-                run_mutation(&backend, &tx, MutationKind::Undo, || backend.undo());
+                run_mutation(&backend, &tx, MutationKind::Undo, generation, || {
+                    backend.undo()
+                });
             }
             Effect::Redo => {
-                run_mutation(&backend, &tx, MutationKind::Redo, || backend.redo());
+                run_mutation(&backend, &tx, MutationKind::Redo, generation, || {
+                    backend.redo()
+                });
             }
             Effect::BookmarkSet { change_id, name } => {
-                run_mutation(&backend, &tx, MutationKind::BookmarkSet, || {
+                run_mutation(&backend, &tx, MutationKind::BookmarkSet, generation, || {
                     backend.bookmark_set(&change_id, &name)
                 });
             }
             Effect::BookmarkDelete { name } => {
-                run_mutation(&backend, &tx, MutationKind::BookmarkDelete, || {
-                    backend.bookmark_delete(&name)
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::BookmarkDelete,
+                    generation,
+                    || backend.bookmark_delete(&name),
+                );
             }
             Effect::GitPush { bookmark } => {
-                run_mutation(&backend, &tx, MutationKind::GitPush, || {
+                run_mutation(&backend, &tx, MutationKind::GitPush, generation, || {
                     backend.git_push(&bookmark)
                 });
             }
             Effect::GitFetch => {
-                run_mutation(&backend, &tx, MutationKind::GitFetch, || {
+                run_mutation(&backend, &tx, MutationKind::GitFetch, generation, || {
                     backend.git_fetch()
                 });
             }
@@ -101,19 +115,40 @@ impl EffectExecutor {
             }
         });
     }
+
+    /// Increment the generation counter for effects that will load a graph.
+    /// Returns 0 for effects that don't load graphs (the value is ignored).
+    fn next_graph_generation(&self, effect: &Effect) -> u64 {
+        match effect {
+            Effect::LoadGraph { .. }
+            | Effect::Describe { .. }
+            | Effect::New { .. }
+            | Effect::Edit { .. }
+            | Effect::Abandon { .. }
+            | Effect::Squash { .. }
+            | Effect::Undo
+            | Effect::Redo
+            | Effect::BookmarkSet { .. }
+            | Effect::BookmarkDelete { .. }
+            | Effect::GitPush { .. }
+            | Effect::GitFetch => self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1,
+            _ => 0,
+        }
+    }
 }
 
 fn run_mutation(
     backend: &JjCliBackend,
     tx: &mpsc::Sender<Action>,
     op: MutationKind,
+    generation: u64,
     f: impl FnOnce() -> anyhow::Result<String>,
 ) {
     match f() {
         Ok(message) => {
             // Bundle refreshed graph with success so dispatch clears the gate
             // and installs the new graph atomically — no window for stale-graph mutations.
-            let graph = Some(backend.load_graph().map_err(|e| e.to_string()));
+            let graph = Some((generation, backend.load_graph().map_err(|e| e.to_string())));
             let _ = tx.send(Action::RepoOpSuccess { op, message, graph });
         }
         Err(e) => {
@@ -218,7 +253,11 @@ fn main() -> Result<()> {
     let mut state = AppState::new(graph);
 
     let (tx, rx) = mpsc::channel();
-    let executor = EffectExecutor { backend, tx };
+    let executor = EffectExecutor {
+        backend,
+        tx,
+        graph_generation: AtomicU64::new(0),
+    };
 
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
