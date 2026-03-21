@@ -55,14 +55,14 @@ pub enum Action {
     JumpToWorkingCopy,
     ToggleOpLog,
     OpenBookmarks,
-    OpenFuzzyFind,
+    OpenOmnibar,
     OpenHelp,
     ModalDismiss,
     ModalMoveUp,
     ModalMoveDown,
     ModalEnter,
-    FuzzyInput(char),
-    FuzzyBackspace,
+    OmnibarInput(char),
+    OmnibarBackspace,
 
     // Effect result actions
     /// `generation` is a monotonic counter assigned by the executor at load time.

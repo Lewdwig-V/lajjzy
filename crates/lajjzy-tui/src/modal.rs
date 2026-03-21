@@ -12,7 +12,7 @@ pub enum Modal {
         bookmarks: Vec<(String, String)>, // (bookmark_name, change_id)
         cursor: usize,
     },
-    FuzzyFind {
+    Omnibar {
         query: String,
         matches: Vec<usize>, // graph line indices from node_indices
         cursor: usize,

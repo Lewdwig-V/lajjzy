@@ -77,19 +77,15 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
             );
             frame.render_widget(widget, modal_area);
         }
-        Modal::FuzzyFind {
+        Modal::Omnibar {
             query,
             matches,
             cursor,
         } => {
             let modal_area = centered_rect(60, 80, area);
             frame.render_widget(Clear, modal_area);
-            let widget = crate::widgets::fuzzy_find::FuzzyFindWidget::new(
-                query,
-                matches,
-                &state.graph,
-                *cursor,
-            );
+            let widget =
+                crate::widgets::omnibar::OmnibarWidget::new(query, matches, &state.graph, *cursor);
             frame.render_widget(widget, modal_area);
         }
         Modal::Help { context, scroll } => {

@@ -252,9 +252,9 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 cursor: 0,
             });
         }
-        Action::OpenFuzzyFind => {
+        Action::OpenOmnibar => {
             let matches = state.graph.node_indices().to_vec();
-            state.modal = Some(Modal::FuzzyFind {
+            state.modal = Some(Modal::Omnibar {
                 query: String::new(),
                 matches,
                 cursor: 0,
@@ -290,7 +290,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                             *cursor += 1;
                         }
                     }
-                    Modal::FuzzyFind {
+                    Modal::Omnibar {
                         matches, cursor, ..
                     } => {
                         if *cursor + 1 < matches.len() {
@@ -311,7 +311,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 match modal {
                     Modal::OpLog { cursor, .. }
                     | Modal::BookmarkPicker { cursor, .. }
-                    | Modal::FuzzyFind { cursor, .. } => {
+                    | Modal::Omnibar { cursor, .. } => {
                         *cursor = cursor.saturating_sub(1);
                     }
                     Modal::Help { scroll, .. } => {
@@ -336,7 +336,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                         state.reset_detail();
                     }
                 }
-                Some(Modal::FuzzyFind {
+                Some(Modal::Omnibar {
                     matches, cursor, ..
                 }) => {
                     if let Some(&idx) = matches.get(cursor) {
@@ -349,8 +349,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
             }
         }
-        Action::FuzzyInput(c) => {
-            if let Some(Modal::FuzzyFind {
+        Action::OmnibarInput(c) => {
+            if let Some(Modal::Omnibar {
                 query,
                 matches,
                 cursor,
@@ -361,8 +361,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 *cursor = 0;
             }
         }
-        Action::FuzzyBackspace => {
-            if let Some(Modal::FuzzyFind {
+        Action::OmnibarBackspace => {
+            if let Some(Modal::Omnibar {
                 query,
                 matches,
                 cursor,
@@ -1370,55 +1370,55 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_find_opens_with_all_matches() {
+    fn omnibar_opens_with_all_matches() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::OpenOmnibar);
         match &state.modal {
-            Some(Modal::FuzzyFind { matches, query, .. }) => {
+            Some(Modal::Omnibar { matches, query, .. }) => {
                 assert!(query.is_empty());
                 assert_eq!(matches.len(), state.graph.node_indices().len());
             }
-            _ => panic!("Expected FuzzyFind modal"),
+            _ => panic!("Expected Omnibar modal"),
         }
     }
 
     #[test]
     fn modal_move_down_and_up() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::OpenOmnibar);
         dispatch(&mut state, Action::ModalMoveDown);
         match &state.modal {
-            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 1),
-            _ => panic!("Expected FuzzyFind modal"),
+            Some(Modal::Omnibar { cursor, .. }) => assert_eq!(*cursor, 1),
+            _ => panic!("Expected Omnibar modal"),
         }
         dispatch(&mut state, Action::ModalMoveUp);
         match &state.modal {
-            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 0),
-            _ => panic!("Expected FuzzyFind modal"),
+            Some(Modal::Omnibar { cursor, .. }) => assert_eq!(*cursor, 0),
+            _ => panic!("Expected Omnibar modal"),
         }
     }
 
     #[test]
-    fn fuzzy_input_and_backspace() {
+    fn omnibar_input_and_backspace() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
-        dispatch(&mut state, Action::FuzzyInput('a'));
-        dispatch(&mut state, Action::FuzzyInput('b'));
+        dispatch(&mut state, Action::OpenOmnibar);
+        dispatch(&mut state, Action::OmnibarInput('a'));
+        dispatch(&mut state, Action::OmnibarInput('b'));
         match &state.modal {
-            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "ab"),
-            _ => panic!("Expected FuzzyFind modal"),
+            Some(Modal::Omnibar { query, .. }) => assert_eq!(query, "ab"),
+            _ => panic!("Expected Omnibar modal"),
         }
-        dispatch(&mut state, Action::FuzzyBackspace);
+        dispatch(&mut state, Action::OmnibarBackspace);
         match &state.modal {
-            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "a"),
-            _ => panic!("Expected FuzzyFind modal"),
+            Some(Modal::Omnibar { query, .. }) => assert_eq!(query, "a"),
+            _ => panic!("Expected Omnibar modal"),
         }
     }
 
     #[test]
-    fn modal_enter_on_fuzzy_find_jumps_cursor() {
+    fn modal_enter_on_omnibar_jumps_cursor() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::OpenOmnibar);
         dispatch(&mut state, Action::ModalMoveDown);
         dispatch(&mut state, Action::ModalEnter);
         assert!(state.modal.is_none());
@@ -1443,25 +1443,25 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_input_narrows_matches() {
+    fn omnibar_input_narrows_matches() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::OpenOmnibar);
 
         let initial_count = match &state.modal {
-            Some(Modal::FuzzyFind { matches, .. }) => matches.len(),
-            _ => panic!("Expected FuzzyFind"),
+            Some(Modal::Omnibar { matches, .. }) => matches.len(),
+            _ => panic!("Expected Omnibar"),
         };
 
-        dispatch(&mut state, Action::FuzzyInput('d'));
-        dispatch(&mut state, Action::FuzzyInput('e'));
-        dispatch(&mut state, Action::FuzzyInput('s'));
-        dispatch(&mut state, Action::FuzzyInput('c'));
+        dispatch(&mut state, Action::OmnibarInput('d'));
+        dispatch(&mut state, Action::OmnibarInput('e'));
+        dispatch(&mut state, Action::OmnibarInput('s'));
+        dispatch(&mut state, Action::OmnibarInput('c'));
 
         match &state.modal {
-            Some(Modal::FuzzyFind { matches, .. }) => {
+            Some(Modal::Omnibar { matches, .. }) => {
                 assert!(matches.len() <= initial_count);
             }
-            _ => panic!("Expected FuzzyFind"),
+            _ => panic!("Expected Omnibar"),
         }
     }
 

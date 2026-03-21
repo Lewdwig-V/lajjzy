@@ -6,14 +6,14 @@ use ratatui::widgets::{Block, Borders, Widget};
 
 use lajjzy_core::types::GraphData;
 
-pub struct FuzzyFindWidget<'a> {
+pub struct OmnibarWidget<'a> {
     query: &'a str,
     matches: &'a [usize], // graph line indices
     graph: &'a GraphData,
     cursor: usize,
 }
 
-impl<'a> FuzzyFindWidget<'a> {
+impl<'a> OmnibarWidget<'a> {
     pub fn new(query: &'a str, matches: &'a [usize], graph: &'a GraphData, cursor: usize) -> Self {
         Self {
             query,
@@ -24,7 +24,7 @@ impl<'a> FuzzyFindWidget<'a> {
     }
 }
 
-impl Widget for FuzzyFindWidget<'_> {
+impl Widget for OmnibarWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -165,7 +165,7 @@ mod tests {
     fn renders_query_and_results() {
         let graph = test_graph();
         let matches = vec![0, 1];
-        let widget = FuzzyFindWidget::new("ali", &matches, &graph, 0);
+        let widget = OmnibarWidget::new("ali", &matches, &graph, 0);
         let area = Rect::new(0, 0, 60, 8);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn renders_no_matches() {
         let graph = test_graph();
-        let widget = FuzzyFindWidget::new("zzz", &[], &graph, 0);
+        let widget = OmnibarWidget::new("zzz", &[], &graph, 0);
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
