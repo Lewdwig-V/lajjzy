@@ -391,7 +391,14 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.pending_mutation = Some(MutationKind::Redo);
             return vec![Effect::Redo];
         }
-        Action::RepoOpSuccess { op, message } => {
+        Action::RepoOpSuccess { op, message, graph } => {
+            // Install refreshed graph BEFORE clearing the gate so no mutation
+            // can fire against stale state between gate-clear and graph-replace.
+            if let Some(graph_result) = graph {
+                // Reuse the GraphLoaded logic via recursive dispatch
+                let nested = dispatch(state, Action::GraphLoaded(graph_result));
+                debug_assert!(nested.is_empty(), "GraphLoaded should not produce effects");
+            }
             match op {
                 MutationKind::GitPush => {
                     state.pending_background.remove(&BackgroundKind::Push);
@@ -1475,11 +1482,51 @@ mod tests {
             Action::RepoOpSuccess {
                 op: MutationKind::Abandon,
                 message: "abandoned".into(),
+                graph: Some(Ok(sample_graph())),
             },
         );
         assert!(effects.is_empty());
         assert!(state.pending_mutation.is_none());
         assert_eq!(state.status_message.as_deref(), Some("abandoned"));
+    }
+
+    #[test]
+    fn repo_op_success_without_graph_still_clears_gate() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Abandon);
+        let effects = dispatch(
+            &mut state,
+            Action::RepoOpSuccess {
+                op: MutationKind::Abandon,
+                message: "abandoned".into(),
+                graph: None,
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.pending_mutation.is_none());
+    }
+
+    #[test]
+    fn repo_op_success_installs_graph_before_clearing_gate() {
+        // Verifies the ordering: graph replaced, THEN gate cleared.
+        // If gate cleared first, a fast mutation could fire against stale graph.
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Abandon);
+
+        let new_graph = test_graph_with_changes(&["xxx"]);
+        dispatch(
+            &mut state,
+            Action::RepoOpSuccess {
+                op: MutationKind::Abandon,
+                message: "abandoned".into(),
+                graph: Some(Ok(new_graph)),
+            },
+        );
+
+        // Gate cleared AND graph replaced atomically
+        assert!(state.pending_mutation.is_none());
+        assert_eq!(state.graph.node_indices().len(), 1);
+        assert_eq!(state.selected_change_id(), Some("xxx"));
     }
 
     #[test]
@@ -1509,6 +1556,7 @@ mod tests {
             Action::RepoOpSuccess {
                 op: MutationKind::GitPush,
                 message: "pushed".into(),
+                graph: Some(Ok(sample_graph())),
             },
         );
         assert!(!state.pending_background.contains(&BackgroundKind::Push));

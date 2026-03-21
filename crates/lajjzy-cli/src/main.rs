@@ -111,9 +111,10 @@ fn run_mutation(
 ) {
     match f() {
         Ok(message) => {
-            let _ = tx.send(Action::RepoOpSuccess { op, message });
-            let graph = backend.load_graph().map_err(|e| e.to_string());
-            let _ = tx.send(Action::GraphLoaded(graph));
+            // Bundle refreshed graph with success so dispatch clears the gate
+            // and installs the new graph atomically — no window for stale-graph mutations.
+            let graph = Some(backend.load_graph().map_err(|e| e.to_string()));
+            let _ = tx.send(Action::RepoOpSuccess { op, message, graph });
         }
         Err(e) => {
             let _ = tx.send(Action::RepoOpFailed {

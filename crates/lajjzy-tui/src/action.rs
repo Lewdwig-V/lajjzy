@@ -68,9 +68,21 @@ pub enum Action {
     GraphLoaded(Result<GraphData, String>),
     OpLogLoaded(Result<Vec<OpLogEntry>, String>),
     FileDiffLoaded(Result<Vec<DiffHunk>, String>),
-    RepoOpSuccess { op: MutationKind, message: String },
-    RepoOpFailed { op: MutationKind, error: String },
-    EditorComplete { change_id: String, text: String },
+    RepoOpSuccess {
+        op: MutationKind,
+        message: String,
+        /// Refreshed graph bundled with success so gate clears atomically
+        /// with graph replacement. None only if `load_graph` failed post-mutation.
+        graph: Option<Result<GraphData, String>>,
+    },
+    RepoOpFailed {
+        op: MutationKind,
+        error: String,
+    },
+    EditorComplete {
+        change_id: String,
+        text: String,
+    },
 
     // Mutation trigger actions
     Abandon,
