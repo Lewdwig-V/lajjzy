@@ -278,6 +278,11 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.modal = Some(Modal::Help { context, scroll: 0 });
         }
         Action::ModalDismiss => {
+            // Clear omnibar fallback to prevent stale cursor jumps
+            // from in-flight EvalRevset results arriving after dismiss.
+            if matches!(state.modal, Some(Modal::Omnibar { .. })) {
+                state.omnibar_fallback_idx = None;
+            }
             state.modal = None;
         }
         Action::ModalMoveDown => {
@@ -357,6 +362,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                     } else {
                         // Non-empty: store fuzzy fallback and try as revset
                         state.omnibar_fallback_idx = matches.get(cursor).copied();
+                        state.status_message = Some("Evaluating revset\u{2026}".into());
                         return vec![Effect::EvalRevset { query }];
                     }
                 }
@@ -564,6 +570,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 Ok(new_graph) => {
                     state.omnibar_fallback_idx = None;
                     if new_graph.node_indices().is_empty() {
+                        // Maintain staleness invariant even for empty results
+                        state.graph_generation = generation;
                         state.status_message = Some(format!("No changes match: {query}"));
                     } else {
                         state.active_revset = Some(query);
@@ -574,11 +582,16 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                                 result: Ok(new_graph),
                             },
                         );
-                        debug_assert!(nested.is_empty());
+                        assert!(
+                            nested.is_empty(),
+                            "RevsetLoaded: nested GraphLoaded must not produce effects"
+                        );
                     }
                 }
-                Err(_) => {
-                    // Not a valid revset — fall back to fuzzy jump
+                Err(err_msg) => {
+                    // Show the revset error so the user knows why it failed
+                    state.status_message = Some(format!("Invalid revset: {err_msg}"));
+                    // Fall back to fuzzy jump if available
                     if let Some(idx) = state.omnibar_fallback_idx.take() {
                         state.cursor = idx;
                         state.reset_detail();

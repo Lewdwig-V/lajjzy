@@ -43,7 +43,11 @@ impl EffectExecutor {
         let generation = self.next_graph_generation(&effect);
         // Snapshot active revset before spawning so mutation threads refresh
         // the graph with the same filter the user currently sees.
-        let revset_snapshot = self.active_revset.lock().unwrap().clone();
+        let revset_snapshot = self
+            .active_revset
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         thread::spawn(move || match effect {
             // Read-only effects
             Effect::LoadGraph { revset } => {
@@ -385,7 +389,11 @@ fn run_loop(
             };
             if let Some(action) = action {
                 let effects = dispatch(state, action);
-                (*executor.active_revset.lock().unwrap()).clone_from(&state.active_revset);
+                executor
+                    .active_revset
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone_from(&state.active_revset);
                 execute_effects(terminal, state, executor, effects);
             } else if let Some(lajjzy_tui::modal::Modal::Describe { ref mut editor, .. }) =
                 state.modal
@@ -401,7 +409,11 @@ fn run_loop(
         // Drain all pending results before next render
         while let Ok(action) = rx.try_recv() {
             let effects = dispatch(state, action);
-            (*executor.active_revset.lock().unwrap()).clone_from(&state.active_revset);
+            executor
+                .active_revset
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone_from(&state.active_revset);
             execute_effects(terminal, state, executor, effects);
         }
 
