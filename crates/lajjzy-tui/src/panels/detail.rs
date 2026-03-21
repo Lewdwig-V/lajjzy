@@ -39,6 +39,8 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
                 format!("Diff — {path}")
             }
         }
+        // HunkPicker rendered by its own widget in Task 7
+        DetailMode::HunkPicker => "Hunk Picker".to_string(),
     };
 
     let block = Block::default()
@@ -61,5 +63,7 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
             let widget = DiffViewWidget::new(&state.diff_data, state.diff_scroll);
             frame.render_widget(widget, inner);
         }
+        // HunkPicker rendered by its own widget in Task 7
+        DetailMode::HunkPicker => {}
     }
 }

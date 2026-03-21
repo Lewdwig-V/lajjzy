@@ -31,7 +31,8 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
             (KeyCode::Char('n'), KeyModifiers::NONE) => Some(Action::NewChange),
             (KeyCode::Char('e'), KeyModifiers::CONTROL) => Some(Action::EditChange),
             (KeyCode::Char('e'), KeyModifiers::NONE) => Some(Action::OpenDescribe),
-            (KeyCode::Char('S'), _) => Some(Action::Squash),
+            (KeyCode::Char('s'), KeyModifiers::NONE) => Some(Action::Split),
+            (KeyCode::Char('S'), _) => Some(Action::SquashPartial),
             (KeyCode::Char('u'), KeyModifiers::NONE) => Some(Action::Undo),
             (KeyCode::Char('r'), KeyModifiers::NONE) => Some(Action::RebaseSingle),
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => Some(Action::RebaseWithDescendants),
@@ -69,6 +70,8 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
                 (KeyCode::Esc, _) => Some(Action::DetailBack),
                 _ => None,
             },
+            // HunkPicker keys routed separately in Task 5
+            DetailMode::HunkPicker => None,
         },
     }
 }
@@ -514,10 +517,12 @@ mod tests {
             map_graph(key_mod(KeyCode::Char('e'), KeyModifiers::CONTROL)),
             Some(Action::EditChange)
         );
-        // Squash (capital S)
+        // Split (lowercase s)
+        assert_eq!(map_graph(key(KeyCode::Char('s'))), Some(Action::Split));
+        // SquashPartial (capital S)
         assert_eq!(
             map_graph(key_mod(KeyCode::Char('S'), KeyModifiers::SHIFT)),
-            Some(Action::Squash)
+            Some(Action::SquashPartial)
         );
         // Undo
         assert_eq!(map_graph(key(KeyCode::Char('u'))), Some(Action::Undo));

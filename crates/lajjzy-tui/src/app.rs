@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use lajjzy_core::types::{ChangeDetail, DiffHunk, GraphData};
+use lajjzy_core::types::{ChangeDetail, DiffHunk, DiffLine, GraphData};
 
-use crate::action::RebaseMode;
 pub use crate::action::{Action, BackgroundKind, DetailMode, MutationKind, PanelFocus};
+use crate::action::{HunkPickerOp, RebaseMode};
 pub use crate::modal::{HelpContext, Modal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +22,27 @@ pub struct TargetPick {
     /// Using ID rather than index survives graph refreshes that shift positions.
     pub original_change_id: String,
     pub descendant_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HunkPicker {
+    pub operation: HunkPickerOp,
+    pub files: Vec<PickerFile>,
+    pub cursor: usize,
+    pub scroll: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PickerFile {
+    pub path: String,
+    pub hunks: Vec<PickerHunk>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PickerHunk {
+    pub header: String,
+    pub lines: Vec<DiffLine>,
+    pub selected: bool,
 }
 
 pub struct AppState {
@@ -47,6 +68,7 @@ pub struct AppState {
     /// Saved cursor position for restoring focus when exiting a revset filter.
     pub(crate) omnibar_fallback_idx: Option<usize>,
     pub target_pick: Option<TargetPick>,
+    pub hunk_picker: Option<HunkPicker>,
 }
 
 impl AppState {
@@ -73,6 +95,7 @@ impl AppState {
             active_revset: None,
             omnibar_fallback_idx: None,
             target_pick: None,
+            hunk_picker: None,
         }
     }
 

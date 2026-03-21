@@ -104,15 +104,8 @@ impl EffectExecutor {
                     || backend.abandon(&change_id),
                 );
             }
-            Effect::Squash { change_id } => {
-                run_mutation(
-                    &backend,
-                    &tx,
-                    MutationKind::Squash,
-                    generation,
-                    &active_revset,
-                    || backend.squash(&change_id),
-                );
+            // Placeholders — wired in Task 6
+            Effect::LoadChangeDiff { .. } | Effect::Split { .. } | Effect::SquashPartial { .. } => {
             }
             Effect::Undo => {
                 run_mutation(
@@ -230,7 +223,8 @@ impl EffectExecutor {
             | Effect::New { .. }
             | Effect::Edit { .. }
             | Effect::Abandon { .. }
-            | Effect::Squash { .. }
+            | Effect::Split { .. }
+            | Effect::SquashPartial { .. }
             | Effect::Undo
             | Effect::Redo
             | Effect::BookmarkSet { .. }
@@ -242,7 +236,10 @@ impl EffectExecutor {
             | Effect::RebaseWithDescendants { .. } => {
                 self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1
             }
-            Effect::LoadOpLog | Effect::LoadFileDiff { .. } | Effect::SuspendForEditor { .. } => 0,
+            Effect::LoadOpLog
+            | Effect::LoadFileDiff { .. }
+            | Effect::LoadChangeDiff { .. }
+            | Effect::SuspendForEditor { .. } => 0,
         }
     }
 }

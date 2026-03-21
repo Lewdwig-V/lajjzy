@@ -580,14 +580,6 @@ impl RepoBackend for JjCliBackend {
         Ok(format!("Abandoned {change_id}"))
     }
 
-    fn squash(&self, change_id: &str) -> Result<String> {
-        // `-u` / `--use-destination-message` prevents jj from opening an editor
-        // to compose a combined description when both source and destination have
-        // non-empty descriptions.
-        self.run_jj(&["squash", "-r", change_id, "-u"])?;
-        Ok(format!("Squashed {change_id} into parent"))
-    }
-
     fn undo(&self) -> Result<String> {
         self.run_jj(&["undo"])?;
         Ok("Undid last operation".into())
@@ -1241,71 +1233,6 @@ new mode 100755";
 
         assert_ne!(new_wc_id, &prev_wc_id, "working copy should have moved");
         assert_eq!(new_wc_id, &first_id, "working copy should now be 'first'");
-    }
-
-    #[test]
-    fn squash_on_real_repo() {
-        if !jj_available() {
-            eprintln!("Skipping");
-            return;
-        }
-        let tmp = init_repo();
-
-        // Write a file in the initial change.
-        std::fs::write(tmp.path().join("parent.txt"), "parent content\n").unwrap();
-        Command::new("jj")
-            .args(["describe", "-m", "parent"])
-            .current_dir(tmp.path())
-            .status()
-            .unwrap();
-
-        // Create a child change and write another file.
-        Command::new("jj")
-            .args(["new"])
-            .current_dir(tmp.path())
-            .status()
-            .unwrap();
-        std::fs::write(tmp.path().join("child.txt"), "child content\n").unwrap();
-        Command::new("jj")
-            .args(["describe", "-m", "child"])
-            .current_dir(tmp.path())
-            .status()
-            .unwrap();
-
-        let backend = JjCliBackend::new(tmp.path()).unwrap();
-        let graph_before = backend.load_graph(None).unwrap();
-        let wc_idx = graph_before.working_copy_index.unwrap();
-        let child_id = graph_before.lines[wc_idx]
-            .change_id
-            .as_ref()
-            .unwrap()
-            .clone();
-
-        backend.squash(&child_id).unwrap();
-
-        let graph_after = backend.load_graph(None).unwrap();
-        // After squash the child change ID is gone from the graph.
-        // jj creates a new empty working-copy commit in its place, so the
-        // total node count stays the same — we verify absence of the original ID.
-        assert!(
-            !graph_after.details.contains_key(&child_id),
-            "squashed child change should not appear in graph"
-        );
-        // child.txt should now appear in the surviving parent change's files.
-        let surviving_id = graph_after
-            .node_indices()
-            .iter()
-            .filter_map(|&i| graph_after.lines[i].change_id.as_ref())
-            .find(|id| {
-                graph_after
-                    .details
-                    .get(*id)
-                    .is_some_and(|d| d.files.iter().any(|f| f.path == "child.txt"))
-            });
-        assert!(
-            surviving_id.is_some(),
-            "child.txt should appear in the squashed parent"
-        );
     }
 
     #[test]

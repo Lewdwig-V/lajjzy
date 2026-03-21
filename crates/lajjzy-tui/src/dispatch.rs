@@ -23,7 +23,8 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
         | MutationKind::New
         | MutationKind::Edit
         | MutationKind::Abandon
-        | MutationKind::Squash
+        | MutationKind::Split
+        | MutationKind::SquashPartial
         | MutationKind::Undo
         | MutationKind::Redo
         | MutationKind::BookmarkSet
@@ -298,6 +299,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             DetailMode::FileList => {
                 state.focus = PanelFocus::Graph;
             }
+            // HunkPicker back handled by HunkCancel in Task 4
+            DetailMode::HunkPicker => {}
         },
         Action::DiffScrollDown => {
             let total_lines: usize = state
@@ -391,6 +394,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 PanelFocus::Detail => match state.detail_mode {
                     DetailMode::FileList => HelpContext::DetailFileList,
                     DetailMode::DiffView => HelpContext::DetailDiffView,
+                    // Use Graph context for HunkPicker until dedicated help is added
+                    DetailMode::HunkPicker => HelpContext::Graph,
                 },
             };
             state.modal = Some(Modal::Help { context, scroll: 0 });
@@ -535,16 +540,17 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return vec![Effect::Abandon { change_id: cid }];
             }
         }
-        Action::Squash => {
-            if state.pending_mutation.is_some() {
-                state.status_message = Some("Operation in progress\u{2026}".into());
-                return vec![];
-            }
-            if let Some(cid) = state.selected_change_id().map(String::from) {
-                state.pending_mutation = Some(MutationKind::Squash);
-                return vec![Effect::Squash { change_id: cid }];
-            }
-        }
+        // Split / SquashPartial / hunk picker — placeholders, wired in Task 4
+        Action::Split
+        | Action::SquashPartial
+        | Action::ChangeDiffLoaded { .. }
+        | Action::HunkToggle
+        | Action::HunkSelectAll
+        | Action::HunkDeselectAll
+        | Action::HunkNextFile
+        | Action::HunkPrevFile
+        | Action::HunkConfirm
+        | Action::HunkCancel => {}
         Action::NewChange => {
             if state.pending_mutation.is_some() {
                 state.status_message = Some("Operation in progress\u{2026}".into());
@@ -1856,16 +1862,17 @@ mod tests {
     }
 
     #[test]
-    fn squash_emits_effect_and_sets_gate() {
+    fn split_placeholder_returns_empty() {
         let mut state = AppState::new(sample_graph());
-        let effects = dispatch(&mut state, Action::Squash);
-        assert_eq!(
-            effects,
-            vec![Effect::Squash {
-                change_id: "abc".into()
-            }]
-        );
-        assert_eq!(state.pending_mutation, Some(MutationKind::Squash));
+        let effects = dispatch(&mut state, Action::Split);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn squash_partial_placeholder_returns_empty() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::SquashPartial);
+        assert!(effects.is_empty());
     }
 
     #[test]
@@ -1917,7 +1924,7 @@ mod tests {
         let mut state = AppState::new(sample_graph());
         // Set the gate manually as if a prior mutation is in flight
         state.pending_mutation = Some(MutationKind::Abandon);
-        let effects = dispatch(&mut state, Action::Squash);
+        let effects = dispatch(&mut state, Action::NewChange);
         assert!(effects.is_empty());
         // Gate must still be the original Abandon — not overwritten
         assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
@@ -1991,11 +1998,11 @@ mod tests {
     #[test]
     fn repo_op_failed_clears_gate_and_sets_error() {
         let mut state = AppState::new(sample_graph());
-        state.pending_mutation = Some(MutationKind::Squash);
+        state.pending_mutation = Some(MutationKind::SquashPartial);
         let effects = dispatch(
             &mut state,
             Action::RepoOpFailed {
-                op: MutationKind::Squash,
+                op: MutationKind::SquashPartial,
                 error: "squash failed".into(),
             },
         );

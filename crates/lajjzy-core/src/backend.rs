@@ -36,9 +36,6 @@ pub trait RepoBackend: Send + Sync {
     /// Abandon (delete) the given change.
     fn abandon(&self, change_id: &str) -> Result<String>;
 
-    /// Squash the given change into its parent.
-    fn squash(&self, change_id: &str) -> Result<String>;
-
     /// Undo the most recent operation (`jj op restore @-`).
     fn undo(&self) -> Result<String>;
 

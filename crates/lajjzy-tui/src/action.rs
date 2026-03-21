@@ -1,4 +1,4 @@
-use lajjzy_core::types::{DiffHunk, GraphData, OpLogEntry};
+use lajjzy_core::types::{DiffHunk, FileDiff, GraphData, OpLogEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebaseMode {
@@ -16,6 +16,7 @@ pub enum PanelFocus {
 pub enum DetailMode {
     FileList,
     DiffView,
+    HunkPicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,7 +25,8 @@ pub enum MutationKind {
     New,
     Edit,
     Abandon,
-    Squash,
+    Split,
+    SquashPartial,
     Undo,
     Redo,
     BookmarkSet,
@@ -39,6 +41,12 @@ pub enum MutationKind {
 pub enum BackgroundKind {
     Push,
     Fetch,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HunkPickerOp {
+    Split { source: String },
+    Squash { source: String, destination: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +89,10 @@ pub enum Action {
     },
     OpLogLoaded(Result<Vec<OpLogEntry>, String>),
     FileDiffLoaded(Result<Vec<DiffHunk>, String>),
+    ChangeDiffLoaded {
+        operation: HunkPickerOp,
+        result: Result<Vec<FileDiff>, String>,
+    },
     RepoOpSuccess {
         op: MutationKind,
         message: String,
@@ -105,7 +117,8 @@ pub enum Action {
 
     // Mutation trigger actions
     Abandon,
-    Squash,
+    Split,
+    SquashPartial,
     NewChange,
     EditChange,
     OpenDescribe,
@@ -126,4 +139,13 @@ pub enum Action {
     PickCancel,
     PickFilterChar(char),
     PickFilterBackspace,
+
+    // Hunk picker actions
+    HunkToggle,
+    HunkSelectAll,
+    HunkDeselectAll,
+    HunkNextFile,
+    HunkPrevFile,
+    HunkConfirm,
+    HunkCancel,
 }
