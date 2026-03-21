@@ -11,25 +11,40 @@ pub struct OmnibarWidget<'a> {
     matches: &'a [usize], // graph line indices
     graph: &'a GraphData,
     cursor: usize,
+    has_active_revset: bool,
 }
 
 impl<'a> OmnibarWidget<'a> {
-    pub fn new(query: &'a str, matches: &'a [usize], graph: &'a GraphData, cursor: usize) -> Self {
+    pub fn new(
+        query: &'a str,
+        matches: &'a [usize],
+        graph: &'a GraphData,
+        cursor: usize,
+        has_active_revset: bool,
+    ) -> Self {
         Self {
             query,
             matches,
             graph,
             cursor,
+            has_active_revset,
         }
     }
 }
 
 impl Widget for OmnibarWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let title = if self.query.is_empty() && !self.has_active_revset {
+            " / Search or Revset "
+        } else if self.has_active_revset {
+            " / Revset (active) "
+        } else {
+            " / Search (Enter to filter as revset) "
+        };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Blue))
-            .title("Find Change");
+            .title(title);
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -165,7 +180,7 @@ mod tests {
     fn renders_query_and_results() {
         let graph = test_graph();
         let matches = vec![0, 1];
-        let widget = OmnibarWidget::new("ali", &matches, &graph, 0);
+        let widget = OmnibarWidget::new("ali", &matches, &graph, 0, false);
         let area = Rect::new(0, 0, 60, 8);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -180,7 +195,7 @@ mod tests {
     #[test]
     fn renders_no_matches() {
         let graph = test_graph();
-        let widget = OmnibarWidget::new("zzz", &[], &graph, 0);
+        let widget = OmnibarWidget::new("zzz", &[], &graph, 0, false);
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -189,5 +204,57 @@ mod tests {
             .map(|x| buf[(x, 2)].symbol().chars().next().unwrap_or(' '))
             .collect();
         assert!(line2.contains("no matches"));
+    }
+
+    fn title_from_buf(buf: &Buffer, width: u16) -> String {
+        // The block title appears on row 0 of the rendered area
+        (0..width)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    #[test]
+    fn omnibar_title_shows_search_hint() {
+        // Empty query, no active revset → title contains "Search or Revset"
+        let graph = test_graph();
+        let widget = OmnibarWidget::new("", &[], &graph, 0, false);
+        let area = Rect::new(0, 0, 60, 6);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let title = title_from_buf(&buf, 60);
+        assert!(
+            title.contains("Search or Revset"),
+            "expected 'Search or Revset' in title row, got: {title:?}"
+        );
+    }
+
+    #[test]
+    fn omnibar_title_shows_active_hint() {
+        // has_active_revset = true → title contains "Revset (active)"
+        let graph = test_graph();
+        let widget = OmnibarWidget::new("mine()", &[], &graph, 0, true);
+        let area = Rect::new(0, 0, 60, 6);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let title = title_from_buf(&buf, 60);
+        assert!(
+            title.contains("Revset (active)"),
+            "expected 'Revset (active)' in title row, got: {title:?}"
+        );
+    }
+
+    #[test]
+    fn omnibar_title_shows_enter_hint_when_typing() {
+        // Non-empty query, no active revset → title contains "Enter to filter as revset"
+        let graph = test_graph();
+        let widget = OmnibarWidget::new("foo", &[], &graph, 0, false);
+        let area = Rect::new(0, 0, 80, 6);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let title = title_from_buf(&buf, 80);
+        assert!(
+            title.contains("Enter to filter as revset"),
+            "expected 'Enter to filter as revset' in title row, got: {title:?}"
+        );
     }
 }

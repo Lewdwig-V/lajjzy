@@ -23,11 +23,13 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let detail = state.selected_detail();
     let error = state.error.as_deref();
     let status_message = state.status_message.as_deref();
+    let active_revset = state.active_revset.as_deref();
     let status_widget = StatusBarWidget::new(
         change_id,
         detail,
         error,
         status_message,
+        active_revset,
         &state.pending_background,
     );
     frame.render_widget(status_widget, outer[1]);
@@ -84,8 +86,14 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
         } => {
             let modal_area = centered_rect(60, 80, area);
             frame.render_widget(Clear, modal_area);
-            let widget =
-                crate::widgets::omnibar::OmnibarWidget::new(query, matches, &state.graph, *cursor);
+            let has_active = state.active_revset.is_some();
+            let widget = crate::widgets::omnibar::OmnibarWidget::new(
+                query,
+                matches,
+                &state.graph,
+                *cursor,
+                has_active,
+            );
             frame.render_widget(widget, modal_area);
         }
         Modal::Help { context, scroll } => {
