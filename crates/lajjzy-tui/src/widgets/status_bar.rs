@@ -45,7 +45,7 @@ impl Widget for StatusBarWidget<'_> {
             return;
         }
 
-        // Priority: error (red) > status_message (green) > pending indicator > normal info
+        // Priority: error (red) > status_message (green) > active_revset (cyan) > pending indicator > normal info
         if let Some(err) = self.error {
             let style = Style::default().fg(Color::Red);
             let line = Line::styled(err, style);
