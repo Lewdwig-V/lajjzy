@@ -62,4 +62,28 @@ pub trait RepoBackend: Send + Sync {
 
     /// Rebase a revision and all of its descendants onto a new parent.
     fn rebase_with_descendants(&self, source: &str, destination: &str) -> Result<String>;
+
+    /// Split a change into two: selected files move to a new child, unselected
+    /// stay in the original.
+    ///
+    /// `selections` describes every file in the change and which hunks are
+    /// selected. A file is considered "fully selected" when
+    /// `selected_hunks.len() == total_hunks`.  Fully-selected files end up in
+    /// the child; the rest remain in the original.
+    fn split(
+        &self,
+        change_id: &str,
+        selections: &[crate::types::FileHunkSelection],
+    ) -> Result<String>;
+
+    /// Squash a subset of files from a change into its parent.
+    ///
+    /// Any file in `selections` with at least one selected hunk is moved to
+    /// the parent.  Uses `-u` so jj does not open `$EDITOR` for a combined
+    /// description.
+    fn squash_partial(
+        &self,
+        change_id: &str,
+        selections: &[crate::types::FileHunkSelection],
+    ) -> Result<String>;
 }

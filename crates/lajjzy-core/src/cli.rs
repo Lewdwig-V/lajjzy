@@ -627,6 +627,63 @@ impl RepoBackend for JjCliBackend {
         self.run_jj(&["rebase", "-s", source, "--onto", destination])?;
         Ok(format!("Rebased {source} + descendants onto {destination}"))
     }
+
+    fn split(
+        &self,
+        change_id: &str,
+        selections: &[crate::types::FileHunkSelection],
+    ) -> Result<String> {
+        // Our convention: "selected = moves to child".
+        // `jj split <paths>` keeps <paths> in the ORIGINAL commit; the rest go
+        // to the NEW child.  So we must pass the *complement* — the files that
+        // are NOT fully selected — to jj split, keeping them in the original.
+        // Fully-selected files (selected_hunks.len() == total_hunks) are the
+        // ones we want in the child, so they must NOT appear in the args.
+        let all_paths: std::collections::HashSet<&str> =
+            selections.iter().map(|s| s.path.as_str()).collect();
+        let fully_selected: std::collections::HashSet<&str> = selections
+            .iter()
+            .filter(|s| !s.selected_hunks.is_empty() && s.selected_hunks.len() == s.total_hunks)
+            .map(|s| s.path.as_str())
+            .collect();
+        let mut keep_in_original: Vec<&str> =
+            all_paths.difference(&fully_selected).copied().collect();
+        if keep_in_original.is_empty() {
+            bail!("Cannot split: all files are fully selected (nothing would remain in original)");
+        }
+        // Sort for determinism in tests and CLI output.
+        keep_in_original.sort_unstable();
+        // `-m ""` prevents jj from opening $EDITOR for the first commit's
+        // description.  The second (child) commit keeps the original description.
+        let mut args = vec!["split", "-r", change_id, "-m", "", "--"];
+        args.extend(keep_in_original);
+        self.run_jj(&args)?;
+        Ok(format!("Split {change_id}"))
+    }
+
+    fn squash_partial(
+        &self,
+        change_id: &str,
+        selections: &[crate::types::FileHunkSelection],
+    ) -> Result<String> {
+        let mut selected_paths: Vec<&str> = selections
+            .iter()
+            .filter(|s| !s.selected_hunks.is_empty())
+            .map(|s| s.path.as_str())
+            .collect();
+        if selected_paths.is_empty() {
+            bail!("No files selected for squash");
+        }
+        // Sort for determinism.
+        selected_paths.sort_unstable();
+        // `-u` / `--use-destination-message` prevents jj from opening $EDITOR
+        // for a combined description when both source and destination have
+        // non-empty descriptions.
+        let mut args = vec!["squash", "-r", change_id, "-u", "--"];
+        args.extend(selected_paths);
+        self.run_jj(&args)?;
+        Ok(format!("Squashed from {change_id}"))
+    }
 }
 
 #[cfg(test)]
@@ -1673,5 +1730,132 @@ diff --git a/my file.txt b/my file.txt
         for f in &files {
             assert!(!f.hunks.is_empty(), "file {} should have hunks", f.path);
         }
+    }
+
+    // ── split / squash_partial tests ─────────────────────────────────────────
+
+    #[test]
+    fn split_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        std::fs::write(tmp.path().join("keep.txt"), "keep\n").unwrap();
+        std::fs::write(tmp.path().join("move.txt"), "move\n").unwrap();
+        backend.describe("@", "two files").unwrap();
+
+        // "move.txt" is fully selected — it should end up in the child change.
+        // "keep.txt" is NOT selected — it stays in the original.
+        let selections = vec![
+            crate::types::FileHunkSelection {
+                path: "keep.txt".into(),
+                selected_hunks: vec![],
+                total_hunks: 1,
+            },
+            crate::types::FileHunkSelection {
+                path: "move.txt".into(),
+                selected_hunks: vec![0],
+                total_hunks: 1,
+            },
+        ];
+        backend.split("@", &selections).unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+        // root + original (keep.txt) + child (move.txt) = at least 3 node lines.
+        assert!(
+            graph.node_indices().len() >= 3,
+            "expected at least 3 change nodes after split, got {}",
+            graph.node_indices().len()
+        );
+    }
+
+    #[test]
+    fn split_rejects_all_files_selected() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "a\n").unwrap();
+        backend.describe("@", "one file").unwrap();
+
+        let selections = vec![crate::types::FileHunkSelection {
+            path: "a.txt".into(),
+            selected_hunks: vec![0],
+            total_hunks: 1,
+        }];
+        let result = backend.split("@", &selections);
+        assert!(
+            result.is_err(),
+            "split with all files selected should return an error"
+        );
+    }
+
+    #[test]
+    fn squash_partial_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Set up: parent change, then a child change with a file.
+        backend.describe("@", "parent").unwrap();
+        backend.new_change("@").unwrap();
+        std::fs::write(tmp.path().join("file.txt"), "content\n").unwrap();
+        backend.describe("@", "child with file").unwrap();
+
+        let selections = vec![crate::types::FileHunkSelection {
+            path: "file.txt".into(),
+            selected_hunks: vec![0],
+            total_hunks: 1,
+        }];
+        backend.squash_partial("@", &selections).unwrap();
+
+        // After squash_partial the child may be abandoned (it became empty).
+        // file.txt should now appear in the parent.
+        let graph = backend.load_graph(None).unwrap();
+        assert!(
+            graph.node_indices().len() >= 2,
+            "expected at least 2 node lines after squash_partial"
+        );
+        let file_in_parent = graph
+            .node_indices()
+            .iter()
+            .filter_map(|&i| graph.detail_at(i))
+            .any(|d| d.files.iter().any(|f| f.path == "file.txt"));
+        assert!(
+            file_in_parent,
+            "file.txt should appear in a change after squash_partial"
+        );
+    }
+
+    #[test]
+    fn squash_partial_rejects_empty_selection() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "a\n").unwrap();
+        backend.describe("@", "has file").unwrap();
+
+        // No hunks selected for any file.
+        let selections = vec![crate::types::FileHunkSelection {
+            path: "a.txt".into(),
+            selected_hunks: vec![],
+            total_hunks: 1,
+        }];
+        let result = backend.squash_partial("@", &selections);
+        assert!(
+            result.is_err(),
+            "squash_partial with no selected hunks should return an error"
+        );
     }
 }
