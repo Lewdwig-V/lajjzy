@@ -38,8 +38,10 @@ impl EffectExecutor {
         let generation = self.next_graph_generation(&effect);
         thread::spawn(move || match effect {
             // Read-only effects
-            Effect::LoadGraph { revset: _ } => {
-                let result = backend.load_graph().map_err(|e| e.to_string());
+            Effect::LoadGraph { revset } => {
+                let result = backend
+                    .load_graph(revset.as_deref())
+                    .map_err(|e| e.to_string());
                 let _ = tx.send(Action::GraphLoaded { generation, result });
             }
             Effect::LoadOpLog => {
@@ -153,7 +155,10 @@ fn run_mutation(
         Ok(message) => {
             // Bundle refreshed graph with success so dispatch clears the gate
             // and installs the new graph atomically — no window for stale-graph mutations.
-            let graph = Some((generation, backend.load_graph().map_err(|e| e.to_string())));
+            let graph = Some((
+                generation,
+                backend.load_graph(None).map_err(|e| e.to_string()),
+            ));
             let _ = tx.send(Action::RepoOpSuccess { op, message, graph });
         }
         Err(e) => {
@@ -261,7 +266,7 @@ fn main() -> Result<()> {
     let cwd = env::current_dir().context("Failed to get current directory")?;
     let backend = Arc::new(JjCliBackend::new(&cwd).context("Failed to open jj workspace")?);
 
-    let graph = backend.load_graph().context("Failed to load graph")?;
+    let graph = backend.load_graph(None).context("Failed to load graph")?;
     let mut state = AppState::new(graph);
 
     let (tx, rx) = mpsc::channel();

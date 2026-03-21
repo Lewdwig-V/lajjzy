@@ -348,7 +348,7 @@ impl RepoBackend for JjCliBackend {
         parse_diff_output(&stdout)
     }
 
-    fn load_graph(&self) -> Result<GraphData> {
+    fn load_graph(&self, revset: Option<&str>) -> Result<GraphData> {
         // Capture current operation head for snapshot versioning.
         let op_id = self
             .run_jj(&[
@@ -380,8 +380,12 @@ impl RepoBackend for JjCliBackend {
             " ++ \"\\n\"",
         );
 
+        let mut args = vec!["log", "--summary", "--color=never", "-T", template];
+        if let Some(rev) = revset {
+            args.extend(["-r", rev]);
+        }
         let output = Command::new("jj")
-            .args(["log", "--summary", "--color=never", "-T", template])
+            .args(&args)
             .current_dir(&self.workspace_root)
             .output()
             .context("Failed to run `jj log`")?;
@@ -754,7 +758,7 @@ new mode 100755";
             .unwrap();
 
         let backend = JjCliBackend::new(tmp.path()).unwrap();
-        let graph = backend.load_graph().unwrap();
+        let graph = backend.load_graph(None).unwrap();
         let wc_idx = graph.working_copy_index.unwrap();
         let change_id = graph.lines[wc_idx].change_id.as_ref().unwrap();
 
@@ -826,7 +830,7 @@ new mode 100755";
             .unwrap();
 
         let backend = JjCliBackend::new(tmp.path()).unwrap();
-        let graph = backend.load_graph().unwrap();
+        let graph = backend.load_graph(None).unwrap();
 
         assert!(!graph.node_indices().is_empty());
         assert!(graph.working_copy_index.is_some());
@@ -860,7 +864,7 @@ new mode 100755";
         backend.describe("@", "to-abandon").unwrap();
         backend.new_change("@").unwrap();
 
-        let graph_before = backend.load_graph().unwrap();
+        let graph_before = backend.load_graph(None).unwrap();
         let node_count_before = graph_before.node_indices().len();
 
         // Identify the non-working-copy, non-root change to abandon.
@@ -888,7 +892,7 @@ new mode 100755";
 
         backend.abandon(&parent_id).unwrap();
 
-        let graph_after = backend.load_graph().unwrap();
+        let graph_after = backend.load_graph(None).unwrap();
         assert!(
             graph_after.node_indices().len() < node_count_before,
             "node count should decrease after abandon"
@@ -910,7 +914,7 @@ new mode 100755";
 
         backend.describe("@", "my description").unwrap();
 
-        let graph = backend.load_graph().unwrap();
+        let graph = backend.load_graph(None).unwrap();
         let wc_idx = graph.working_copy_index.unwrap();
         let change_id = graph.lines[wc_idx].change_id.as_ref().unwrap();
         let detail = graph.details.get(change_id).unwrap();
@@ -926,12 +930,12 @@ new mode 100755";
         let tmp = init_repo();
         let backend = JjCliBackend::new(tmp.path()).unwrap();
 
-        let graph_before = backend.load_graph().unwrap();
+        let graph_before = backend.load_graph(None).unwrap();
         let node_count_before = graph_before.node_indices().len();
 
         backend.new_change("@").unwrap();
 
-        let graph_after = backend.load_graph().unwrap();
+        let graph_after = backend.load_graph(None).unwrap();
         assert!(
             graph_after.node_indices().len() > node_count_before,
             "node count should increase after new_change"
@@ -960,7 +964,7 @@ new mode 100755";
             .unwrap();
 
         // Get the parent's change ID
-        let graph = backend.load_graph().unwrap();
+        let graph = backend.load_graph(None).unwrap();
         let parent_id = graph
             .node_indices()
             .iter()
@@ -978,7 +982,7 @@ new mode 100755";
         // Insert after parent — should NOT fork, child should be reparented
         backend.new_change(&parent_id).unwrap();
 
-        let graph_after = backend.load_graph().unwrap();
+        let graph_after = backend.load_graph(None).unwrap();
         // The new change is now between parent and child (inserted, not forked).
         // Verify child still exists (wasn't lost) and there's one more node.
         let has_child = graph_after.node_indices().iter().any(|&i| {
@@ -1012,7 +1016,7 @@ new mode 100755";
         backend.new_change("@").unwrap();
         backend.describe("@", "second").unwrap();
 
-        let graph_before = backend.load_graph().unwrap();
+        let graph_before = backend.load_graph(None).unwrap();
         let prev_wc_idx = graph_before.working_copy_index.unwrap();
         let prev_wc_id = graph_before.lines[prev_wc_idx]
             .change_id
@@ -1036,7 +1040,7 @@ new mode 100755";
 
         backend.edit_change(&first_id).unwrap();
 
-        let graph_after = backend.load_graph().unwrap();
+        let graph_after = backend.load_graph(None).unwrap();
         let new_wc_idx = graph_after.working_copy_index.unwrap();
         let new_wc_id = graph_after.lines[new_wc_idx].change_id.as_ref().unwrap();
 
@@ -1074,7 +1078,7 @@ new mode 100755";
             .unwrap();
 
         let backend = JjCliBackend::new(tmp.path()).unwrap();
-        let graph_before = backend.load_graph().unwrap();
+        let graph_before = backend.load_graph(None).unwrap();
         let wc_idx = graph_before.working_copy_index.unwrap();
         let child_id = graph_before.lines[wc_idx]
             .change_id
@@ -1084,7 +1088,7 @@ new mode 100755";
 
         backend.squash(&child_id).unwrap();
 
-        let graph_after = backend.load_graph().unwrap();
+        let graph_after = backend.load_graph(None).unwrap();
         // After squash the child change ID is gone from the graph.
         // jj creates a new empty working-copy commit in its place, so the
         // total node count stays the same — we verify absence of the original ID.
@@ -1120,7 +1124,7 @@ new mode 100755";
 
         backend.describe("@", "before undo").unwrap();
         {
-            let graph = backend.load_graph().unwrap();
+            let graph = backend.load_graph(None).unwrap();
             let wc_idx = graph.working_copy_index.unwrap();
             let id = graph.lines[wc_idx].change_id.as_ref().unwrap();
             assert_eq!(graph.details[id].description, "before undo");
@@ -1128,7 +1132,7 @@ new mode 100755";
 
         backend.undo().unwrap();
 
-        let graph = backend.load_graph().unwrap();
+        let graph = backend.load_graph(None).unwrap();
         let wc_idx = graph.working_copy_index.unwrap();
         let id = graph.lines[wc_idx].change_id.as_ref().unwrap();
         assert_ne!(
@@ -1150,7 +1154,7 @@ new mode 100755";
         backend.undo().unwrap();
 
         {
-            let graph = backend.load_graph().unwrap();
+            let graph = backend.load_graph(None).unwrap();
             let wc_idx = graph.working_copy_index.unwrap();
             let id = graph.lines[wc_idx].change_id.as_ref().unwrap();
             assert_ne!(graph.details[id].description, "redo target");
@@ -1158,7 +1162,7 @@ new mode 100755";
 
         backend.redo().unwrap();
 
-        let graph = backend.load_graph().unwrap();
+        let graph = backend.load_graph(None).unwrap();
         let wc_idx = graph.working_copy_index.unwrap();
         let id = graph.lines[wc_idx].change_id.as_ref().unwrap();
         assert_eq!(
@@ -1178,7 +1182,7 @@ new mode 100755";
 
         backend.bookmark_set("@", "mybookmark").unwrap();
 
-        let graph = backend.load_graph().unwrap();
+        let graph = backend.load_graph(None).unwrap();
         let has_bookmark = graph.details.values().any(|d| {
             d.bookmarks
                 .iter()
@@ -1199,7 +1203,7 @@ new mode 100755";
         backend.bookmark_set("@", "todelete").unwrap();
         backend.bookmark_delete("todelete").unwrap();
 
-        let graph = backend.load_graph().unwrap();
+        let graph = backend.load_graph(None).unwrap();
         let has_bookmark = graph.details.values().any(|d| {
             d.bookmarks
                 .iter()
@@ -1235,5 +1239,37 @@ new mode 100755";
         // With no remote configured this will error; the test just validates the
         // method compiles and returns a Result.
         let _ = result;
+    }
+
+    #[test]
+    fn load_graph_with_revset_filters_results() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        backend.describe("@", "keep me").unwrap();
+        backend.new_change("@").unwrap();
+        backend.describe("@", "also keep").unwrap();
+
+        let full = backend.load_graph(None).unwrap();
+        let full_count = full.node_indices().len();
+
+        let filtered = backend.load_graph(Some("@")).unwrap();
+        assert!(filtered.node_indices().len() < full_count);
+        assert!(filtered.working_copy_index.is_some());
+    }
+
+    #[test]
+    fn load_graph_with_invalid_revset_returns_error() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        let result = backend.load_graph(Some("not_a_valid_revset!!!"));
+        assert!(result.is_err());
     }
 }
