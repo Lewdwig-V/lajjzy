@@ -1,15 +1,15 @@
-use lajjzy_core::backend::RepoBackend;
 use lajjzy_core::types::GraphData;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use crate::action::{Action, DetailMode, PanelFocus};
 use crate::app::AppState;
+use crate::effect::Effect;
 use crate::modal::{HelpContext, Modal};
 
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_pass_by_value)]
-pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend) {
+pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
     match action {
         Action::MoveDown => {
             let nodes = state.graph.node_indices();
@@ -48,13 +48,24 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
         }
         Action::Refresh => {
             state.error = None;
-            let prev_change_id = state.selected_change_id().map(String::from);
-            match backend.load_graph() {
-                Ok(new_graph) => {
-                    state.graph = new_graph;
-                    state.reset_detail();
+            return vec![Effect::LoadGraph { revset: None }];
+        }
+        Action::GraphLoaded(result) => match result {
+            Ok(new_graph) => {
+                let prev_id = state.selected_change_id().map(String::from);
+                state.graph = new_graph;
+                state.reset_detail();
+
+                if state.cursor_follows_working_copy {
+                    state.cursor_follows_working_copy = false;
+                    state.cursor = state
+                        .graph
+                        .working_copy_index
+                        .or_else(|| state.graph.node_indices().first().copied())
+                        .unwrap_or(0);
+                } else {
                     let nodes = state.graph.node_indices();
-                    state.cursor = prev_change_id
+                    state.cursor = prev_id
                         .as_deref()
                         .and_then(|id| {
                             nodes
@@ -66,11 +77,11 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
                         .or_else(|| nodes.first().copied())
                         .unwrap_or(0);
                 }
-                Err(e) => {
-                    state.error = Some(format!("Refresh failed: {e}"));
-                }
             }
-        }
+            Err(e) => {
+                state.error = Some(format!("Failed to load graph: {e}"));
+            }
+        },
         Action::TabFocus | Action::BackTabFocus => {
             state.focus = match state.focus {
                 PanelFocus::Graph => PanelFocus::Detail,
@@ -108,19 +119,23 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
                     raw_path.clone()
                 };
 
-                match backend.file_diff(&cid, &diff_path) {
-                    Ok(hunks) => {
-                        state.diff_data = hunks;
-                        state.diff_scroll = 0;
-                        state.detail_mode = DetailMode::DiffView;
-                    }
-                    Err(e) => {
-                        state.diff_data = vec![];
-                        state.error = Some(format!("Failed to load diff for {raw_path}: {e}"));
-                    }
-                }
+                return vec![Effect::LoadFileDiff {
+                    change_id: cid,
+                    path: diff_path,
+                }];
             }
         }
+        Action::FileDiffLoaded(result) => match result {
+            Ok(hunks) => {
+                state.diff_data = hunks;
+                state.diff_scroll = 0;
+                state.detail_mode = DetailMode::DiffView;
+            }
+            Err(e) => {
+                state.diff_data = vec![];
+                state.error = Some(format!("Failed to load diff: {e}"));
+            }
+        },
         Action::DetailBack => match state.detail_mode {
             DetailMode::DiffView => {
                 state.detail_mode = DetailMode::FileList;
@@ -173,20 +188,21 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
             if matches!(state.modal, Some(Modal::OpLog { .. })) {
                 state.modal = None;
             } else {
-                match backend.op_log() {
-                    Ok(entries) => {
-                        state.modal = Some(Modal::OpLog {
-                            entries,
-                            cursor: 0,
-                            scroll: 0,
-                        });
-                    }
-                    Err(e) => {
-                        state.error = Some(format!("Failed to load op log: {e}"));
-                    }
-                }
+                return vec![Effect::LoadOpLog];
             }
         }
+        Action::OpLogLoaded(result) => match result {
+            Ok(entries) => {
+                state.modal = Some(Modal::OpLog {
+                    entries,
+                    cursor: 0,
+                    scroll: 0,
+                });
+            }
+            Err(e) => {
+                state.error = Some(format!("Failed to load op log: {e}"));
+            }
+        },
         Action::OpenBookmarks => {
             let mut bookmarks = Vec::new();
             for &idx in state.graph.node_indices() {
@@ -325,10 +341,7 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
             }
         }
         // M2 actions — handled in later tasks; no-op for now.
-        Action::GraphLoaded(_)
-        | Action::OpLogLoaded(_)
-        | Action::FileDiffLoaded(_)
-        | Action::RepoOpSuccess { .. }
+        Action::RepoOpSuccess { .. }
         | Action::RepoOpFailed { .. }
         | Action::EditorComplete { .. }
         | Action::Abandon
@@ -358,6 +371,8 @@ pub fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)
             state.cursor = first;
         }
     }
+
+    vec![]
 }
 
 fn fuzzy_match(query: &str, graph: &GraphData) -> Vec<usize> {
@@ -392,52 +407,9 @@ fn fuzzy_match(query: &str, graph: &GraphData) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Result;
     use std::collections::HashMap;
 
     use lajjzy_core::types::{ChangeDetail, GraphData, GraphLine};
-
-    struct MockBackend {
-        graph: GraphData,
-    }
-
-    impl RepoBackend for MockBackend {
-        fn load_graph(&self) -> Result<GraphData> {
-            Ok(self.graph.clone())
-        }
-
-        fn file_diff(
-            &self,
-            _change_id: &str,
-            _path: &str,
-        ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
-            Ok(vec![])
-        }
-
-        fn op_log(&self) -> Result<Vec<lajjzy_core::types::OpLogEntry>> {
-            Ok(vec![])
-        }
-    }
-
-    struct FailingBackend;
-
-    impl RepoBackend for FailingBackend {
-        fn load_graph(&self) -> Result<GraphData> {
-            anyhow::bail!("connection lost")
-        }
-
-        fn file_diff(
-            &self,
-            _change_id: &str,
-            _path: &str,
-        ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
-            anyhow::bail!("connection lost")
-        }
-
-        fn op_log(&self) -> Result<Vec<lajjzy_core::types::OpLogEntry>> {
-            anyhow::bail!("connection lost")
-        }
-    }
 
     fn sample_graph() -> GraphData {
         GraphData::new(
@@ -574,454 +546,6 @@ mod tests {
         )
     }
 
-    /// Mock that returns non-empty hunks from `file_diff`.
-    struct DiffMockBackend {
-        graph: GraphData,
-    }
-
-    impl RepoBackend for DiffMockBackend {
-        fn load_graph(&self) -> Result<GraphData> {
-            Ok(self.graph.clone())
-        }
-
-        fn op_log(&self) -> Result<Vec<lajjzy_core::types::OpLogEntry>> {
-            Ok(vec![])
-        }
-
-        fn file_diff(
-            &self,
-            _change_id: &str,
-            _path: &str,
-        ) -> Result<Vec<lajjzy_core::types::DiffHunk>> {
-            Ok(vec![lajjzy_core::types::DiffHunk {
-                header: "@@ -1,1 +1,1 @@".to_string(),
-                lines: vec![
-                    lajjzy_core::types::DiffLine {
-                        kind: lajjzy_core::types::DiffLineKind::Removed,
-                        content: "old".to_string(),
-                    },
-                    lajjzy_core::types::DiffLine {
-                        kind: lajjzy_core::types::DiffLineKind::Added,
-                        content: "new".to_string(),
-                    },
-                ],
-            }])
-        }
-    }
-
-    fn mock() -> MockBackend {
-        MockBackend {
-            graph: sample_graph(),
-        }
-    }
-
-    #[test]
-    fn initial_cursor_on_working_copy() {
-        let state = AppState::new(sample_graph());
-        assert_eq!(state.cursor(), 0);
-        assert_eq!(state.selected_change_id(), Some("abc"));
-    }
-
-    #[test]
-    fn move_down_skips_connector_lines() {
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::MoveDown, &mock());
-        assert_eq!(state.cursor(), 2);
-        assert_eq!(state.selected_change_id(), Some("def"));
-    }
-
-    #[test]
-    fn move_up_skips_connector_lines() {
-        let mut state = AppState::new(sample_graph());
-        state.set_cursor_for_test(2);
-        dispatch(&mut state, Action::MoveUp, &mock());
-        assert_eq!(state.cursor(), 0);
-    }
-
-    #[test]
-    fn move_down_at_bottom_stays() {
-        let mut state = AppState::new(sample_graph());
-        state.set_cursor_for_test(4);
-        dispatch(&mut state, Action::MoveDown, &mock());
-        assert_eq!(state.cursor(), 4);
-    }
-
-    #[test]
-    fn move_up_at_top_stays() {
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::MoveUp, &mock());
-        assert_eq!(state.cursor(), 0);
-    }
-
-    #[test]
-    fn jump_to_top() {
-        let mut state = AppState::new(sample_graph());
-        state.set_cursor_for_test(4);
-        dispatch(&mut state, Action::JumpToTop, &mock());
-        assert_eq!(state.cursor(), 0);
-    }
-
-    #[test]
-    fn jump_to_bottom() {
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::JumpToBottom, &mock());
-        assert_eq!(state.cursor(), 4);
-    }
-
-    #[test]
-    fn quit_sets_flag() {
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::Quit, &mock());
-        assert!(state.should_quit);
-    }
-
-    #[test]
-    fn refresh_preserves_selected_change() {
-        let mut state = AppState::new(sample_graph());
-        state.set_cursor_for_test(2);
-        dispatch(&mut state, Action::Refresh, &mock());
-        assert_eq!(state.cursor(), 2);
-        assert_eq!(state.selected_change_id(), Some("def"));
-    }
-
-    #[test]
-    fn initial_cursor_fallback_without_working_copy() {
-        let mut graph = sample_graph();
-        graph.working_copy_index = None;
-        let state = AppState::new(graph);
-        assert_eq!(state.cursor(), 0);
-    }
-
-    #[test]
-    fn refresh_falls_back_when_change_disappears() {
-        let mut state = AppState::new(sample_graph());
-        state.set_cursor_for_test(2); // at "def"
-
-        // Build a new graph without the "def" change
-        let sg = sample_graph();
-        let mut lines: Vec<GraphLine> = sg.lines.into_iter().collect();
-        lines.remove(3);
-        lines.remove(2);
-        let mut details = sg.details;
-        details.remove("def");
-        let new_graph = GraphData::new(lines, details, sg.working_copy_index);
-        let new_mock = MockBackend { graph: new_graph };
-
-        dispatch(&mut state, Action::Refresh, &new_mock);
-        assert_eq!(state.cursor(), 0);
-        assert_eq!(state.selected_change_id(), Some("abc"));
-    }
-
-    #[test]
-    fn refresh_error_preserves_graph_and_sets_error() {
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::Refresh, &FailingBackend);
-        assert!(state.error.is_some());
-        assert!(state.error.as_ref().unwrap().contains("connection lost"));
-        assert_eq!(state.graph.lines.len(), 5);
-    }
-
-    #[test]
-    fn navigation_preserves_error() {
-        let mut state = AppState::new(sample_graph());
-        state.error = Some("old error".into());
-        dispatch(&mut state, Action::MoveDown, &mock());
-        assert!(state.error.is_some());
-        assert!(state.error.as_ref().unwrap().contains("old error"));
-    }
-
-    #[test]
-    fn refresh_clears_error_on_success() {
-        let mut state = AppState::new(sample_graph());
-        state.error = Some("old error".into());
-        dispatch(&mut state, Action::Refresh, &mock());
-        assert!(state.error.is_none());
-    }
-
-    // --- New tests for Task 6 ---
-
-    #[test]
-    fn new_state_initializes_detail_fields() {
-        let state = AppState::new(sample_graph());
-        assert_eq!(state.focus, PanelFocus::Graph);
-        assert_eq!(state.detail_cursor(), 0);
-        assert_eq!(state.detail_mode, DetailMode::FileList);
-        assert_eq!(state.diff_scroll, 0);
-        assert!(state.diff_data.is_empty());
-    }
-
-    #[test]
-    fn tab_focus_toggles() {
-        let mut state = AppState::new(sample_graph());
-        assert_eq!(state.focus, PanelFocus::Graph);
-        dispatch(&mut state, Action::TabFocus, &mock());
-        assert_eq!(state.focus, PanelFocus::Detail);
-        dispatch(&mut state, Action::TabFocus, &mock());
-        assert_eq!(state.focus, PanelFocus::Graph);
-        // BackTabFocus also toggles
-        dispatch(&mut state, Action::BackTabFocus, &mock());
-        assert_eq!(state.focus, PanelFocus::Detail);
-    }
-
-    #[test]
-    fn graph_cursor_move_resets_detail() {
-        let mut state = AppState::new(sample_graph_with_files());
-        state.set_detail_cursor_for_test(1);
-        state.detail_mode = DetailMode::DiffView;
-        state.diff_scroll = 5;
-        dispatch(&mut state, Action::MoveDown, &mock());
-        assert_eq!(state.detail_cursor(), 0);
-        assert_eq!(state.detail_mode, DetailMode::FileList);
-        assert_eq!(state.diff_scroll, 0);
-        assert!(state.diff_data.is_empty());
-    }
-
-    #[test]
-    fn jump_to_working_copy() {
-        let mut state = AppState::new(sample_graph());
-        state.set_cursor_for_test(4);
-        dispatch(&mut state, Action::JumpToWorkingCopy, &mock());
-        assert_eq!(state.cursor(), 0);
-        assert_eq!(state.selected_change_id(), Some("abc"));
-    }
-
-    #[test]
-    fn jump_to_working_copy_noop_when_none() {
-        let mut graph = sample_graph();
-        graph.working_copy_index = None;
-        let mut state = AppState::new(graph);
-        state.set_cursor_for_test(4);
-        dispatch(&mut state, Action::JumpToWorkingCopy, &mock());
-        // cursor stays at 4 since there's no working copy
-        assert_eq!(state.cursor(), 4);
-    }
-
-    #[test]
-    fn detail_back_from_diff_returns_to_file_list() {
-        let mut state = AppState::new(sample_graph());
-        state.focus = PanelFocus::Detail;
-        state.detail_mode = DetailMode::DiffView;
-        dispatch(&mut state, Action::DetailBack, &mock());
-        assert_eq!(state.detail_mode, DetailMode::FileList);
-        assert_eq!(state.focus, PanelFocus::Detail);
-    }
-
-    #[test]
-    fn detail_back_from_file_list_returns_focus_to_graph() {
-        let mut state = AppState::new(sample_graph());
-        state.focus = PanelFocus::Detail;
-        state.detail_mode = DetailMode::FileList;
-        dispatch(&mut state, Action::DetailBack, &mock());
-        assert_eq!(state.focus, PanelFocus::Graph);
-    }
-
-    #[test]
-    fn detail_enter_with_no_files_is_noop() {
-        // sample_graph has empty files lists
-        let mut state = AppState::new(sample_graph());
-        state.focus = PanelFocus::Detail;
-        dispatch(&mut state, Action::DetailEnter, &mock());
-        // mode stays FileList, no diff data loaded
-        assert_eq!(state.detail_mode, DetailMode::FileList);
-        assert!(state.diff_data.is_empty());
-    }
-
-    #[test]
-    fn detail_enter_loads_diff() {
-        let graph = sample_graph_with_files();
-        let mock = DiffMockBackend {
-            graph: graph.clone(),
-        };
-        let mut state = AppState::new(graph);
-        state.focus = PanelFocus::Detail;
-
-        dispatch(&mut state, Action::DetailEnter, &mock);
-        assert_eq!(state.detail_mode, DetailMode::DiffView);
-        assert!(!state.diff_data.is_empty());
-    }
-
-    #[test]
-    fn detail_enter_error_sets_state_error() {
-        let mut state = AppState::new(sample_graph_with_files());
-        state.focus = PanelFocus::Detail;
-
-        dispatch(&mut state, Action::DetailEnter, &FailingBackend);
-        assert!(state.error.is_some());
-        assert_eq!(state.detail_mode, DetailMode::FileList); // didn't switch
-    }
-
-    #[test]
-    fn detail_move_down_with_files() {
-        let mock = MockBackend {
-            graph: sample_graph_with_files(),
-        };
-        let mut state = AppState::new(sample_graph_with_files());
-        assert_eq!(state.detail_cursor(), 0);
-
-        dispatch(&mut state, Action::DetailMoveDown, &mock);
-        assert_eq!(state.detail_cursor(), 1);
-    }
-
-    #[test]
-    fn detail_move_down_at_boundary_stays() {
-        let mock = MockBackend {
-            graph: sample_graph_with_files(),
-        };
-        let mut state = AppState::new(sample_graph_with_files());
-        let file_count = state.selected_detail().unwrap().files.len();
-        for _ in 0..file_count {
-            dispatch(&mut state, Action::DetailMoveDown, &mock);
-        }
-        let cursor_before = state.detail_cursor();
-        dispatch(&mut state, Action::DetailMoveDown, &mock);
-        assert_eq!(state.detail_cursor(), cursor_before);
-    }
-
-    #[test]
-    fn detail_move_up_at_zero_stays() {
-        let mock = MockBackend {
-            graph: sample_graph_with_files(),
-        };
-        let mut state = AppState::new(sample_graph_with_files());
-        dispatch(&mut state, Action::DetailMoveUp, &mock);
-        assert_eq!(state.detail_cursor(), 0);
-    }
-
-    #[test]
-    fn refresh_resets_detail_state() {
-        let mock = MockBackend {
-            graph: sample_graph(),
-        };
-        let mut state = AppState::new(sample_graph());
-        state.detail_mode = DetailMode::DiffView;
-        state.diff_scroll = 5;
-
-        dispatch(&mut state, Action::Refresh, &mock);
-        assert_eq!(state.detail_mode, DetailMode::FileList);
-        assert_eq!(state.diff_scroll, 0);
-        assert_eq!(state.detail_cursor(), 0);
-    }
-
-    // --- Modal system tests ---
-
-    #[test]
-    fn toggle_op_log_opens_and_closes() {
-        let mock = mock();
-        let mut state = AppState::new(sample_graph());
-        assert!(state.modal.is_none());
-        dispatch(&mut state, Action::ToggleOpLog, &mock);
-        assert!(matches!(state.modal, Some(Modal::OpLog { .. })));
-        dispatch(&mut state, Action::ModalDismiss, &mock);
-        assert!(state.modal.is_none());
-    }
-
-    #[test]
-    fn modal_dismiss_does_not_quit() {
-        let mock = mock();
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::ToggleOpLog, &mock);
-        dispatch(&mut state, Action::ModalDismiss, &mock);
-        assert!(!state.should_quit);
-    }
-
-    #[test]
-    fn open_help_captures_context() {
-        let mock = mock();
-        let mut state = AppState::new(sample_graph());
-        state.focus = PanelFocus::Detail;
-        state.detail_mode = DetailMode::DiffView;
-        dispatch(&mut state, Action::OpenHelp, &mock);
-        match &state.modal {
-            Some(Modal::Help { context, .. }) => assert_eq!(*context, HelpContext::DetailDiffView),
-            _ => panic!("Expected Help modal"),
-        }
-    }
-
-    #[test]
-    fn open_bookmarks_collects_from_graph() {
-        let mock = mock();
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenBookmarks, &mock);
-        match &state.modal {
-            Some(Modal::BookmarkPicker { bookmarks, .. }) => {
-                // sample_graph has no bookmarks, so this should be empty
-                assert!(bookmarks.is_empty());
-            }
-            _ => panic!("Expected BookmarkPicker modal"),
-        }
-    }
-
-    #[test]
-    fn fuzzy_find_opens_with_all_matches() {
-        let mock = mock();
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
-        match &state.modal {
-            Some(Modal::FuzzyFind { matches, query, .. }) => {
-                assert!(query.is_empty());
-                assert_eq!(matches.len(), state.graph.node_indices().len());
-            }
-            _ => panic!("Expected FuzzyFind modal"),
-        }
-    }
-
-    #[test]
-    fn toggle_op_log_toggles() {
-        let mock = mock();
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::ToggleOpLog, &mock);
-        assert!(matches!(state.modal, Some(Modal::OpLog { .. })));
-        dispatch(&mut state, Action::ToggleOpLog, &mock);
-        assert!(state.modal.is_none());
-    }
-
-    #[test]
-    fn modal_move_down_and_up() {
-        let mock = mock();
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
-        dispatch(&mut state, Action::ModalMoveDown, &mock);
-        match &state.modal {
-            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 1),
-            _ => panic!("Expected FuzzyFind modal"),
-        }
-        dispatch(&mut state, Action::ModalMoveUp, &mock);
-        match &state.modal {
-            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 0),
-            _ => panic!("Expected FuzzyFind modal"),
-        }
-    }
-
-    #[test]
-    fn fuzzy_input_and_backspace() {
-        let mock = mock();
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
-        dispatch(&mut state, Action::FuzzyInput('a'), &mock);
-        dispatch(&mut state, Action::FuzzyInput('b'), &mock);
-        match &state.modal {
-            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "ab"),
-            _ => panic!("Expected FuzzyFind modal"),
-        }
-        dispatch(&mut state, Action::FuzzyBackspace, &mock);
-        match &state.modal {
-            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "a"),
-            _ => panic!("Expected FuzzyFind modal"),
-        }
-    }
-
-    #[test]
-    fn modal_enter_on_fuzzy_find_jumps_cursor() {
-        let mock = mock();
-        let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
-        // Move to second match (index 2, change "def")
-        dispatch(&mut state, Action::ModalMoveDown, &mock);
-        dispatch(&mut state, Action::ModalEnter, &mock);
-        assert!(state.modal.is_none());
-        assert_eq!(state.cursor(), 2);
-    }
-
     fn sample_graph_with_bookmarks() -> GraphData {
         GraphData::new(
             vec![
@@ -1075,30 +599,534 @@ mod tests {
         )
     }
 
+    fn test_graph_with_changes(change_ids: &[&str]) -> GraphData {
+        let lines: Vec<GraphLine> = change_ids
+            .iter()
+            .map(|id| GraphLine {
+                raw: format!("◉  {id}"),
+                change_id: Some((*id).to_string()),
+                glyph_prefix: String::new(),
+            })
+            .collect();
+        let details: HashMap<String, ChangeDetail> = change_ids
+            .iter()
+            .map(|id| {
+                (
+                    (*id).to_string(),
+                    ChangeDetail {
+                        commit_id: format!("{id}_commit"),
+                        author: "test".into(),
+                        email: "test@test".into(),
+                        timestamp: "0m".into(),
+                        description: format!("desc for {id}"),
+                        bookmarks: vec![],
+                        is_empty: false,
+                        has_conflict: false,
+                        files: vec![],
+                    },
+                )
+            })
+            .collect();
+        GraphData::new(lines, details, Some(0))
+    }
+
+    // --- Navigation tests ---
+
     #[test]
-    fn toggle_op_log_error_sets_state_error() {
+    fn initial_cursor_on_working_copy() {
+        let state = AppState::new(sample_graph());
+        assert_eq!(state.cursor(), 0);
+        assert_eq!(state.selected_change_id(), Some("abc"));
+    }
+
+    #[test]
+    fn move_down_skips_connector_lines() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::ToggleOpLog, &FailingBackend);
-        assert!(state.error.is_some());
+        let effects = dispatch(&mut state, Action::MoveDown);
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), 2);
+        assert_eq!(state.selected_change_id(), Some("def"));
+    }
+
+    #[test]
+    fn move_up_skips_connector_lines() {
+        let mut state = AppState::new(sample_graph());
+        state.set_cursor_for_test(2);
+        let effects = dispatch(&mut state, Action::MoveUp);
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), 0);
+    }
+
+    #[test]
+    fn move_down_at_bottom_stays() {
+        let mut state = AppState::new(sample_graph());
+        state.set_cursor_for_test(4);
+        let effects = dispatch(&mut state, Action::MoveDown);
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), 4);
+    }
+
+    #[test]
+    fn move_up_at_top_stays() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::MoveUp);
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), 0);
+    }
+
+    #[test]
+    fn jump_to_top() {
+        let mut state = AppState::new(sample_graph());
+        state.set_cursor_for_test(4);
+        let effects = dispatch(&mut state, Action::JumpToTop);
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), 0);
+    }
+
+    #[test]
+    fn jump_to_bottom() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::JumpToBottom);
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), 4);
+    }
+
+    #[test]
+    fn quit_sets_flag() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::Quit);
+        assert!(effects.is_empty());
+        assert!(state.should_quit);
+    }
+
+    // --- Refresh / GraphLoaded tests ---
+
+    #[test]
+    fn refresh_emits_load_graph() {
+        let mut state = AppState::new(sample_graph());
+        state.error = Some("old error".into());
+        let effects = dispatch(&mut state, Action::Refresh);
+        assert_eq!(effects, vec![Effect::LoadGraph { revset: None }]);
+        assert!(state.error.is_none()); // error cleared
+    }
+
+    #[test]
+    fn graph_loaded_success_updates_graph() {
+        let mut state = AppState::new(sample_graph());
+        let new_graph = test_graph_with_changes(&["xxx", "yyy"]);
+        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        assert!(effects.is_empty());
+        assert_eq!(state.graph.lines.len(), 2);
+        assert_eq!(state.selected_change_id(), Some("xxx"));
+    }
+
+    #[test]
+    fn graph_loaded_error_sets_error() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::GraphLoaded(Err("boom".into())));
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("boom"));
+        // Graph unchanged
+        assert_eq!(state.graph.lines.len(), 5);
+    }
+
+    #[test]
+    fn graph_loaded_preserves_selected_change() {
+        let mut state = AppState::new(sample_graph());
+        state.set_cursor_for_test(2); // at "def"
+        let new_graph = sample_graph();
+        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), 2);
+        assert_eq!(state.selected_change_id(), Some("def"));
+    }
+
+    #[test]
+    fn graph_loaded_falls_back_when_change_disappears() {
+        let mut state = AppState::new(sample_graph());
+        state.set_cursor_for_test(2); // at "def"
+
+        // Build a new graph without the "def" change
+        let sg = sample_graph();
+        let mut lines: Vec<GraphLine> = sg.lines.into_iter().collect();
+        lines.remove(3);
+        lines.remove(2);
+        let mut details = sg.details;
+        details.remove("def");
+        let new_graph = GraphData::new(lines, details, sg.working_copy_index);
+
+        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), 0);
+        assert_eq!(state.selected_change_id(), Some("abc"));
+    }
+
+    #[test]
+    fn graph_loaded_follows_working_copy() {
+        let mut state = AppState::new(sample_graph());
+        state.cursor_follows_working_copy = true;
+        // New graph has working copy at index 0 (first node)
+        let new_graph = test_graph_with_changes(&["zzz", "yyy"]);
+        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        assert!(effects.is_empty());
+        assert!(!state.cursor_follows_working_copy); // flag cleared
+        assert_eq!(state.cursor(), 0);
+        assert_eq!(state.selected_change_id(), Some("zzz"));
+    }
+
+    #[test]
+    fn graph_loaded_resets_detail_state() {
+        let mut state = AppState::new(sample_graph());
+        state.detail_mode = DetailMode::DiffView;
+        state.diff_scroll = 5;
+        let new_graph = sample_graph();
+        let effects = dispatch(&mut state, Action::GraphLoaded(Ok(new_graph)));
+        assert!(effects.is_empty());
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert_eq!(state.diff_scroll, 0);
+        assert_eq!(state.detail_cursor(), 0);
+    }
+
+    #[test]
+    fn initial_cursor_fallback_without_working_copy() {
+        let mut graph = sample_graph();
+        graph.working_copy_index = None;
+        let state = AppState::new(graph);
+        assert_eq!(state.cursor(), 0);
+    }
+
+    #[test]
+    fn navigation_preserves_error() {
+        let mut state = AppState::new(sample_graph());
+        state.error = Some("old error".into());
+        let effects = dispatch(&mut state, Action::MoveDown);
+        assert!(effects.is_empty());
+        assert!(state.error.as_ref().unwrap().contains("old error"));
+    }
+
+    // --- Detail / FileDiff tests ---
+
+    #[test]
+    fn new_state_initializes_detail_fields() {
+        let state = AppState::new(sample_graph());
+        assert_eq!(state.focus, PanelFocus::Graph);
+        assert_eq!(state.detail_cursor(), 0);
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert_eq!(state.diff_scroll, 0);
+        assert!(state.diff_data.is_empty());
+    }
+
+    #[test]
+    fn tab_focus_toggles() {
+        let mut state = AppState::new(sample_graph());
+        assert_eq!(state.focus, PanelFocus::Graph);
+        dispatch(&mut state, Action::TabFocus);
+        assert_eq!(state.focus, PanelFocus::Detail);
+        dispatch(&mut state, Action::TabFocus);
+        assert_eq!(state.focus, PanelFocus::Graph);
+        dispatch(&mut state, Action::BackTabFocus);
+        assert_eq!(state.focus, PanelFocus::Detail);
+    }
+
+    #[test]
+    fn graph_cursor_move_resets_detail() {
+        let mut state = AppState::new(sample_graph_with_files());
+        state.set_detail_cursor_for_test(1);
+        state.detail_mode = DetailMode::DiffView;
+        state.diff_scroll = 5;
+        dispatch(&mut state, Action::MoveDown);
+        assert_eq!(state.detail_cursor(), 0);
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert_eq!(state.diff_scroll, 0);
+        assert!(state.diff_data.is_empty());
+    }
+
+    #[test]
+    fn jump_to_working_copy() {
+        let mut state = AppState::new(sample_graph());
+        state.set_cursor_for_test(4);
+        dispatch(&mut state, Action::JumpToWorkingCopy);
+        assert_eq!(state.cursor(), 0);
+        assert_eq!(state.selected_change_id(), Some("abc"));
+    }
+
+    #[test]
+    fn jump_to_working_copy_noop_when_none() {
+        let mut graph = sample_graph();
+        graph.working_copy_index = None;
+        let mut state = AppState::new(graph);
+        state.set_cursor_for_test(4);
+        dispatch(&mut state, Action::JumpToWorkingCopy);
+        assert_eq!(state.cursor(), 4);
+    }
+
+    #[test]
+    fn detail_back_from_diff_returns_to_file_list() {
+        let mut state = AppState::new(sample_graph());
+        state.focus = PanelFocus::Detail;
+        state.detail_mode = DetailMode::DiffView;
+        dispatch(&mut state, Action::DetailBack);
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert_eq!(state.focus, PanelFocus::Detail);
+    }
+
+    #[test]
+    fn detail_back_from_file_list_returns_focus_to_graph() {
+        let mut state = AppState::new(sample_graph());
+        state.focus = PanelFocus::Detail;
+        state.detail_mode = DetailMode::FileList;
+        dispatch(&mut state, Action::DetailBack);
+        assert_eq!(state.focus, PanelFocus::Graph);
+    }
+
+    #[test]
+    fn detail_enter_with_no_files_is_noop() {
+        let mut state = AppState::new(sample_graph());
+        state.focus = PanelFocus::Detail;
+        let effects = dispatch(&mut state, Action::DetailEnter);
+        assert!(effects.is_empty());
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert!(state.diff_data.is_empty());
+    }
+
+    #[test]
+    fn detail_enter_emits_load_file_diff() {
+        let mut state = AppState::new(sample_graph_with_files());
+        state.focus = PanelFocus::Detail;
+        let effects = dispatch(&mut state, Action::DetailEnter);
+        assert_eq!(
+            effects,
+            vec![Effect::LoadFileDiff {
+                change_id: "abc".into(),
+                path: "src/main.rs".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn file_diff_loaded_success_updates_state() {
+        use lajjzy_core::types::{DiffHunk, DiffLine, DiffLineKind};
+        let mut state = AppState::new(sample_graph());
+        let hunks = vec![DiffHunk {
+            header: "@@ -1,1 +1,1 @@".into(),
+            lines: vec![
+                DiffLine {
+                    kind: DiffLineKind::Removed,
+                    content: "old".into(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Added,
+                    content: "new".into(),
+                },
+            ],
+        }];
+        let effects = dispatch(&mut state, Action::FileDiffLoaded(Ok(hunks.clone())));
+        assert!(effects.is_empty());
+        assert_eq!(state.detail_mode, DetailMode::DiffView);
+        assert_eq!(state.diff_data, hunks);
+        assert_eq!(state.diff_scroll, 0);
+    }
+
+    #[test]
+    fn file_diff_loaded_error_sets_error() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::FileDiffLoaded(Err("disk error".into())));
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("disk error"));
+        assert!(state.diff_data.is_empty());
+    }
+
+    #[test]
+    fn detail_move_down_with_files() {
+        let mut state = AppState::new(sample_graph_with_files());
+        assert_eq!(state.detail_cursor(), 0);
+        dispatch(&mut state, Action::DetailMoveDown);
+        assert_eq!(state.detail_cursor(), 1);
+    }
+
+    #[test]
+    fn detail_move_down_at_boundary_stays() {
+        let mut state = AppState::new(sample_graph_with_files());
+        let file_count = state.selected_detail().unwrap().files.len();
+        for _ in 0..file_count {
+            dispatch(&mut state, Action::DetailMoveDown);
+        }
+        let cursor_before = state.detail_cursor();
+        dispatch(&mut state, Action::DetailMoveDown);
+        assert_eq!(state.detail_cursor(), cursor_before);
+    }
+
+    #[test]
+    fn detail_move_up_at_zero_stays() {
+        let mut state = AppState::new(sample_graph_with_files());
+        dispatch(&mut state, Action::DetailMoveUp);
+        assert_eq!(state.detail_cursor(), 0);
+    }
+
+    // --- ToggleOpLog / OpLogLoaded tests ---
+
+    #[test]
+    fn toggle_op_log_emits_load_op_log() {
+        let mut state = AppState::new(sample_graph());
+        assert!(state.modal.is_none());
+        let effects = dispatch(&mut state, Action::ToggleOpLog);
+        assert_eq!(effects, vec![Effect::LoadOpLog]);
+    }
+
+    #[test]
+    fn toggle_op_log_closes_when_open() {
+        let mut state = AppState::new(sample_graph());
+        state.modal = Some(Modal::OpLog {
+            entries: vec![],
+            cursor: 0,
+            scroll: 0,
+        });
+        let effects = dispatch(&mut state, Action::ToggleOpLog);
+        assert!(effects.is_empty());
         assert!(state.modal.is_none());
     }
 
     #[test]
+    fn op_log_loaded_success_opens_modal() {
+        use lajjzy_core::types::OpLogEntry;
+        let mut state = AppState::new(sample_graph());
+        let entries = vec![OpLogEntry {
+            id: "op1".into(),
+            description: "test op".into(),
+            timestamp: "now".into(),
+        }];
+        let effects = dispatch(&mut state, Action::OpLogLoaded(Ok(entries.clone())));
+        assert!(effects.is_empty());
+        match &state.modal {
+            Some(Modal::OpLog {
+                entries: e,
+                cursor,
+                scroll,
+            }) => {
+                assert_eq!(e.len(), 1);
+                assert_eq!(*cursor, 0);
+                assert_eq!(*scroll, 0);
+            }
+            _ => panic!("Expected OpLog modal"),
+        }
+    }
+
+    #[test]
+    fn op_log_loaded_error_sets_error() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::OpLogLoaded(Err("op fail".into())));
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("op fail"));
+        assert!(state.modal.is_none());
+    }
+
+    // --- Modal system tests ---
+
+    #[test]
+    fn modal_dismiss_clears_modal() {
+        let mut state = AppState::new(sample_graph());
+        state.modal = Some(Modal::OpLog {
+            entries: vec![],
+            cursor: 0,
+            scroll: 0,
+        });
+        dispatch(&mut state, Action::ModalDismiss);
+        assert!(state.modal.is_none());
+        assert!(!state.should_quit);
+    }
+
+    #[test]
+    fn open_help_captures_context() {
+        let mut state = AppState::new(sample_graph());
+        state.focus = PanelFocus::Detail;
+        state.detail_mode = DetailMode::DiffView;
+        dispatch(&mut state, Action::OpenHelp);
+        match &state.modal {
+            Some(Modal::Help { context, .. }) => assert_eq!(*context, HelpContext::DetailDiffView),
+            _ => panic!("Expected Help modal"),
+        }
+    }
+
+    #[test]
+    fn open_bookmarks_collects_from_graph() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenBookmarks);
+        match &state.modal {
+            Some(Modal::BookmarkPicker { bookmarks, .. }) => {
+                assert!(bookmarks.is_empty());
+            }
+            _ => panic!("Expected BookmarkPicker modal"),
+        }
+    }
+
+    #[test]
+    fn fuzzy_find_opens_with_all_matches() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind);
+        match &state.modal {
+            Some(Modal::FuzzyFind { matches, query, .. }) => {
+                assert!(query.is_empty());
+                assert_eq!(matches.len(), state.graph.node_indices().len());
+            }
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+    }
+
+    #[test]
+    fn modal_move_down_and_up() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::ModalMoveDown);
+        match &state.modal {
+            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 1),
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+        dispatch(&mut state, Action::ModalMoveUp);
+        match &state.modal {
+            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 0),
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+    }
+
+    #[test]
+    fn fuzzy_input_and_backspace() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::FuzzyInput('a'));
+        dispatch(&mut state, Action::FuzzyInput('b'));
+        match &state.modal {
+            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "ab"),
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+        dispatch(&mut state, Action::FuzzyBackspace);
+        match &state.modal {
+            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "a"),
+            _ => panic!("Expected FuzzyFind modal"),
+        }
+    }
+
+    #[test]
+    fn modal_enter_on_fuzzy_find_jumps_cursor() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::ModalMoveDown);
+        dispatch(&mut state, Action::ModalEnter);
+        assert!(state.modal.is_none());
+        assert_eq!(state.cursor(), 2);
+    }
+
+    #[test]
     fn bookmark_enter_jumps_cursor() {
-        let mock = MockBackend {
-            graph: sample_graph_with_bookmarks(),
-        };
         let mut state = AppState::new(sample_graph_with_bookmarks());
-        dispatch(&mut state, Action::OpenBookmarks, &mock);
+        dispatch(&mut state, Action::OpenBookmarks);
         assert!(matches!(state.modal, Some(Modal::BookmarkPicker { .. })));
 
         if let Some(Modal::BookmarkPicker { ref bookmarks, .. }) = state.modal {
             assert!(!bookmarks.is_empty());
         }
 
-        // Move to second bookmark ("feature" on change "def" at index 2)
-        dispatch(&mut state, Action::ModalMoveDown, &mock);
-        dispatch(&mut state, Action::ModalEnter, &mock);
+        dispatch(&mut state, Action::ModalMoveDown);
+        dispatch(&mut state, Action::ModalEnter);
         assert!(state.modal.is_none());
         assert_eq!(state.cursor(), 2);
         assert_eq!(state.selected_change_id(), Some("def"));
@@ -1106,20 +1134,18 @@ mod tests {
 
     #[test]
     fn fuzzy_input_narrows_matches() {
-        let mock = mock();
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind, &mock);
+        dispatch(&mut state, Action::OpenFuzzyFind);
 
         let initial_count = match &state.modal {
             Some(Modal::FuzzyFind { matches, .. }) => matches.len(),
             _ => panic!("Expected FuzzyFind"),
         };
 
-        // Type characters that should narrow results
-        dispatch(&mut state, Action::FuzzyInput('d'), &mock);
-        dispatch(&mut state, Action::FuzzyInput('e'), &mock);
-        dispatch(&mut state, Action::FuzzyInput('s'), &mock);
-        dispatch(&mut state, Action::FuzzyInput('c'), &mock);
+        dispatch(&mut state, Action::FuzzyInput('d'));
+        dispatch(&mut state, Action::FuzzyInput('e'));
+        dispatch(&mut state, Action::FuzzyInput('s'));
+        dispatch(&mut state, Action::FuzzyInput('c'));
 
         match &state.modal {
             Some(Modal::FuzzyFind { matches, .. }) => {
@@ -1131,16 +1157,13 @@ mod tests {
 
     #[test]
     fn help_scroll_clamped_to_content() {
-        let mock = mock();
         let mut state = AppState::new(sample_graph());
-        // Open help for DetailDiffView which has 3 lines
         state.focus = PanelFocus::Detail;
         state.detail_mode = DetailMode::DiffView;
-        dispatch(&mut state, Action::OpenHelp, &mock);
+        dispatch(&mut state, Action::OpenHelp);
 
-        // Try scrolling many times — should clamp at line_count - 1
         for _ in 0..20 {
-            dispatch(&mut state, Action::ModalMoveDown, &mock);
+            dispatch(&mut state, Action::ModalMoveDown);
         }
         match &state.modal {
             Some(Modal::Help { scroll, context }) => {
@@ -1157,10 +1180,9 @@ mod tests {
 
     #[test]
     fn modal_enter_on_help_keeps_modal() {
-        let mock = mock();
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenHelp, &mock);
-        dispatch(&mut state, Action::ModalEnter, &mock);
+        dispatch(&mut state, Action::OpenHelp);
+        dispatch(&mut state, Action::ModalEnter);
         assert!(matches!(state.modal, Some(Modal::Help { .. })));
     }
 }

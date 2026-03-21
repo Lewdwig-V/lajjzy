@@ -15,6 +15,7 @@ fn main() -> Result<()> {
     let backend = JjCliBackend::new(&cwd).context("Failed to open jj workspace")?;
 
     let graph = backend.load_graph().context("Failed to load graph")?;
+    drop(backend); // TODO(Task 5): backend moves to effect executor
     let mut state = AppState::new(graph);
 
     let original_hook = std::panic::take_hook();
@@ -25,18 +26,14 @@ fn main() -> Result<()> {
 
     let mut terminal = ratatui::init();
 
-    let result = run_loop(&mut terminal, &mut state, &backend);
+    let result = run_loop(&mut terminal, &mut state);
 
     ratatui::restore();
 
     result
 }
 
-fn run_loop(
-    terminal: &mut ratatui::DefaultTerminal,
-    state: &mut AppState,
-    backend: &JjCliBackend,
-) -> Result<()> {
+fn run_loop(terminal: &mut ratatui::DefaultTerminal, state: &mut AppState) -> Result<()> {
     loop {
         terminal.draw(|frame| render(frame, state))?;
 
@@ -49,7 +46,9 @@ fn run_loop(
             } else {
                 map_event(key_event, state.focus, state.detail_mode)
             } {
-                dispatch(state, action, backend);
+                let effects = dispatch(state, action);
+                // TODO(Task 5): wire effects to executor — binary is non-functional until then
+                let _ = effects;
             }
         }
 
