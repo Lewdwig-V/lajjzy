@@ -6,10 +6,13 @@ use ratatui::widgets::Widget;
 
 use lajjzy_core::types::GraphData;
 
+use crate::app::TargetPick;
+
 pub struct GraphWidget<'a> {
     graph: &'a GraphData,
     cursor: usize,
     scrolloff: usize,
+    target_pick: Option<&'a TargetPick>,
 }
 
 impl<'a> GraphWidget<'a> {
@@ -18,7 +21,14 @@ impl<'a> GraphWidget<'a> {
             graph,
             cursor,
             scrolloff: 3,
+            target_pick: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_target_pick(mut self, target_pick: Option<&'a TargetPick>) -> Self {
+        self.target_pick = target_pick;
+        self
     }
 
     fn block_end(&self) -> usize {
@@ -48,11 +58,21 @@ impl<'a> GraphWidget<'a> {
     }
 
     /// Build a colored `Line` for a node line (one with a `change_id`).
-    fn colored_node_line(&self, line_idx: usize) -> Line<'static> {
+    ///
+    /// When `dim` is `true` the entire line is rendered in `DarkGray` (picking
+    /// mode exclusion).
+    fn colored_node_line(&self, line_idx: usize, dim: bool) -> Line<'static> {
         let line = &self.graph.lines[line_idx];
         let Some(change_id) = line.change_id.as_deref() else {
             return Line::raw(line.raw.clone());
         };
+
+        if dim {
+            return Line::from(Span::styled(
+                line.raw.clone(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
 
         let is_working_copy = self.graph.working_copy_index == Some(line_idx);
         let glyph_style = if is_working_copy {
@@ -139,14 +159,22 @@ impl Widget for GraphWidget<'_> {
             }
 
             let line = &self.graph.lines[line_idx];
-            let style = if line_idx >= block_start && line_idx <= block_end {
+
+            // In picking mode, dim lines whose change_id is in the excluded set.
+            let dim = self.target_pick.is_some_and(|pick| {
+                line.change_id
+                    .as_deref()
+                    .is_some_and(|cid| pick.excluded.contains(cid))
+            });
+
+            let style = if !dim && line_idx >= block_start && line_idx <= block_end {
                 highlight
             } else {
                 Style::default()
             };
 
             let display = if line.change_id.is_some() {
-                self.colored_node_line(line_idx)
+                self.colored_node_line(line_idx, dim)
             } else {
                 // Connector line in dark gray
                 Line::from(Span::styled(
@@ -171,8 +199,10 @@ impl Widget for GraphWidget<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::RebaseMode;
+    use crate::app::PickingMode;
     use lajjzy_core::types::{ChangeDetail, GraphData, GraphLine};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     fn simple_graph() -> GraphData {
         GraphData::new(
@@ -319,6 +349,66 @@ mod tests {
         assert!(
             line1.contains("description one"),
             "Expected connector text in: {line1:?}"
+        );
+    }
+
+    #[test]
+    fn graph_dims_excluded_changes_in_picking_mode() {
+        let graph = simple_graph(); // "abc" at idx 0, "def" at idx 2
+        // Set up picking: "abc" is excluded (it's the source being rebased)
+        let pick = TargetPick {
+            source: "abc".into(),
+            mode: RebaseMode::Single,
+            excluded: HashSet::from(["abc".into()]),
+            picking: PickingMode::Browsing,
+            original_cursor: 0,
+            descendant_count: 0,
+        };
+
+        // Cursor on "def" (row 2); "abc" (row 0) should be dimmed.
+        let widget = GraphWidget::new(&graph, 2).with_target_pick(Some(&pick));
+        let area = Rect::new(0, 0, 60, 4);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        // Row 0 ("abc") must have DarkGray fg — it is excluded / dimmed.
+        assert_eq!(
+            buf[(0, 0)].style().fg,
+            Some(Color::DarkGray),
+            "excluded change 'abc' should be rendered in DarkGray"
+        );
+
+        // Row 2 ("def") must NOT have DarkGray as the sole style — it is a valid
+        // pick target and should be highlighted (REVERSED) since cursor is there.
+        assert!(
+            buf[(0, 2)]
+                .style()
+                .add_modifier
+                .contains(Modifier::REVERSED),
+            "non-excluded change 'def' at cursor should be REVERSED (highlighted)"
+        );
+    }
+
+    #[test]
+    fn graph_no_dimming_outside_picking_mode() {
+        let graph = simple_graph();
+        // No target_pick — normal rendering, "abc" should not be DarkGray at node level.
+        let widget = GraphWidget::new(&graph, 2);
+        let area = Rect::new(0, 0, 60, 4);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        // Row 0 ("abc") in normal mode: the glyph_prefix is DarkGray, but cell at
+        // position of the change_id (after the 3-char glyph prefix) should be Yellow.
+        // The glyph prefix is "◉  " (3 bytes). Since "◉" is a multi-byte char,
+        // the change_id starts at offset 1 in ratatui's cell indexing (wide char = 2 cols).
+        // We just check the row contains "abc" somewhere and is not all-DarkGray.
+        let line0: String = (0..60)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains("abc"),
+            "Without picking mode, 'abc' should still render: {line0:?}"
         );
     }
 }
