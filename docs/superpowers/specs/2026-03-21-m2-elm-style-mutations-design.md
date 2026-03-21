@@ -502,7 +502,7 @@ Existing 104 tests: `MockBackend`, `FailingBackend`, `DiffMockBackend` disappear
 
 - **Dispatch purity (enforced):** `dispatch()` takes `(&mut AppState, Action)` and returns `Vec<Effect>`. Never calls backend methods or performs I/O.
 - **Effect executor boundary:** Effects executed in `lajjzy-cli` only. `lajjzy-tui` defines the `Effect` enum but never executes effects.
-- **Facade boundary (updated):** `lajjzy-tui` never imports `RepoBackend`, `std::process::Command`, or jj-lib. `$EDITOR` launch handled by event loop in `lajjzy-cli`.
+- **Facade boundary (updated):** `lajjzy-tui` never imports `RepoBackend`, `std::process::Command`, or jj-lib. `Effect::SuspendForEditor` is *defined* in `lajjzy-tui` (part of the `Effect` enum) but *executed* in `lajjzy-cli` — `execute_effects` intercepts it and handles the subprocess launch. No subprocess is ever spawned from `lajjzy-tui` code.
 - **Mutation gate:** At most one local mutation in flight, enforced by `AppState.pending_mutation`. Background ops gated independently.
 - **Three interaction patterns:** Every mutation declares its slot (Instant, Mini-modal, Background). New patterns require design justification.
 

@@ -25,7 +25,7 @@ cargo fmt --check              # format check
 
 ## Architectural Constraints
 
-- **Facade boundary:** `lajjzy-tui` never imports `RepoBackend`, `std::process::Command`, or jj-lib. `$EDITOR` launch handled by the event loop in `lajjzy-cli`.
+- **Facade boundary:** `lajjzy-tui` never imports `RepoBackend`, `std::process::Command`, or jj-lib. The `Effect::SuspendForEditor` variant is *defined* in `lajjzy-tui` (as part of the `Effect` enum) but *executed* in `lajjzy-cli` — the `execute_effects` function in `main.rs` intercepts it before it reaches the executor and handles the terminal suspend/resume + `std::process::Command` launch there. No subprocess is ever spawned from `lajjzy-tui` code.
 - **No panics on repo ops:** All `RepoBackend` methods return `Result`. Errors update `AppState.error`, never panic.
 - **Dispatch purity:** `dispatch()` takes `(&mut AppState, Action)` and returns `Vec<Effect>`. It never calls backend methods or performs I/O.
 - **Effect executor boundary:** Effects executed in `lajjzy-cli` only. `lajjzy-tui` defines the `Effect` enum but never executes effects.
