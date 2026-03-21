@@ -993,8 +993,8 @@ new mode 100755";
         backend.describe("@", "second").unwrap();
 
         let graph_before = backend.load_graph().unwrap();
-        let wc_idx_before = graph_before.working_copy_index.unwrap();
-        let wc_id_before = graph_before.lines[wc_idx_before]
+        let prev_wc_idx = graph_before.working_copy_index.unwrap();
+        let prev_wc_id = graph_before.lines[prev_wc_idx]
             .change_id
             .as_ref()
             .unwrap()
@@ -1017,11 +1017,11 @@ new mode 100755";
         backend.edit_change(&first_id).unwrap();
 
         let graph_after = backend.load_graph().unwrap();
-        let wc_idx_after = graph_after.working_copy_index.unwrap();
-        let wc_id_after = graph_after.lines[wc_idx_after].change_id.as_ref().unwrap();
+        let new_wc_idx = graph_after.working_copy_index.unwrap();
+        let new_wc_id = graph_after.lines[new_wc_idx].change_id.as_ref().unwrap();
 
-        assert_ne!(wc_id_after, &wc_id_before, "working copy should have moved");
-        assert_eq!(wc_id_after, &first_id, "working copy should now be 'first'");
+        assert_ne!(new_wc_id, &prev_wc_id, "working copy should have moved");
+        assert_eq!(new_wc_id, &first_id, "working copy should now be 'first'");
     }
 
     #[test]
@@ -1190,7 +1190,7 @@ new mode 100755";
 
     /// Push requires a configured remote — skip in CI unless a remote is present.
     #[test]
-    #[ignore]
+    #[ignore = "requires a configured git remote"]
     fn git_push_requires_remote() {
         // This test is intentionally ignored because it needs a real git remote.
         // To run manually: cargo test -p lajjzy-core git_push_requires_remote -- --ignored
@@ -1205,7 +1205,7 @@ new mode 100755";
 
     /// Fetch requires a configured remote — skip in CI unless a remote is present.
     #[test]
-    #[ignore]
+    #[ignore = "requires a configured git remote"]
     fn git_fetch_requires_remote() {
         // This test is intentionally ignored because it needs a real git remote.
         // To run manually: cargo test -p lajjzy-core git_fetch_requires_remote -- --ignored
