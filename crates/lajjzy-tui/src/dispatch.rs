@@ -72,7 +72,9 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::Refresh => {
             state.error = None;
-            return vec![Effect::LoadGraph { revset: None }];
+            return vec![Effect::LoadGraph {
+                revset: state.active_revset.clone(),
+            }];
         }
         Action::GraphLoaded { generation, result } => {
             // Reject stale snapshots from concurrent loads
@@ -253,9 +255,14 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             });
         }
         Action::OpenOmnibar => {
-            let matches = state.graph.node_indices().to_vec();
+            let query = state.active_revset.clone().unwrap_or_default();
+            let matches = if query.is_empty() {
+                state.graph.node_indices().to_vec()
+            } else {
+                fuzzy_match(&query, &state.graph)
+            };
             state.modal = Some(Modal::Omnibar {
-                query: String::new(),
+                query,
                 matches,
                 cursor: 0,
             });
@@ -337,11 +344,20 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                     }
                 }
                 Some(Modal::Omnibar {
-                    matches, cursor, ..
+                    query,
+                    matches,
+                    cursor,
                 }) => {
-                    if let Some(&idx) = matches.get(cursor) {
-                        state.cursor = idx;
-                        state.reset_detail();
+                    if query.is_empty() {
+                        if state.active_revset.is_some() {
+                            state.active_revset = None;
+                            return vec![Effect::LoadGraph { revset: None }];
+                        }
+                        // No active revset + empty query: just close (modal already taken)
+                    } else {
+                        // Non-empty: store fuzzy fallback and try as revset
+                        state.omnibar_fallback_idx = matches.get(cursor).copied();
+                        return vec![Effect::EvalRevset { query }];
                     }
                 }
                 other => {
@@ -534,8 +550,41 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }];
             }
         }
-        Action::RevsetLoaded { .. } => {
-            // TODO: implement in Task 4
+        Action::RevsetLoaded {
+            query,
+            generation,
+            result,
+        } => {
+            // Reject stale revset results
+            if generation < state.graph_generation {
+                return vec![];
+            }
+
+            match result {
+                Ok(new_graph) => {
+                    state.omnibar_fallback_idx = None;
+                    if new_graph.node_indices().is_empty() {
+                        state.status_message = Some(format!("No changes match: {query}"));
+                    } else {
+                        state.active_revset = Some(query);
+                        let nested = dispatch(
+                            state,
+                            Action::GraphLoaded {
+                                generation,
+                                result: Ok(new_graph),
+                            },
+                        );
+                        debug_assert!(nested.is_empty());
+                    }
+                }
+                Err(_) => {
+                    // Not a valid revset — fall back to fuzzy jump
+                    if let Some(idx) = state.omnibar_fallback_idx.take() {
+                        state.cursor = idx;
+                        state.reset_detail();
+                    }
+                }
+            }
         }
         Action::OpenBookmarkSet => {
             if state.pending_mutation.is_some() {
@@ -1419,13 +1468,15 @@ mod tests {
     }
 
     #[test]
-    fn modal_enter_on_omnibar_jumps_cursor() {
+    fn modal_enter_on_omnibar_empty_closes() {
         let mut state = AppState::new(sample_graph());
         dispatch(&mut state, Action::OpenOmnibar);
         dispatch(&mut state, Action::ModalMoveDown);
-        dispatch(&mut state, Action::ModalEnter);
+        let effects = dispatch(&mut state, Action::ModalEnter);
         assert!(state.modal.is_none());
-        assert_eq!(state.cursor(), 2);
+        assert!(effects.is_empty());
+        // Cursor unchanged — empty query without active revset just closes
+        assert_eq!(state.cursor(), 0);
     }
 
     #[test]
@@ -2078,5 +2129,150 @@ mod tests {
         // modal still open, pending unchanged
         assert!(state.modal.is_some());
         assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
+    }
+
+    // --- Omnibar revset dispatch tests ---
+
+    #[test]
+    fn open_omnibar_prefills_active_revset() {
+        let mut state = AppState::new(sample_graph());
+        state.active_revset = Some("mine()".into());
+        dispatch(&mut state, Action::OpenOmnibar);
+        match &state.modal {
+            Some(Modal::Omnibar { query, .. }) => assert_eq!(query, "mine()"),
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_enter_empty_clears_revset() {
+        let mut state = AppState::new(sample_graph());
+        state.active_revset = Some("mine()".into());
+        state.modal = Some(Modal::Omnibar {
+            query: String::new(),
+            matches: vec![],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::ModalEnter);
+        assert_eq!(effects, vec![Effect::LoadGraph { revset: None }]);
+        assert!(state.active_revset.is_none());
+    }
+
+    #[test]
+    fn omnibar_enter_empty_no_revset_just_closes() {
+        let mut state = AppState::new(sample_graph());
+        state.modal = Some(Modal::Omnibar {
+            query: String::new(),
+            matches: vec![],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::ModalEnter);
+        assert!(effects.is_empty());
+        assert!(state.modal.is_none());
+    }
+
+    #[test]
+    fn omnibar_enter_nonempty_emits_eval_revset() {
+        let mut state = AppState::new(sample_graph());
+        let node_idx = state.graph.node_indices()[0];
+        state.modal = Some(Modal::Omnibar {
+            query: "mine()".into(),
+            matches: vec![node_idx],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::ModalEnter);
+        assert_eq!(
+            effects,
+            vec![Effect::EvalRevset {
+                query: "mine()".into()
+            }]
+        );
+        assert_eq!(state.omnibar_fallback_idx, Some(node_idx));
+    }
+
+    #[test]
+    fn revset_loaded_success_sets_active_revset() {
+        let mut state = AppState::new(sample_graph());
+        let filtered = sample_graph();
+        let effects = dispatch(
+            &mut state,
+            Action::RevsetLoaded {
+                query: "mine()".into(),
+                generation: 1,
+                result: Ok(filtered),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.active_revset.as_deref(), Some("mine()"));
+    }
+
+    #[test]
+    fn revset_loaded_empty_graph_shows_feedback() {
+        let mut state = AppState::new(sample_graph());
+        let empty_graph = GraphData::new(vec![], HashMap::new(), None, String::new());
+        let effects = dispatch(
+            &mut state,
+            Action::RevsetLoaded {
+                query: "nobody()".into(),
+                generation: 1,
+                result: Ok(empty_graph),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.active_revset.is_none());
+        assert!(
+            state
+                .status_message
+                .as_deref()
+                .unwrap()
+                .contains("nobody()")
+        );
+    }
+
+    #[test]
+    fn revset_loaded_failure_falls_back_to_fuzzy_jump() {
+        let mut state = AppState::new(sample_graph());
+        let fallback = state.graph.node_indices()[1];
+        state.omnibar_fallback_idx = Some(fallback);
+        let effects = dispatch(
+            &mut state,
+            Action::RevsetLoaded {
+                query: "garbage".into(),
+                generation: 1,
+                result: Err("parse error".into()),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), fallback);
+        assert!(state.omnibar_fallback_idx.is_none());
+    }
+
+    #[test]
+    fn revset_loaded_stale_generation_rejected() {
+        let mut state = AppState::new(sample_graph());
+        state.graph_generation = 5;
+        let effects = dispatch(
+            &mut state,
+            Action::RevsetLoaded {
+                query: "mine()".into(),
+                generation: 3, // older than current
+                result: Ok(sample_graph()),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.active_revset.is_none()); // not set for stale result
+    }
+
+    #[test]
+    fn refresh_respects_active_revset() {
+        let mut state = AppState::new(sample_graph());
+        state.active_revset = Some("mine()".into());
+        let effects = dispatch(&mut state, Action::Refresh);
+        assert_eq!(
+            effects,
+            vec![Effect::LoadGraph {
+                revset: Some("mine()".into())
+            }]
+        );
     }
 }

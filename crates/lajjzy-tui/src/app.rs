@@ -26,7 +26,6 @@ pub struct AppState {
     /// The currently active revset filter, or `None` for the default revset.
     pub active_revset: Option<String>,
     /// Saved cursor position for restoring focus when exiting a revset filter.
-    #[allow(dead_code)]
     pub(crate) omnibar_fallback_idx: Option<usize>,
 }
 
