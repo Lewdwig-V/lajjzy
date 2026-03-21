@@ -64,10 +64,12 @@ impl JjCliBackend {
 }
 
 /// Truncate text to its first line, capped at 50 chars, for status bar display.
+/// Uses `char_indices` to avoid panicking on multibyte UTF-8 (emoji, CJK).
 fn first_line_preview(text: &str) -> String {
     let first = text.lines().next().unwrap_or("");
-    if first.len() > 50 {
-        format!("{}...", &first[..47])
+    if first.chars().count() > 50 {
+        let truncate_at = first.char_indices().nth(47).map_or(first.len(), |(i, _)| i);
+        format!("{}...", &first[..truncate_at])
     } else {
         first.to_string()
     }

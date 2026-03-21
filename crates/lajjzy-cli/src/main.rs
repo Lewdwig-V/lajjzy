@@ -23,10 +23,10 @@ struct EffectExecutor {
     /// Monotonic counter for graph snapshot versioning.
     /// Incremented before each `load_graph()` call so later loads get higher generations.
     graph_generation: AtomicU64,
-    /// The active revset filter at the time a mutation is dispatched.
-    /// Snapshotted before spawning mutation threads so post-mutation graph
-    /// refreshes respect the same filter the user sees.
-    active_revset: Mutex<Option<String>>,
+    /// The active revset filter, synced from dispatch state after each action.
+    /// Read by mutation threads at completion time (not snapshot time) so the
+    /// refreshed graph reflects the filter the user sees when the mutation finishes.
+    active_revset: Arc<Mutex<Option<String>>>,
 }
 
 impl EffectExecutor {
@@ -41,13 +41,9 @@ impl EffectExecutor {
         let tx = self.tx.clone();
         // Assign generation BEFORE spawning thread — ordering reflects intent, not completion.
         let generation = self.next_graph_generation(&effect);
-        // Snapshot active revset before spawning so mutation threads refresh
-        // the graph with the same filter the user currently sees.
-        let revset_snapshot = self
-            .active_revset
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        // Clone the Arc so mutation threads read the current revset at completion
+        // time, not at spawn time — prevents stale filter after user changes it.
+        let active_revset = Arc::clone(&self.active_revset);
         thread::spawn(move || match effect {
             // Read-only effects
             Effect::LoadGraph { revset } => {
@@ -74,7 +70,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::Describe,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.describe(&change_id, &text),
                 );
             }
@@ -84,7 +80,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::New,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.new_change(&after),
                 );
             }
@@ -94,7 +90,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::Edit,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.edit_change(&change_id),
                 );
             }
@@ -104,7 +100,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::Abandon,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.abandon(&change_id),
                 );
             }
@@ -114,7 +110,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::Squash,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.squash(&change_id),
                 );
             }
@@ -124,7 +120,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::Undo,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.undo(),
                 );
             }
@@ -134,7 +130,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::Redo,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.redo(),
                 );
             }
@@ -144,7 +140,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::BookmarkSet,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.bookmark_set(&change_id, &name),
                 );
             }
@@ -154,7 +150,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::BookmarkDelete,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.bookmark_delete(&name),
                 );
             }
@@ -164,7 +160,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::GitPush,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.git_push(&bookmark),
                 );
             }
@@ -174,7 +170,7 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::GitFetch,
                     generation,
-                    revset_snapshot.as_deref(),
+                    &active_revset,
                     || backend.git_fetch(),
                 );
             }
@@ -224,17 +220,23 @@ fn run_mutation(
     tx: &mpsc::Sender<Action>,
     op: MutationKind,
     generation: u64,
-    revset: Option<&str>,
+    active_revset: &Mutex<Option<String>>,
     f: impl FnOnce() -> anyhow::Result<String>,
 ) {
     match f() {
         Ok(message) => {
-            // Bundle refreshed graph with success so dispatch clears the gate
-            // and installs the new graph atomically — no window for stale-graph mutations.
-            // Use the snapshotted revset so the refreshed graph respects the active filter.
+            // Read the active revset NOW (at mutation completion time), not at
+            // spawn time — so the refreshed graph reflects the filter the user
+            // currently sees, even if they changed it while the mutation ran.
+            let revset = active_revset
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             let graph = Some((
                 generation,
-                backend.load_graph(revset).map_err(|e| e.to_string()),
+                backend
+                    .load_graph(revset.as_deref())
+                    .map_err(|e| e.to_string()),
             ));
             let _ = tx.send(Action::RepoOpSuccess { op, message, graph });
         }
@@ -351,7 +353,7 @@ fn main() -> Result<()> {
         backend,
         tx,
         graph_generation: AtomicU64::new(0),
-        active_revset: Mutex::new(None),
+        active_revset: Arc::new(Mutex::new(None)),
     };
 
     let original_hook = std::panic::take_hook();

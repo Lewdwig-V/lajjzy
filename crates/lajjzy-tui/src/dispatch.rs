@@ -34,6 +34,13 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
+    // Clear stale omnibar fallback on any action except RevsetLoaded.
+    // Prevents a slow EvalRevset error from jumping the cursor after the
+    // user has already navigated elsewhere.
+    if !matches!(action, Action::RevsetLoaded { .. }) {
+        state.omnibar_fallback_idx = None;
+    }
+
     match action {
         Action::MoveDown => {
             let nodes = state.graph.node_indices();
