@@ -25,7 +25,9 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
         | MutationKind::Undo
         | MutationKind::Redo
         | MutationKind::BookmarkSet
-        | MutationKind::BookmarkDelete => {
+        | MutationKind::BookmarkDelete
+        | MutationKind::RebaseSingle
+        | MutationKind::RebaseWithDescendants => {
             state.pending_mutation = None;
         }
     }
@@ -678,6 +680,13 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return vec![Effect::BookmarkDelete { name }];
             }
         }
+        // Placeholder arms — behavior implemented in Task 5
+        Action::RebaseSingle
+        | Action::RebaseWithDescendants
+        | Action::PickConfirm
+        | Action::PickCancel
+        | Action::PickFilterChar(_)
+        | Action::PickFilterBackspace => {}
     }
 
     // Release-mode invariant check: cursor must point to a node line

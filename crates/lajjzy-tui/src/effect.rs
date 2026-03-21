@@ -42,6 +42,14 @@ pub enum Effect {
         bookmark: String,
     },
     GitFetch,
+    RebaseSingle {
+        source: String,
+        destination: String,
+    },
+    RebaseWithDescendants {
+        source: String,
+        destination: String,
+    },
 
     /// Try evaluating a revset expression. Executor calls `load_graph(Some(&query))`.
     EvalRevset {

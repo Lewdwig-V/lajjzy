@@ -186,6 +186,11 @@ impl EffectExecutor {
                 });
             }
 
+            // Rebase effects — wired up in Task 6
+            Effect::RebaseSingle { .. } | Effect::RebaseWithDescendants { .. } => {
+                // placeholder: behavior added in Task 6
+            }
+
             // SuspendForEditor is intercepted before reaching the executor
             Effect::SuspendForEditor { .. } => {
                 unreachable!("SuspendForEditor must be intercepted by execute_effects")
