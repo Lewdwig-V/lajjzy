@@ -257,7 +257,7 @@ This dual-mode is invisible to the user: they type, the graph updates. Revset sy
 ```rust
 pub struct AppState {
     // ...
-    
+
     /// The active revset filter, if any. None means "default revset."
     /// Displayed in the status bar so the user knows the view is filtered.
     pub active_revset: Option<String>,
@@ -981,6 +981,7 @@ M5 establishes basic PR creation. M9 adds the Graphite-style stack-aware workflo
 - ~~**Describe UX.**~~ Inline `tui-textarea` with `Shift-E` escalation to `$EDITOR`.
 - ~~**Eager vs lazy loading.**~~ File lists eager (in `load_graph()`), hunk diffs lazy (`file_diff()`).
 - ~~**Gerrit Change-Id mapping (M8).**~~ Solved by the jj/GitButler/Gerrit standardization effort. As of jj 0.30, jj writes a `change-id` header into Git commit objects by default. `jj gerrit upload` handles the jj-change-id → Gerrit-Change-Id footer mapping automatically. Gerrit has an accepted design doc for native header support, pending upstream Git adoption. lajjzy should use `jj gerrit upload` semantics, not invent a custom mapping.
+
 ### Why There Is No "M7: jj Branchless Workflow" Milestone
 
 An earlier draft proposed a milestone for "jj's branchless and safe history editing" covering automatic commits, stable Change IDs, first-class conflicts, and operation log undo. This was absorbed into M0–M4 because these are not features to *add* — they are jj's native semantics that the TUI *already surfaces*:
