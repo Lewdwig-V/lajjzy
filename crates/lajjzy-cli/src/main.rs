@@ -116,6 +116,17 @@ impl EffectExecutor {
                 });
             }
 
+            // EvalRevset: test the query then report back as RevsetLoaded
+            // TODO: wired up fully in Task 5
+            Effect::EvalRevset { query } => {
+                let result = backend.load_graph(Some(&query)).map_err(|e| e.to_string());
+                let _ = tx.send(Action::RevsetLoaded {
+                    query,
+                    generation,
+                    result,
+                });
+            }
+
             // SuspendForEditor is intercepted before reaching the executor
             Effect::SuspendForEditor { .. } => {
                 unreachable!("SuspendForEditor must be intercepted by execute_effects")
@@ -138,7 +149,8 @@ impl EffectExecutor {
             | Effect::BookmarkSet { .. }
             | Effect::BookmarkDelete { .. }
             | Effect::GitPush { .. }
-            | Effect::GitFetch => self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1,
+            | Effect::GitFetch
+            | Effect::EvalRevset { .. } => self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1,
             _ => 0,
         }
     }

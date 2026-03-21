@@ -43,6 +43,11 @@ pub enum Effect {
     },
     GitFetch,
 
+    /// Try evaluating a revset expression. Executor calls `load_graph(Some(&query))`.
+    EvalRevset {
+        query: String,
+    },
+
     // Non-repo
     SuspendForEditor {
         change_id: String,

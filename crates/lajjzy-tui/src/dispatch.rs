@@ -534,6 +534,9 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }];
             }
         }
+        Action::RevsetLoaded { .. } => {
+            // TODO: implement in Task 4
+        }
         Action::OpenBookmarkSet => {
             if state.pending_mutation.is_some() {
                 state.status_message = Some("Operation in progress\u{2026}".into());

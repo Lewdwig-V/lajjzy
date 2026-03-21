@@ -89,6 +89,11 @@ pub enum Action {
         change_id: String,
         text: String,
     },
+    RevsetLoaded {
+        query: String,
+        generation: u64,
+        result: Result<GraphData, String>,
+    },
 
     // Mutation trigger actions
     Abandon,
