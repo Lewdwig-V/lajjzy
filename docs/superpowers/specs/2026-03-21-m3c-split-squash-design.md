@@ -35,7 +35,7 @@ Without split and partial squash, the TUI can't decompose changes — a change t
 | `S` | Partial squash | Yes | Selected hunks → parent change |
 | `m` | Move hunks | Target picker → hunk picker | Out of scope (M6) |
 
-**`s` (split):** Opens hunk picker on the selected change's diff. User selects hunks. Enter emits `Effect::Split`. The selected hunks stay in the original change; the unselected hunks go to a new child. Status bar: `Split: 2/3 hunks → new change after ksqxwpml`
+**`s` (split):** Opens hunk picker on the selected change's diff. User selects hunks. Enter emits `Effect::Split`. The selected hunks move to a new child change; the unselected hunks stay in the original. "Selected = what moves" is consistent across both split and squash. Status bar: `Split: 2/3 hunks → new change after ksqxwpml`
 
 **`S` (partial squash):** Opens hunk picker. Selected hunks move to the parent. Enter emits `Effect::SquashPartial`. Status bar: `Squash: 2/3 hunks from ksqxwpml → into ytoqrzxn`. Full squash is `a` (select all) then Enter.
 
@@ -138,6 +138,8 @@ pub struct HunkPicker {
 
 pub enum HunkPickerOp {
     Split { source: String },
+    /// `destination` is for status bar display only — `jj squash` implicitly
+    /// targets the parent. The effect does not carry the destination.
     Squash { source: String, destination: String },
 }
 
@@ -255,7 +257,7 @@ Action::SquashPartial => {
             .and_then(|d| d.parents.first().cloned());
         match parent {
             Some(dest) => return vec![Effect::LoadChangeDiff {
-                change_id: cid,
+                change_id: cid.clone(),
                 operation: HunkPickerOp::Squash { source: cid, destination: dest },
             }],
             None => state.error = Some("Cannot squash: no parent change".into()),
@@ -295,6 +297,16 @@ If nothing is selected, shows error: "No hunks selected".
 ### `HunkCancel`
 
 Clears `hunk_picker`, resets `detail_mode` to `FileList`. No mutation.
+
+## Edge Cases
+
+**Working-copy gate:** `jj split -r` and `jj squash -r` operate on any change, not just the working copy. The `--tool` helper writes to tempfiles managed by jj, not to the working tree. The working-copy gate from CLAUDE.md does NOT apply to split/squash — no `Effect::Edit` needed.
+
+**Empty change:** If the user presses `s` on an empty change (no diff hunks), `change_diff` returns an empty `Vec<FileDiff>`. Dispatch shows "Nothing to split: change is empty" rather than opening an empty picker.
+
+**Multi-parent change:** `squash_partial` picks `parents.first()` as the destination. If a change has multiple parents (merge commit), this uses the first parent. Multi-parent squash target selection is deferred — the common case is single-parent.
+
+**Tab during hunk picker:** Tab/BackTab are suppressed while the hunk picker is open. The user must Esc to exit the picker before switching panels. This prevents the confusing state of "hunk picker open but graph panel focused."
 
 ## Input Routing
 
@@ -362,7 +374,7 @@ Graph-context mutation keys don't fire during hunk picker — user is in `PanelF
 | `crates/lajjzy-core/src/types.rs` | Add `FileDiff`, `FileHunkSelection` |
 | `crates/lajjzy-core/src/backend.rs` | Add `change_diff`, `split`, `squash_partial` |
 | `crates/lajjzy-core/src/cli.rs` | Implement new methods. Restructure `parse_diff_output` for per-file grouping. |
-| `crates/lajjzy-tui/src/action.rs` | Add `Split`, `SquashPartial`, `HunkToggle`, `HunkSelectAll`, `HunkDeselectAll`, `HunkNextFile`, `HunkPrevFile`, `HunkConfirm`, `HunkCancel`. Add `HunkPickerOp`. Remove `Squash` action. |
+| `crates/lajjzy-tui/src/action.rs` | Add `Split`, `SquashPartial`, `ChangeDiffLoaded`, `HunkToggle`, `HunkSelectAll`, `HunkDeselectAll`, `HunkNextFile`, `HunkPrevFile`, `HunkConfirm`, `HunkCancel`. Add `HunkPickerOp`. Add `MutationKind::Split`, `MutationKind::SquashPartial`. Remove `MutationKind::Squash` and `Action::Squash`. |
 | `crates/lajjzy-tui/src/app.rs` | Add `HunkPicker`, `PickerFile`, `PickerHunk`, `hunk_picker: Option<HunkPicker>`. Add `DetailMode::HunkPicker`. |
 | `crates/lajjzy-tui/src/effect.rs` | Add `LoadChangeDiff`, `Split`, `SquashPartial`. Remove `Squash`. |
 | `crates/lajjzy-tui/src/dispatch.rs` | Hunk picker handlers. `S` opens picker instead of instant squash. `ChangeDiffLoaded` handler. Remove old `Squash` handler. |
