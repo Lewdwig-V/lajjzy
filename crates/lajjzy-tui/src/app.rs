@@ -18,7 +18,9 @@ pub struct TargetPick {
     pub mode: RebaseMode,
     pub excluded: HashSet<String>,
     pub picking: PickingMode,
-    pub original_cursor: usize,
+    /// Change ID at cursor when picking started — restored by identity on cancel.
+    /// Using ID rather than index survives graph refreshes that shift positions.
+    pub original_change_id: String,
     pub descendant_count: usize,
 }
 

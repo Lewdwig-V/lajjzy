@@ -213,14 +213,17 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             // Validate picking state after graph refresh
             if let Some(ref mut pick) = state.target_pick {
                 if !state.graph.details.contains_key(&pick.source) {
-                    let original_cursor = pick.original_cursor;
+                    let original_id = pick.original_change_id.clone();
                     state.target_pick = None;
                     state.status_message =
                         Some("Rebase cancelled: source change no longer exists".into());
-                    // Best-effort restore cursor
-                    let nodes = state.graph.node_indices();
-                    if nodes.contains(&original_cursor) {
-                        state.cursor = original_cursor;
+                    // Best-effort restore cursor by change ID
+                    if let Some(&idx) =
+                        state.graph.node_indices().iter().find(|&&i| {
+                            state.graph.lines[i].change_id.as_deref() == Some(&original_id)
+                        })
+                    {
+                        state.cursor = idx;
                     }
                 } else if pick.mode == RebaseMode::WithDescendants {
                     // Recompute excluded set against new graph topology
@@ -399,7 +402,14 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.omnibar_fallback_idx = None;
                 // Defensive: if dismissing omnibar while in picking mode, exit picking
                 if let Some(ref pick) = state.target_pick {
-                    state.cursor = pick.original_cursor;
+                    let original_id = &pick.original_change_id;
+                    if let Some(&idx) =
+                        state.graph.node_indices().iter().find(|&&i| {
+                            state.graph.lines[i].change_id.as_deref() == Some(original_id)
+                        })
+                    {
+                        state.cursor = idx;
+                    }
                     state.target_pick = None;
                 }
             }
@@ -804,9 +814,9 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.target_pick = Some(TargetPick {
                     source: cid.clone(),
                     mode: RebaseMode::Single,
-                    excluded: HashSet::from([cid]),
+                    excluded: HashSet::from([cid.clone()]),
                     picking: PickingMode::Browsing,
-                    original_cursor: state.cursor,
+                    original_change_id: cid,
                     descendant_count: 0,
                 });
             }
@@ -825,11 +835,11 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 let mut excluded = descendants;
                 excluded.insert(cid.clone());
                 state.target_pick = Some(TargetPick {
-                    source: cid,
+                    source: cid.clone(),
                     mode: RebaseMode::WithDescendants,
                     excluded,
                     picking: PickingMode::Browsing,
-                    original_cursor: state.cursor,
+                    original_change_id: cid,
                     descendant_count,
                 });
             }
@@ -840,6 +850,17 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                     if pick.excluded.contains(&dest) {
                         // Safety: should not happen with navigation skip, but defend
                         state.status_message = Some("Cannot rebase onto excluded change".into());
+                        state.target_pick = Some(pick);
+                        return vec![];
+                    }
+                    // In filtering mode, reject if cursor is on a non-matching change
+                    // (can happen when filter narrows to zero matches — cursor stays put)
+                    if let PickingMode::Filtering { ref query } = pick.picking
+                        && !query.is_empty()
+                        && !change_matches_filter(&dest, &state.graph, query)
+                    {
+                        state.status_message =
+                            Some("No matching target — refine filter or Esc to clear".into());
                         state.target_pick = Some(pick);
                         return vec![];
                     }
@@ -873,10 +894,14 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                         pick.picking = PickingMode::Browsing;
                     }
                     PickingMode::Browsing => {
-                        // Exit picking mode, restore cursor
-                        let original = pick.original_cursor;
+                        // Exit picking mode, restore cursor by change ID (survives graph refresh)
+                        let original_id = pick.original_change_id.clone();
                         state.target_pick = None;
-                        state.cursor = original;
+                        if let Some(&idx) = state.graph.node_indices().iter().find(|&&i| {
+                            state.graph.lines[i].change_id.as_deref() == Some(&original_id)
+                        }) {
+                            state.cursor = idx;
+                        }
                         state.reset_detail();
                     }
                 }
@@ -2665,7 +2690,7 @@ mod tests {
         assert_eq!(pick.source, "abc");
         assert_eq!(pick.mode, RebaseMode::Single);
         assert_eq!(pick.excluded, HashSet::from(["abc".into()]));
-        assert_eq!(pick.original_cursor, 0);
+        assert_eq!(pick.original_change_id, "abc");
         assert_eq!(pick.descendant_count, 0);
         assert_eq!(pick.picking, PickingMode::Browsing);
     }
@@ -2711,7 +2736,7 @@ mod tests {
         assert!(pick.excluded.contains("def"));
         assert!(pick.excluded.contains("abc"));
         assert!(!pick.excluded.contains("ghi"));
-        assert_eq!(pick.original_cursor, 2);
+        assert_eq!(pick.original_change_id, "def");
     }
 
     #[test]

@@ -361,7 +361,7 @@ mod tests {
             mode: RebaseMode::Single,
             excluded: HashSet::from(["abc".into()]),
             picking: PickingMode::Browsing,
-            original_cursor: 0,
+            original_change_id: "abc".into(),
             descendant_count: 0,
         };
 

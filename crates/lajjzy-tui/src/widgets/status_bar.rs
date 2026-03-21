@@ -377,7 +377,7 @@ mod tests {
             mode: RebaseMode::Single,
             excluded: std::collections::HashSet::from(["abc".into()]),
             picking: PickingMode::Browsing,
-            original_cursor: 0,
+            original_change_id: "abc".into(),
             descendant_count: 0,
         }
     }
@@ -388,7 +388,7 @@ mod tests {
             mode: RebaseMode::WithDescendants,
             excluded: std::collections::HashSet::from(["def".into(), "abc".into()]),
             picking: PickingMode::Browsing,
-            original_cursor: 2,
+            original_change_id: "def".into(),
             descendant_count: 1,
         }
     }
