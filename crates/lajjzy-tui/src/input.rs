@@ -10,7 +10,9 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
         }
         (KeyCode::Tab, _) => return Some(Action::TabFocus),
         (KeyCode::BackTab, _) => return Some(Action::BackTabFocus),
-        (KeyCode::Char('R'), _) => return Some(Action::Refresh),
+        (KeyCode::Char('R'), m) if !m.contains(KeyModifiers::CONTROL) => {
+            return Some(Action::Refresh);
+        }
         (KeyCode::Char('@'), _) => return Some(Action::JumpToWorkingCopy),
         (KeyCode::Char('O'), _) => return Some(Action::ToggleOpLog),
         (KeyCode::Char('b'), KeyModifiers::NONE) => return Some(Action::OpenBookmarks),

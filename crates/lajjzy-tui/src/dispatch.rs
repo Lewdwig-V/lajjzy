@@ -210,18 +210,25 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
             }
 
-            // Validate picking source still exists after graph refresh
-            if let Some(ref pick) = state.target_pick
-                && !state.graph.details.contains_key(&pick.source)
-            {
-                let original_cursor = pick.original_cursor;
-                state.target_pick = None;
-                state.status_message =
-                    Some("Rebase cancelled: source change no longer exists".into());
-                // Best-effort restore cursor
-                let nodes = state.graph.node_indices();
-                if nodes.contains(&original_cursor) {
-                    state.cursor = original_cursor;
+            // Validate picking state after graph refresh
+            if let Some(ref mut pick) = state.target_pick {
+                if !state.graph.details.contains_key(&pick.source) {
+                    let original_cursor = pick.original_cursor;
+                    state.target_pick = None;
+                    state.status_message =
+                        Some("Rebase cancelled: source change no longer exists".into());
+                    // Best-effort restore cursor
+                    let nodes = state.graph.node_indices();
+                    if nodes.contains(&original_cursor) {
+                        state.cursor = original_cursor;
+                    }
+                } else if pick.mode == RebaseMode::WithDescendants {
+                    // Recompute excluded set against new graph topology
+                    let descendants = compute_descendants(&pick.source, &state.graph);
+                    pick.descendant_count = descendants.len();
+                    let mut excluded = descendants;
+                    excluded.insert(pick.source.clone());
+                    pick.excluded = excluded;
                 }
             }
         }
@@ -853,8 +860,9 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                     };
                     return vec![effect];
                 }
-                // No selected change — restore pick
+                // No selected change — restore pick with feedback
                 state.target_pick = Some(pick);
+                state.status_message = Some("No change selected".into());
             }
         }
         Action::PickCancel => {
