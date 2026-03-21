@@ -581,6 +581,7 @@ dependencies = [
  "lajjzy-core",
  "lajjzy-tui",
  "ratatui 0.30.0",
+ "tempfile",
 ]
 
 [[package]]
