@@ -3,6 +3,7 @@
 pub enum Effect {
     // Read-only
     LoadGraph {
+        /// Reserved for M3 omnibar. Currently always `None` (default revset).
         revset: Option<String>,
     },
     LoadOpLog,

@@ -26,6 +26,11 @@ struct EffectExecutor {
 }
 
 impl EffectExecutor {
+    /// Spawn a background thread to execute the effect.
+    ///
+    /// `let _ = tx.send(...)` is intentional: if the receiver is dropped (event loop
+    /// exited or panicked), the send fails harmlessly. The spawned thread has no other
+    /// work to do and will exit. This is the expected shutdown race, not a silent failure.
     fn execute(&self, effect: Effect) {
         let backend = Arc::clone(&self.backend);
         let tx = self.tx.clone();
@@ -192,15 +197,22 @@ fn execute_effects(
 }
 
 fn run_editor(initial_text: &str) -> anyhow::Result<String> {
-    let editor = std::env::var("EDITOR")
+    let editor_var = std::env::var("EDITOR")
         .or_else(|_| std::env::var("VISUAL"))
         .unwrap_or_else(|_| "vi".to_string());
+
+    // Parse $EDITOR to support "code --wait", "nvim -f", "emacsclient -c", etc.
+    let mut parts = editor_var.split_whitespace();
+    let program = parts.next().context("$EDITOR is empty")?;
+    let editor_args: Vec<&str> = parts.collect();
+
     let tmp = tempfile::NamedTempFile::new()?;
     std::fs::write(tmp.path(), initial_text)?;
-    let status = std::process::Command::new(&editor)
+    let status = std::process::Command::new(program)
+        .args(&editor_args)
         .arg(tmp.path())
         .status()
-        .with_context(|| format!("Failed to launch editor: {editor}"))?;
+        .with_context(|| format!("Failed to launch editor: {editor_var}"))?;
     if !status.success() {
         bail!("Editor exited with status {status}");
     }

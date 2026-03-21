@@ -7,6 +7,30 @@ use crate::app::AppState;
 use crate::effect::Effect;
 use crate::modal::{HelpContext, Modal};
 
+/// Clear the appropriate concurrency gate for a completed operation.
+/// Uses exhaustive matching — adding a new `MutationKind` variant is a compile error.
+fn clear_op_gate(state: &mut AppState, op: MutationKind) {
+    match op {
+        MutationKind::GitPush => {
+            state.pending_background.remove(&BackgroundKind::Push);
+        }
+        MutationKind::GitFetch => {
+            state.pending_background.remove(&BackgroundKind::Fetch);
+        }
+        MutationKind::Describe
+        | MutationKind::New
+        | MutationKind::Edit
+        | MutationKind::Abandon
+        | MutationKind::Squash
+        | MutationKind::Undo
+        | MutationKind::Redo
+        | MutationKind::BookmarkSet
+        | MutationKind::BookmarkDelete => {
+            state.pending_mutation = None;
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
@@ -351,6 +375,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::Abandon => {
             if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
                 return vec![];
             }
             if let Some(cid) = state.selected_change_id().map(String::from) {
@@ -360,6 +385,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::Squash => {
             if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
                 return vec![];
             }
             if let Some(cid) = state.selected_change_id().map(String::from) {
@@ -369,6 +395,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::NewChange => {
             if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
                 return vec![];
             }
             if let Some(cid) = state.selected_change_id().map(String::from) {
@@ -379,6 +406,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::EditChange => {
             if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
                 return vec![];
             }
             if let Some(cid) = state.selected_change_id().map(String::from) {
@@ -388,6 +416,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::Undo => {
             if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
                 return vec![];
             }
             state.pending_mutation = Some(MutationKind::Undo);
@@ -395,6 +424,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::Redo => {
             if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
                 return vec![];
             }
             state.pending_mutation = Some(MutationKind::Redo);
@@ -403,8 +433,13 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::RepoOpSuccess { op, message, graph } => {
             // Install refreshed graph BEFORE clearing the gate so no mutation
             // can fire against stale state between gate-clear and graph-replace.
+            //
+            // Mutation results bypass the generation check — they are always authoritative
+            // because load_graph() ran AFTER the mutation committed. A concurrent Refresh
+            // with a higher generation is genuinely stale relative to the mutation result.
             if let Some((generation, graph_result)) = graph {
-                // Reuse the GraphLoaded logic via recursive dispatch
+                // Force-accept by ensuring generation >= current
+                state.graph_generation = generation;
                 let nested = dispatch(
                     state,
                     Action::GraphLoaded {
@@ -414,31 +449,14 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 );
                 debug_assert!(nested.is_empty(), "GraphLoaded should not produce effects");
             }
-            match op {
-                MutationKind::GitPush => {
-                    state.pending_background.remove(&BackgroundKind::Push);
-                }
-                MutationKind::GitFetch => {
-                    state.pending_background.remove(&BackgroundKind::Fetch);
-                }
-                _ => {
-                    state.pending_mutation = None;
-                }
+            clear_op_gate(state, op);
+            // Only show success if graph load didn't set an error
+            if state.error.is_none() {
+                state.status_message = Some(message);
             }
-            state.status_message = Some(message);
         }
         Action::RepoOpFailed { op, error } => {
-            match op {
-                MutationKind::GitPush => {
-                    state.pending_background.remove(&BackgroundKind::Push);
-                }
-                MutationKind::GitFetch => {
-                    state.pending_background.remove(&BackgroundKind::Fetch);
-                }
-                _ => {
-                    state.pending_mutation = None;
-                }
-            }
+            clear_op_gate(state, op);
             state.error = Some(error);
         }
         Action::GitPush => {
@@ -470,6 +488,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::OpenDescribe => {
             if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
                 return vec![];
             }
             if let Some(cid) = state.selected_change_id().map(String::from) {
@@ -490,10 +509,16 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
         Action::EditorComplete { change_id, text } => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
             state.pending_mutation = Some(MutationKind::Describe);
             return vec![Effect::Describe { change_id, text }];
         }
         Action::DescribeSave => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
             if let Some(Modal::Describe { change_id, editor }) = state.modal.take() {
                 let text = editor.lines().join("\n");
                 state.pending_mutation = Some(MutationKind::Describe);
@@ -510,6 +535,10 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
         Action::OpenBookmarkSet => {
+            if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
+                return vec![];
+            }
             if let Some(cid) = state.selected_change_id().map(String::from) {
                 let existing = state
                     .selected_detail()
@@ -540,6 +569,9 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
         Action::BookmarkInputConfirm => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
             if let Some(Modal::BookmarkInput {
                 change_id, input, ..
             }) = state.modal.take()
@@ -554,6 +586,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::BookmarkDelete => {
             if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
                 return vec![];
             }
             if let Some(Modal::BookmarkPicker {

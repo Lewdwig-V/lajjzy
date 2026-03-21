@@ -16,13 +16,13 @@ pub struct AppState {
     pub diff_scroll: usize,
     pub diff_data: Vec<DiffHunk>,
     pub modal: Option<Modal>,
-    pub pending_mutation: Option<MutationKind>,
-    pub pending_background: HashSet<BackgroundKind>,
+    pub(crate) pending_mutation: Option<MutationKind>,
+    pub(crate) pending_background: HashSet<BackgroundKind>,
     pub status_message: Option<String>,
-    pub cursor_follows_working_copy: bool,
+    pub(crate) cursor_follows_working_copy: bool,
     /// Monotonic counter for graph snapshot versioning.
     /// Dispatch rejects `GraphLoaded` with generation < this value.
-    pub graph_generation: u64,
+    pub(crate) graph_generation: u64,
 }
 
 impl AppState {
