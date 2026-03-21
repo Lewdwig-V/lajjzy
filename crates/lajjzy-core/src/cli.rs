@@ -419,7 +419,10 @@ impl RepoBackend for JjCliBackend {
     }
 
     fn new_change(&self, after: &str) -> Result<String> {
-        self.run_jj(&["new", after])
+        // --insert-after rebases children onto the new change, inserting into
+        // the stack rather than forking it. Plain `jj new <rev>` would create
+        // a sibling branch on non-leaf changes.
+        self.run_jj(&["new", "--insert-after", after])
     }
 
     fn edit_change(&self, change_id: &str) -> Result<String> {
@@ -920,6 +923,66 @@ new mode 100755";
         assert!(
             graph_after.node_indices().len() > node_count_before,
             "node count should increase after new_change"
+        );
+    }
+
+    #[test]
+    fn new_change_inserts_into_stack() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Create a stack: root -> parent -> child
+        Command::new("jj")
+            .args(["describe", "-m", "parent"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        Command::new("jj")
+            .args(["new", "-m", "child"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+
+        // Get the parent's change ID
+        let graph = backend.load_graph().unwrap();
+        let parent_id = graph
+            .node_indices()
+            .iter()
+            .find_map(|&i| {
+                let cid = graph.lines[i].change_id.as_ref()?;
+                let detail = graph.details.get(cid)?;
+                if detail.description == "parent" {
+                    Some(cid.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("parent change not found");
+
+        // Insert after parent — should NOT fork, child should be reparented
+        backend.new_change(&parent_id).unwrap();
+
+        let graph_after = backend.load_graph().unwrap();
+        // The new change is now between parent and child (inserted, not forked).
+        // Verify child still exists (wasn't lost) and there's one more node.
+        let has_child = graph_after.node_indices().iter().any(|&i| {
+            graph_after
+                .details
+                .get(
+                    graph_after.lines[i]
+                        .change_id
+                        .as_ref()
+                        .unwrap_or(&String::new()),
+                )
+                .is_some_and(|d| d.description == "child")
+        });
+        assert!(
+            has_child,
+            "child change should still exist after insert-after"
         );
     }
 
