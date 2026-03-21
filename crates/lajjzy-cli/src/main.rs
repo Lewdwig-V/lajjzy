@@ -1,7 +1,7 @@
 use std::env;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -23,6 +23,10 @@ struct EffectExecutor {
     /// Monotonic counter for graph snapshot versioning.
     /// Incremented before each `load_graph()` call so later loads get higher generations.
     graph_generation: AtomicU64,
+    /// The active revset filter, synced from dispatch state after each action.
+    /// Read by mutation threads at completion time (not snapshot time) so the
+    /// refreshed graph reflects the filter the user sees when the mutation finishes.
+    active_revset: Arc<Mutex<Option<String>>>,
 }
 
 impl EffectExecutor {
@@ -31,15 +35,21 @@ impl EffectExecutor {
     /// `let _ = tx.send(...)` is intentional: if the receiver is dropped (event loop
     /// exited or panicked), the send fails harmlessly. The spawned thread has no other
     /// work to do and will exit. This is the expected shutdown race, not a silent failure.
+    #[allow(clippy::too_many_lines)]
     fn execute(&self, effect: Effect) {
         let backend = Arc::clone(&self.backend);
         let tx = self.tx.clone();
         // Assign generation BEFORE spawning thread — ordering reflects intent, not completion.
         let generation = self.next_graph_generation(&effect);
+        // Clone the Arc so mutation threads read the current revset at completion
+        // time, not at spawn time — prevents stale filter after user changes it.
+        let active_revset = Arc::clone(&self.active_revset);
         thread::spawn(move || match effect {
             // Read-only effects
-            Effect::LoadGraph { revset: _ } => {
-                let result = backend.load_graph().map_err(|e| e.to_string());
+            Effect::LoadGraph { revset } => {
+                let result = backend
+                    .load_graph(revset.as_deref())
+                    .map_err(|e| e.to_string());
                 let _ = tx.send(Action::GraphLoaded { generation, result });
             }
             Effect::LoadOpLog => {
@@ -55,44 +65,84 @@ impl EffectExecutor {
 
             // Mutation effects
             Effect::Describe { change_id, text } => {
-                run_mutation(&backend, &tx, MutationKind::Describe, generation, || {
-                    backend.describe(&change_id, &text)
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Describe,
+                    generation,
+                    &active_revset,
+                    || backend.describe(&change_id, &text),
+                );
             }
             Effect::New { after } => {
-                run_mutation(&backend, &tx, MutationKind::New, generation, || {
-                    backend.new_change(&after)
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::New,
+                    generation,
+                    &active_revset,
+                    || backend.new_change(&after),
+                );
             }
             Effect::Edit { change_id } => {
-                run_mutation(&backend, &tx, MutationKind::Edit, generation, || {
-                    backend.edit_change(&change_id)
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Edit,
+                    generation,
+                    &active_revset,
+                    || backend.edit_change(&change_id),
+                );
             }
             Effect::Abandon { change_id } => {
-                run_mutation(&backend, &tx, MutationKind::Abandon, generation, || {
-                    backend.abandon(&change_id)
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Abandon,
+                    generation,
+                    &active_revset,
+                    || backend.abandon(&change_id),
+                );
             }
             Effect::Squash { change_id } => {
-                run_mutation(&backend, &tx, MutationKind::Squash, generation, || {
-                    backend.squash(&change_id)
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Squash,
+                    generation,
+                    &active_revset,
+                    || backend.squash(&change_id),
+                );
             }
             Effect::Undo => {
-                run_mutation(&backend, &tx, MutationKind::Undo, generation, || {
-                    backend.undo()
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Undo,
+                    generation,
+                    &active_revset,
+                    || backend.undo(),
+                );
             }
             Effect::Redo => {
-                run_mutation(&backend, &tx, MutationKind::Redo, generation, || {
-                    backend.redo()
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Redo,
+                    generation,
+                    &active_revset,
+                    || backend.redo(),
+                );
             }
             Effect::BookmarkSet { change_id, name } => {
-                run_mutation(&backend, &tx, MutationKind::BookmarkSet, generation, || {
-                    backend.bookmark_set(&change_id, &name)
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::BookmarkSet,
+                    generation,
+                    &active_revset,
+                    || backend.bookmark_set(&change_id, &name),
+                );
             }
             Effect::BookmarkDelete { name } => {
                 run_mutation(
@@ -100,17 +150,39 @@ impl EffectExecutor {
                     &tx,
                     MutationKind::BookmarkDelete,
                     generation,
+                    &active_revset,
                     || backend.bookmark_delete(&name),
                 );
             }
             Effect::GitPush { bookmark } => {
-                run_mutation(&backend, &tx, MutationKind::GitPush, generation, || {
-                    backend.git_push(&bookmark)
-                });
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::GitPush,
+                    generation,
+                    &active_revset,
+                    || backend.git_push(&bookmark),
+                );
             }
             Effect::GitFetch => {
-                run_mutation(&backend, &tx, MutationKind::GitFetch, generation, || {
-                    backend.git_fetch()
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::GitFetch,
+                    generation,
+                    &active_revset,
+                    || backend.git_fetch(),
+                );
+            }
+
+            // EvalRevset: test the query then report back as RevsetLoaded
+            // TODO: wired up fully in Task 5
+            Effect::EvalRevset { query } => {
+                let result = backend.load_graph(Some(&query)).map_err(|e| e.to_string());
+                let _ = tx.send(Action::RevsetLoaded {
+                    query,
+                    generation,
+                    result,
                 });
             }
 
@@ -136,7 +208,8 @@ impl EffectExecutor {
             | Effect::BookmarkSet { .. }
             | Effect::BookmarkDelete { .. }
             | Effect::GitPush { .. }
-            | Effect::GitFetch => self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1,
+            | Effect::GitFetch
+            | Effect::EvalRevset { .. } => self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1,
             _ => 0,
         }
     }
@@ -147,13 +220,24 @@ fn run_mutation(
     tx: &mpsc::Sender<Action>,
     op: MutationKind,
     generation: u64,
+    active_revset: &Mutex<Option<String>>,
     f: impl FnOnce() -> anyhow::Result<String>,
 ) {
     match f() {
         Ok(message) => {
-            // Bundle refreshed graph with success so dispatch clears the gate
-            // and installs the new graph atomically — no window for stale-graph mutations.
-            let graph = Some((generation, backend.load_graph().map_err(|e| e.to_string())));
+            // Read the active revset NOW (at mutation completion time), not at
+            // spawn time — so the refreshed graph reflects the filter the user
+            // currently sees, even if they changed it while the mutation ran.
+            let revset = active_revset
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let graph = Some((
+                generation,
+                backend
+                    .load_graph(revset.as_deref())
+                    .map_err(|e| e.to_string()),
+            ));
             let _ = tx.send(Action::RepoOpSuccess { op, message, graph });
         }
         Err(e) => {
@@ -261,7 +345,7 @@ fn main() -> Result<()> {
     let cwd = env::current_dir().context("Failed to get current directory")?;
     let backend = Arc::new(JjCliBackend::new(&cwd).context("Failed to open jj workspace")?);
 
-    let graph = backend.load_graph().context("Failed to load graph")?;
+    let graph = backend.load_graph(None).context("Failed to load graph")?;
     let mut state = AppState::new(graph);
 
     let (tx, rx) = mpsc::channel();
@@ -269,6 +353,7 @@ fn main() -> Result<()> {
         backend,
         tx,
         graph_generation: AtomicU64::new(0),
+        active_revset: Arc::new(Mutex::new(None)),
     };
 
     let original_hook = std::panic::take_hook();
@@ -306,6 +391,11 @@ fn run_loop(
             };
             if let Some(action) = action {
                 let effects = dispatch(state, action);
+                executor
+                    .active_revset
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone_from(&state.active_revset);
                 execute_effects(terminal, state, executor, effects);
             } else if let Some(lajjzy_tui::modal::Modal::Describe { ref mut editor, .. }) =
                 state.modal
@@ -321,6 +411,11 @@ fn run_loop(
         // Drain all pending results before next render
         while let Ok(action) = rx.try_recv() {
             let effects = dispatch(state, action);
+            executor
+                .active_revset
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone_from(&state.active_revset);
             execute_effects(terminal, state, executor, effects);
         }
 

@@ -15,6 +15,7 @@ pub struct StatusBarWidget<'a> {
     detail: Option<&'a ChangeDetail>,
     error: Option<&'a str>,
     status_message: Option<&'a str>,
+    active_revset: Option<&'a str>,
     pending_background: &'a HashSet<BackgroundKind>,
 }
 
@@ -24,6 +25,7 @@ impl<'a> StatusBarWidget<'a> {
         detail: Option<&'a ChangeDetail>,
         error: Option<&'a str>,
         status_message: Option<&'a str>,
+        active_revset: Option<&'a str>,
         pending_background: &'a HashSet<BackgroundKind>,
     ) -> Self {
         Self {
@@ -31,6 +33,7 @@ impl<'a> StatusBarWidget<'a> {
             detail,
             error,
             status_message,
+            active_revset,
             pending_background,
         }
     }
@@ -42,7 +45,7 @@ impl Widget for StatusBarWidget<'_> {
             return;
         }
 
-        // Priority: error (red) > status_message (green) > pending indicator > normal info
+        // Priority: error (red) > status_message (green) > active_revset (cyan) > pending indicator > normal info
         if let Some(err) = self.error {
             let style = Style::default().fg(Color::Red);
             let line = Line::styled(err, style);
@@ -53,6 +56,14 @@ impl Widget for StatusBarWidget<'_> {
         if let Some(msg) = self.status_message {
             let style = Style::default().fg(Color::Green);
             let line = Line::styled(msg, style);
+            buf.set_line(area.x, area.y, &line, area.width);
+            return;
+        }
+
+        if let Some(revset) = self.active_revset {
+            let text = format!("revset: {revset}");
+            let style = Style::default().fg(Color::Cyan);
+            let line = Line::styled(text, style);
             buf.set_line(area.x, area.y, &line, area.width);
             return;
         }
@@ -137,7 +148,7 @@ mod tests {
     fn renders_change_detail() {
         let detail = sample_detail();
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(Some("abc12"), Some(&detail), None, None, &bg);
+        let widget = StatusBarWidget::new(Some("abc12"), Some(&detail), None, None, None, &bg);
         let area = Rect::new(0, 0, 60, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -158,7 +169,8 @@ mod tests {
     #[test]
     fn renders_error_in_red() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, Some("Refresh failed: timeout"), None, &bg);
+        let widget =
+            StatusBarWidget::new(None, None, Some("Refresh failed: timeout"), None, None, &bg);
         let area = Rect::new(0, 0, 40, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -173,7 +185,7 @@ mod tests {
     #[test]
     fn renders_nothing_when_no_detail_and_no_error() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, None, None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg);
         let area = Rect::new(0, 0, 40, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -187,7 +199,7 @@ mod tests {
     #[test]
     fn renders_status_message_in_green() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), &bg);
+        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -202,7 +214,8 @@ mod tests {
     #[test]
     fn error_takes_priority_over_status_message() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, Some("fatal error"), Some("all good"), &bg);
+        let widget =
+            StatusBarWidget::new(None, None, Some("fatal error"), Some("all good"), None, &bg);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -219,7 +232,7 @@ mod tests {
     fn renders_pushing_indicator_in_cyan() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -235,7 +248,7 @@ mod tests {
     fn renders_fetching_indicator_in_cyan() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Fetch);
-        let widget = StatusBarWidget::new(None, None, None, None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -252,7 +265,7 @@ mod tests {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
         bg.insert(BackgroundKind::Fetch);
-        let widget = StatusBarWidget::new(None, None, None, None, &bg);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -267,7 +280,7 @@ mod tests {
     fn status_message_takes_priority_over_pending_indicator() {
         let mut bg: HashSet<BackgroundKind> = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), &bg);
+        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -276,6 +289,40 @@ mod tests {
             .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
             .collect();
         assert!(line0.contains("Pushed ok"));
+        assert!(!line0.contains("Pushing..."));
+    }
+
+    #[test]
+    fn status_bar_shows_active_revset() {
+        let bg = empty_bg();
+        let widget = StatusBarWidget::new(None, None, None, None, Some("mine() & ~empty()"), &bg);
+        let area = Rect::new(0, 0, 60, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..60)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains("revset: mine() & ~empty()"),
+            "expected revset breadcrumb, got: {line0:?}"
+        );
+        assert_eq!(buf[(0, 0)].style().fg, Some(Color::Cyan));
+    }
+
+    #[test]
+    fn active_revset_takes_priority_over_pending_indicator() {
+        let mut bg = HashSet::new();
+        bg.insert(BackgroundKind::Push);
+        let widget = StatusBarWidget::new(None, None, None, None, Some("mine()"), &bg);
+        let area = Rect::new(0, 0, 40, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..40)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(line0.contains("revset: mine()"));
         assert!(!line0.contains("Pushing..."));
     }
 }

@@ -14,7 +14,7 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
         (KeyCode::Char('@'), _) => return Some(Action::JumpToWorkingCopy),
         (KeyCode::Char('O'), _) => return Some(Action::ToggleOpLog),
         (KeyCode::Char('b'), KeyModifiers::NONE) => return Some(Action::OpenBookmarks),
-        (KeyCode::Char('/'), _) => return Some(Action::OpenFuzzyFind),
+        (KeyCode::Char('/'), _) => return Some(Action::OpenOmnibar),
         (KeyCode::Char('?'), _) => return Some(Action::OpenHelp),
         _ => {}
     }
@@ -70,7 +70,8 @@ pub fn map_modal_event(event: KeyEvent, modal: &Modal) -> Option<Action> {
     // Describe modal has its own key handling (intercepts Esc differently)
     if let Modal::Describe { .. } = modal {
         return match (event.code, event.modifiers) {
-            (KeyCode::Char('s') | KeyCode::Enter, KeyModifiers::CONTROL) => {
+            (KeyCode::Char('s'), KeyModifiers::CONTROL)
+            | (KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 Some(Action::DescribeSave)
             }
             (KeyCode::Esc, _) => Some(Action::ModalDismiss),
@@ -104,11 +105,11 @@ pub fn map_modal_event(event: KeyEvent, modal: &Modal) -> Option<Action> {
         _ => {}
     }
 
-    let is_fuzzy = matches!(modal, Modal::FuzzyFind { .. });
+    let is_omnibar = matches!(modal, Modal::Omnibar { .. });
 
-    if is_fuzzy {
+    if is_omnibar {
         match event.code {
-            KeyCode::Backspace => Some(Action::FuzzyBackspace),
+            KeyCode::Backspace => Some(Action::OmnibarBackspace),
             KeyCode::Char('n') if event.modifiers == KeyModifiers::CONTROL => {
                 Some(Action::ModalMoveDown)
             }
@@ -119,7 +120,7 @@ pub fn map_modal_event(event: KeyEvent, modal: &Modal) -> Option<Action> {
                 if event.modifiers == KeyModifiers::NONE
                     || event.modifiers == KeyModifiers::SHIFT =>
             {
-                Some(Action::FuzzyInput(c))
+                Some(Action::OmnibarInput(c))
             }
             _ => None,
         }
@@ -290,7 +291,7 @@ mod tests {
         );
         assert_eq!(
             map_graph(key(KeyCode::Char('/'))),
-            Some(Action::OpenFuzzyFind)
+            Some(Action::OpenOmnibar)
         );
         assert_eq!(map_graph(key(KeyCode::Char('?'))), Some(Action::OpenHelp));
     }
@@ -308,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn modal_q_dismisses_non_fuzzy() {
+    fn modal_q_dismisses_non_omnibar() {
         let modal = Modal::Help {
             context: crate::app::HelpContext::Graph,
             scroll: 0,
@@ -320,15 +321,15 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_q_is_text_input() {
-        let modal = Modal::FuzzyFind {
+    fn omnibar_q_is_text_input() {
+        let modal = Modal::Omnibar {
             query: String::new(),
             matches: vec![],
             cursor: 0,
         };
         assert_eq!(
             map_modal_event(key(KeyCode::Char('q')), &modal),
-            Some(Action::FuzzyInput('q'))
+            Some(Action::OmnibarInput('q'))
         );
     }
 
@@ -350,8 +351,8 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_ctrl_n_p_navigation() {
-        let modal = Modal::FuzzyFind {
+    fn omnibar_ctrl_n_p_navigation() {
+        let modal = Modal::Omnibar {
             query: String::new(),
             matches: vec![],
             cursor: 0,
@@ -367,15 +368,15 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_backspace() {
-        let modal = Modal::FuzzyFind {
+    fn omnibar_backspace() {
+        let modal = Modal::Omnibar {
             query: String::new(),
             matches: vec![],
             cursor: 0,
         };
         assert_eq!(
             map_modal_event(key(KeyCode::Backspace), &modal),
-            Some(Action::FuzzyBackspace)
+            Some(Action::OmnibarBackspace)
         );
     }
 

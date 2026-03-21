@@ -23,6 +23,10 @@ pub struct AppState {
     /// Monotonic counter for graph snapshot versioning.
     /// Dispatch rejects `GraphLoaded` with generation < this value.
     pub(crate) graph_generation: u64,
+    /// The currently active revset filter, or `None` for the default revset.
+    pub active_revset: Option<String>,
+    /// Saved cursor position for restoring focus when exiting a revset filter.
+    pub(crate) omnibar_fallback_idx: Option<usize>,
 }
 
 impl AppState {
@@ -46,6 +50,8 @@ impl AppState {
             status_message: None,
             cursor_follows_working_copy: false,
             graph_generation: 0,
+            active_revset: None,
+            omnibar_fallback_idx: None,
         }
     }
 

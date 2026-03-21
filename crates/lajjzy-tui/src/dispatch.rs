@@ -34,6 +34,13 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
+    // Clear stale omnibar fallback on any action except RevsetLoaded.
+    // Prevents a slow EvalRevset error from jumping the cursor after the
+    // user has already navigated elsewhere.
+    if !matches!(action, Action::RevsetLoaded { .. }) {
+        state.omnibar_fallback_idx = None;
+    }
+
     match action {
         Action::MoveDown => {
             let nodes = state.graph.node_indices();
@@ -72,7 +79,9 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::Refresh => {
             state.error = None;
-            return vec![Effect::LoadGraph { revset: None }];
+            return vec![Effect::LoadGraph {
+                revset: state.active_revset.clone(),
+            }];
         }
         Action::GraphLoaded { generation, result } => {
             // Reject stale snapshots from concurrent loads
@@ -252,10 +261,15 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 cursor: 0,
             });
         }
-        Action::OpenFuzzyFind => {
-            let matches = state.graph.node_indices().to_vec();
-            state.modal = Some(Modal::FuzzyFind {
-                query: String::new(),
+        Action::OpenOmnibar => {
+            let query = state.active_revset.clone().unwrap_or_default();
+            let matches = if query.is_empty() {
+                state.graph.node_indices().to_vec()
+            } else {
+                fuzzy_match(&query, &state.graph)
+            };
+            state.modal = Some(Modal::Omnibar {
+                query,
                 matches,
                 cursor: 0,
             });
@@ -271,6 +285,11 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.modal = Some(Modal::Help { context, scroll: 0 });
         }
         Action::ModalDismiss => {
+            // Clear omnibar fallback to prevent stale cursor jumps
+            // from in-flight EvalRevset results arriving after dismiss.
+            if matches!(state.modal, Some(Modal::Omnibar { .. })) {
+                state.omnibar_fallback_idx = None;
+            }
             state.modal = None;
         }
         Action::ModalMoveDown => {
@@ -290,7 +309,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                             *cursor += 1;
                         }
                     }
-                    Modal::FuzzyFind {
+                    Modal::Omnibar {
                         matches, cursor, ..
                     } => {
                         if *cursor + 1 < matches.len() {
@@ -311,7 +330,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 match modal {
                     Modal::OpLog { cursor, .. }
                     | Modal::BookmarkPicker { cursor, .. }
-                    | Modal::FuzzyFind { cursor, .. } => {
+                    | Modal::Omnibar { cursor, .. } => {
                         *cursor = cursor.saturating_sub(1);
                     }
                     Modal::Help { scroll, .. } => {
@@ -336,12 +355,22 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                         state.reset_detail();
                     }
                 }
-                Some(Modal::FuzzyFind {
-                    matches, cursor, ..
+                Some(Modal::Omnibar {
+                    query,
+                    matches,
+                    cursor,
                 }) => {
-                    if let Some(&idx) = matches.get(cursor) {
-                        state.cursor = idx;
-                        state.reset_detail();
+                    if query.is_empty() {
+                        if state.active_revset.is_some() {
+                            state.active_revset = None;
+                            return vec![Effect::LoadGraph { revset: None }];
+                        }
+                        // No active revset + empty query: just close (modal already taken)
+                    } else {
+                        // Non-empty: store fuzzy fallback and try as revset
+                        state.omnibar_fallback_idx = matches.get(cursor).copied();
+                        state.status_message = Some("Evaluating revset\u{2026}".into());
+                        return vec![Effect::EvalRevset { query }];
                     }
                 }
                 other => {
@@ -349,8 +378,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
             }
         }
-        Action::FuzzyInput(c) => {
-            if let Some(Modal::FuzzyFind {
+        Action::OmnibarInput(c) => {
+            if let Some(Modal::Omnibar {
                 query,
                 matches,
                 cursor,
@@ -361,8 +390,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 *cursor = 0;
             }
         }
-        Action::FuzzyBackspace => {
-            if let Some(Modal::FuzzyFind {
+        Action::OmnibarBackspace => {
+            if let Some(Modal::Omnibar {
                 query,
                 matches,
                 cursor,
@@ -532,6 +561,49 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                     change_id,
                     initial_text: text,
                 }];
+            }
+        }
+        Action::RevsetLoaded {
+            query,
+            generation,
+            result,
+        } => {
+            // Reject stale revset results
+            if generation < state.graph_generation {
+                return vec![];
+            }
+
+            match result {
+                Ok(new_graph) => {
+                    state.omnibar_fallback_idx = None;
+                    if new_graph.node_indices().is_empty() {
+                        // Maintain staleness invariant even for empty results
+                        state.graph_generation = generation;
+                        state.status_message = Some(format!("No changes match: {query}"));
+                    } else {
+                        state.active_revset = Some(query);
+                        let nested = dispatch(
+                            state,
+                            Action::GraphLoaded {
+                                generation,
+                                result: Ok(new_graph),
+                            },
+                        );
+                        assert!(
+                            nested.is_empty(),
+                            "RevsetLoaded: nested GraphLoaded must not produce effects"
+                        );
+                    }
+                }
+                Err(err_msg) => {
+                    // Show the revset error so the user knows why it failed
+                    state.status_message = Some(format!("Invalid revset: {err_msg}"));
+                    // Fall back to fuzzy jump if available
+                    if let Some(idx) = state.omnibar_fallback_idx.take() {
+                        state.cursor = idx;
+                        state.reset_detail();
+                    }
+                }
             }
         }
         Action::OpenBookmarkSet => {
@@ -1370,59 +1442,61 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_find_opens_with_all_matches() {
+    fn omnibar_opens_with_all_matches() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::OpenOmnibar);
         match &state.modal {
-            Some(Modal::FuzzyFind { matches, query, .. }) => {
+            Some(Modal::Omnibar { matches, query, .. }) => {
                 assert!(query.is_empty());
                 assert_eq!(matches.len(), state.graph.node_indices().len());
             }
-            _ => panic!("Expected FuzzyFind modal"),
+            _ => panic!("Expected Omnibar modal"),
         }
     }
 
     #[test]
     fn modal_move_down_and_up() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::OpenOmnibar);
         dispatch(&mut state, Action::ModalMoveDown);
         match &state.modal {
-            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 1),
-            _ => panic!("Expected FuzzyFind modal"),
+            Some(Modal::Omnibar { cursor, .. }) => assert_eq!(*cursor, 1),
+            _ => panic!("Expected Omnibar modal"),
         }
         dispatch(&mut state, Action::ModalMoveUp);
         match &state.modal {
-            Some(Modal::FuzzyFind { cursor, .. }) => assert_eq!(*cursor, 0),
-            _ => panic!("Expected FuzzyFind modal"),
+            Some(Modal::Omnibar { cursor, .. }) => assert_eq!(*cursor, 0),
+            _ => panic!("Expected Omnibar modal"),
         }
     }
 
     #[test]
-    fn fuzzy_input_and_backspace() {
+    fn omnibar_input_and_backspace() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
-        dispatch(&mut state, Action::FuzzyInput('a'));
-        dispatch(&mut state, Action::FuzzyInput('b'));
+        dispatch(&mut state, Action::OpenOmnibar);
+        dispatch(&mut state, Action::OmnibarInput('a'));
+        dispatch(&mut state, Action::OmnibarInput('b'));
         match &state.modal {
-            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "ab"),
-            _ => panic!("Expected FuzzyFind modal"),
+            Some(Modal::Omnibar { query, .. }) => assert_eq!(query, "ab"),
+            _ => panic!("Expected Omnibar modal"),
         }
-        dispatch(&mut state, Action::FuzzyBackspace);
+        dispatch(&mut state, Action::OmnibarBackspace);
         match &state.modal {
-            Some(Modal::FuzzyFind { query, .. }) => assert_eq!(query, "a"),
-            _ => panic!("Expected FuzzyFind modal"),
+            Some(Modal::Omnibar { query, .. }) => assert_eq!(query, "a"),
+            _ => panic!("Expected Omnibar modal"),
         }
     }
 
     #[test]
-    fn modal_enter_on_fuzzy_find_jumps_cursor() {
+    fn modal_enter_on_omnibar_empty_closes() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::OpenOmnibar);
         dispatch(&mut state, Action::ModalMoveDown);
-        dispatch(&mut state, Action::ModalEnter);
+        let effects = dispatch(&mut state, Action::ModalEnter);
         assert!(state.modal.is_none());
-        assert_eq!(state.cursor(), 2);
+        assert!(effects.is_empty());
+        // Cursor unchanged — empty query without active revset just closes
+        assert_eq!(state.cursor(), 0);
     }
 
     #[test]
@@ -1443,25 +1517,25 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_input_narrows_matches() {
+    fn omnibar_input_narrows_matches() {
         let mut state = AppState::new(sample_graph());
-        dispatch(&mut state, Action::OpenFuzzyFind);
+        dispatch(&mut state, Action::OpenOmnibar);
 
         let initial_count = match &state.modal {
-            Some(Modal::FuzzyFind { matches, .. }) => matches.len(),
-            _ => panic!("Expected FuzzyFind"),
+            Some(Modal::Omnibar { matches, .. }) => matches.len(),
+            _ => panic!("Expected Omnibar"),
         };
 
-        dispatch(&mut state, Action::FuzzyInput('d'));
-        dispatch(&mut state, Action::FuzzyInput('e'));
-        dispatch(&mut state, Action::FuzzyInput('s'));
-        dispatch(&mut state, Action::FuzzyInput('c'));
+        dispatch(&mut state, Action::OmnibarInput('d'));
+        dispatch(&mut state, Action::OmnibarInput('e'));
+        dispatch(&mut state, Action::OmnibarInput('s'));
+        dispatch(&mut state, Action::OmnibarInput('c'));
 
         match &state.modal {
-            Some(Modal::FuzzyFind { matches, .. }) => {
+            Some(Modal::Omnibar { matches, .. }) => {
                 assert!(matches.len() <= initial_count);
             }
-            _ => panic!("Expected FuzzyFind"),
+            _ => panic!("Expected Omnibar"),
         }
     }
 
@@ -2075,5 +2149,150 @@ mod tests {
         // modal still open, pending unchanged
         assert!(state.modal.is_some());
         assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
+    }
+
+    // --- Omnibar revset dispatch tests ---
+
+    #[test]
+    fn open_omnibar_prefills_active_revset() {
+        let mut state = AppState::new(sample_graph());
+        state.active_revset = Some("mine()".into());
+        dispatch(&mut state, Action::OpenOmnibar);
+        match &state.modal {
+            Some(Modal::Omnibar { query, .. }) => assert_eq!(query, "mine()"),
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_enter_empty_clears_revset() {
+        let mut state = AppState::new(sample_graph());
+        state.active_revset = Some("mine()".into());
+        state.modal = Some(Modal::Omnibar {
+            query: String::new(),
+            matches: vec![],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::ModalEnter);
+        assert_eq!(effects, vec![Effect::LoadGraph { revset: None }]);
+        assert!(state.active_revset.is_none());
+    }
+
+    #[test]
+    fn omnibar_enter_empty_no_revset_just_closes() {
+        let mut state = AppState::new(sample_graph());
+        state.modal = Some(Modal::Omnibar {
+            query: String::new(),
+            matches: vec![],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::ModalEnter);
+        assert!(effects.is_empty());
+        assert!(state.modal.is_none());
+    }
+
+    #[test]
+    fn omnibar_enter_nonempty_emits_eval_revset() {
+        let mut state = AppState::new(sample_graph());
+        let node_idx = state.graph.node_indices()[0];
+        state.modal = Some(Modal::Omnibar {
+            query: "mine()".into(),
+            matches: vec![node_idx],
+            cursor: 0,
+        });
+        let effects = dispatch(&mut state, Action::ModalEnter);
+        assert_eq!(
+            effects,
+            vec![Effect::EvalRevset {
+                query: "mine()".into()
+            }]
+        );
+        assert_eq!(state.omnibar_fallback_idx, Some(node_idx));
+    }
+
+    #[test]
+    fn revset_loaded_success_sets_active_revset() {
+        let mut state = AppState::new(sample_graph());
+        let filtered = sample_graph();
+        let effects = dispatch(
+            &mut state,
+            Action::RevsetLoaded {
+                query: "mine()".into(),
+                generation: 1,
+                result: Ok(filtered),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.active_revset.as_deref(), Some("mine()"));
+    }
+
+    #[test]
+    fn revset_loaded_empty_graph_shows_feedback() {
+        let mut state = AppState::new(sample_graph());
+        let empty_graph = GraphData::new(vec![], HashMap::new(), None, String::new());
+        let effects = dispatch(
+            &mut state,
+            Action::RevsetLoaded {
+                query: "nobody()".into(),
+                generation: 1,
+                result: Ok(empty_graph),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.active_revset.is_none());
+        assert!(
+            state
+                .status_message
+                .as_deref()
+                .unwrap()
+                .contains("nobody()")
+        );
+    }
+
+    #[test]
+    fn revset_loaded_failure_falls_back_to_fuzzy_jump() {
+        let mut state = AppState::new(sample_graph());
+        let fallback = state.graph.node_indices()[1];
+        state.omnibar_fallback_idx = Some(fallback);
+        let effects = dispatch(
+            &mut state,
+            Action::RevsetLoaded {
+                query: "garbage".into(),
+                generation: 1,
+                result: Err("parse error".into()),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), fallback);
+        assert!(state.omnibar_fallback_idx.is_none());
+    }
+
+    #[test]
+    fn revset_loaded_stale_generation_rejected() {
+        let mut state = AppState::new(sample_graph());
+        state.graph_generation = 5;
+        let effects = dispatch(
+            &mut state,
+            Action::RevsetLoaded {
+                query: "mine()".into(),
+                generation: 3, // older than current
+                result: Ok(sample_graph()),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.active_revset.is_none()); // not set for stale result
+    }
+
+    #[test]
+    fn refresh_respects_active_revset() {
+        let mut state = AppState::new(sample_graph());
+        state.active_revset = Some("mine()".into());
+        let effects = dispatch(&mut state, Action::Refresh);
+        assert_eq!(
+            effects,
+            vec![Effect::LoadGraph {
+                revset: Some("mine()".into())
+            }]
+        );
     }
 }

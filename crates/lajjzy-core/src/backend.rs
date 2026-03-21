@@ -10,7 +10,8 @@ use anyhow::Result;
 pub trait RepoBackend: Send + Sync {
     /// Load the full change graph for display.
     /// Returns all graph lines with pre-loaded change details.
-    fn load_graph(&self) -> Result<GraphData>;
+    /// If `revset` is `Some`, passes `-r <revset>` to `jj log` to filter results.
+    fn load_graph(&self, revset: Option<&str>) -> Result<GraphData>;
 
     /// Compute diff hunks for a specific file in a change.
     /// Lazy — called only when user drills into a file.
