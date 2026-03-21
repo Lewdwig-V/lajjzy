@@ -117,7 +117,7 @@ See `CLAUDE.md` for architectural constraints and crate structure.
 - **M3d — Autocomplete for jj revset query language syntax in the Omnibar
 - **M4 — Conflict Handling**: conflict file navigation, 3-way merge view, external merge tool launch
 - **M5 — Forge Integration**: Gerrit, GitHub, GitLab — review status in graph, push-for-review
-- **M6 — Polish**: configurable keymap, theming, mouse support, packaging
+- **M6 — Polish**: configurable keymap, theming, mouse support, packaging, collapsible debug pane which shows which jj commands we are running
 - **M7 — Parallel Branches**: lane view for concurrent work (git-butler model)
 - **M8 — Gerrit Depth**: patchset comparison, review actions, inline comments
 - **M9 — GitHub/GitLab Stacked PRs**: Graphite-style stack-aware PR management
