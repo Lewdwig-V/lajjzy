@@ -31,6 +31,14 @@ Operations requiring new UI primitives:
 - `bookmark move`
 - Stack-aware bulk operations
 
+### Future concerns (documented here so M2 design accommodates them)
+
+**Revset bar (M3 or earlier).** The graph view hardcodes a default revset. The fuzzy-find modal (`/`) should double as a revset input: if the query parses as a valid revset, the graph refilters via `load_graph()` with the custom revset; if it doesn't parse, it falls back to fuzzy-matching on descriptions and IDs. This is how `jj log` works — the first argument is a revset — and exposing it makes the TUI a power-user tool. M2 implication: `Effect::LoadGraph` should accept an optional revset parameter (`Option<String>`) from the start, defaulting to `None` (use hardcoded default). This avoids a signature change later.
+
+**Conflict mode (M4).** The status bar showing conflict state isn't sufficient for multi-file conflicts. When the selected change has conflicts, the detail pane should switch to a conflict-specific layout: file list filtered to conflicted files only, per-file conflict status (resolved/unresolved), and Enter opens a 3-way merge view. This is a `DetailMode::ConflictView` that activates automatically. M2 implication: none — the `DetailMode` enum is extensible, and the graph already carries `has_conflict` per change.
+
+**Effect cancellation (M3+).** The current effect model has no way to cancel in-flight background tasks. For M2's push/fetch this is acceptable (rare, intentional). But background revset evaluation or conflict detection in later milestones will need cancellation. M2 implication: the executor should be designed so that adding a `TaskHandle` with a `cancel()` method is additive, not a rewrite. Concretely: the executor's `execute()` could return an opaque `TaskId` that dispatch stores in `AppState`, and a future `Effect::Cancel(TaskId)` drops the thread's work. For M2, `execute()` returns nothing and `TaskId` is not yet introduced — but the executor's internal structure (spawn thread, send result on channel) is compatible with wrapping in a cancellation token later.
+
 ## Effect System Architecture
 
 ### Core Types
@@ -40,7 +48,7 @@ Defined in `lajjzy-tui`, never executed there:
 ```rust
 enum Effect {
     // Read-only
-    LoadGraph,
+    LoadGraph { revset: Option<String> },
     LoadOpLog,
     LoadFileDiff { change_id: String, path: String },
 
