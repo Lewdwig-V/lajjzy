@@ -104,8 +104,38 @@ impl EffectExecutor {
                     || backend.abandon(&change_id),
                 );
             }
-            // Placeholders — wired in Task 6
-            Effect::LoadChangeDiff { .. } | Effect::Split { .. } | Effect::SquashPartial { .. } => {
+            Effect::LoadChangeDiff {
+                change_id,
+                operation,
+            } => {
+                let result = backend.change_diff(&change_id).map_err(|e| e.to_string());
+                let _ = tx.send(Action::ChangeDiffLoaded { operation, result });
+            }
+            Effect::Split {
+                change_id,
+                selections,
+            } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Split,
+                    generation,
+                    &active_revset,
+                    || backend.split(&change_id, &selections),
+                );
+            }
+            Effect::SquashPartial {
+                change_id,
+                selections,
+            } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::SquashPartial,
+                    generation,
+                    &active_revset,
+                    || backend.squash_partial(&change_id, &selections),
+                );
             }
             Effect::Undo => {
                 run_mutation(
