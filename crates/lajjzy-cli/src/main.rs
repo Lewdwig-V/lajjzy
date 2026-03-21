@@ -5,7 +5,8 @@ use crossterm::event::{self, Event, KeyEventKind};
 
 use lajjzy_core::backend::RepoBackend;
 use lajjzy_core::cli::JjCliBackend;
-use lajjzy_tui::app::{AppState, dispatch};
+use lajjzy_tui::app::AppState;
+use lajjzy_tui::dispatch::dispatch;
 use lajjzy_tui::input::{map_event, map_modal_event};
 use lajjzy_tui::render::render;
 

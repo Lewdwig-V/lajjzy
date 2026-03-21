@@ -1,5 +1,9 @@
+pub mod action;
 pub mod app;
+pub mod dispatch;
+pub mod effect;
 pub mod input;
+pub mod modal;
 pub mod panels;
 pub mod render;
 pub mod widgets;
