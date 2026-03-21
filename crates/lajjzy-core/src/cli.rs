@@ -56,7 +56,7 @@ fn strip_graph_glyphs(line: &str) -> &str {
             i += 1;
             continue;
         }
-        if bytes[i] == b'|' || bytes[i] == b'-' || bytes[i] == b'@' {
+        if bytes[i] == b'|' || bytes[i] == b'-' || bytes[i] == b'@' || bytes[i] == b'~' {
             i += 1;
             continue;
         }
@@ -517,6 +517,23 @@ mod tests {
         assert_eq!(detail.files.len(), 1);
         assert_eq!(detail.files[0].status, crate::types::FileStatus::Renamed);
         assert!(detail.files[0].path.contains("=>"));
+    }
+
+    #[test]
+    fn parse_graph_output_file_after_tilde_glyph() {
+        // jj uses `~` to indicate elided revisions; file lines after it must
+        // still be compacted into the detail, not leak into graph lines.
+        let output = "\
+◆  zuk root\x1Fzuk\x1E000\x1ELewdwig\x1Ea@b\x1E8h ago\x1E\x1E\x1Efalse\x1Efalse\x1E
+~  A LICENSE";
+
+        let graph = parse_graph_output(output).unwrap();
+        // Only the node line — the file line is compacted out.
+        assert_eq!(graph.lines.len(), 1);
+        let detail = graph.details.get("zuk").unwrap();
+        assert_eq!(detail.files.len(), 1);
+        assert_eq!(detail.files[0].path, "LICENSE");
+        assert_eq!(detail.files[0].status, crate::types::FileStatus::Added);
     }
 
     #[test]
