@@ -229,6 +229,7 @@ mod tests {
                 ),
             ]),
             Some(0),
+            String::new(),
         )
     }
 

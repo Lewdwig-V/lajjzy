@@ -43,6 +43,12 @@ Operations requiring new UI primitives:
 - **Explicit cancellation:** `Effect::Cancel(TaskCategory)` lets dispatch kill a long-running fetch if the user hits Escape.
 - M2 implication: the executor's `execute()` returns nothing and task categories are not yet introduced. But the internal structure (spawn thread, send result on channel) is compatible with wrapping in a `TaskHandle` + cancellation token later without a rewrite.
 
+**Working-copy gate for filesystem operations (M3+).** `$EDITOR`, merge tools, and any operation that reads or writes repo files on disk can only operate on the working-copy change (`@`). Only `@` has files materialized on the filesystem — other changes exist only in jj's internal storage. If the user targets a non-`@` change with a filesystem operation, dispatch must auto-issue `Effect::Edit` to switch the working copy first, then proceed with the filesystem operation. The `@` marker moves visibly in the graph before the tool launches, which is honest UX: "I switched your working copy so your editor can see these files." This applies to:
+- File editing from the detail pane (`e` on a file, M3)
+- Merge tool launch for conflict resolution (M4)
+- Any future operation that touches the working tree
+Note: M2's `describe` via `$EDITOR` is unaffected — it edits a tempfile containing the description text, not repo files.
+
 ## Effect System Architecture
 
 ### Core Types
@@ -496,7 +502,7 @@ Existing 104 tests: `MockBackend`, `FailingBackend`, `DiffMockBackend` disappear
 
 - **Dispatch purity (enforced):** `dispatch()` takes `(&mut AppState, Action)` and returns `Vec<Effect>`. Never calls backend methods or performs I/O.
 - **Effect executor boundary:** Effects executed in `lajjzy-cli` only. `lajjzy-tui` defines the `Effect` enum but never executes effects.
-- **Facade boundary (updated):** `lajjzy-tui` never imports `RepoBackend`, `std::process::Command`, or jj-lib. `$EDITOR` launch handled by event loop in `lajjzy-cli`.
+- **Facade boundary (updated):** `lajjzy-tui` never imports `RepoBackend`, `std::process::Command`, or jj-lib. `Effect::SuspendForEditor` is *defined* in `lajjzy-tui` (part of the `Effect` enum) but *executed* in `lajjzy-cli` — `execute_effects` intercepts it and handles the subprocess launch. No subprocess is ever spawned from `lajjzy-tui` code.
 - **Mutation gate:** At most one local mutation in flight, enforced by `AppState.pending_mutation`. Background ops gated independently.
 - **Three interaction patterns:** Every mutation declares its slot (Instant, Mini-modal, Background). New patterns require design justification.
 

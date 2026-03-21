@@ -25,13 +25,18 @@ cargo fmt --check              # format check
 
 ## Architectural Constraints
 
-- **Facade boundary:** `lajjzy-tui` accesses jj only through `lajjzy-core::RepoBackend`. It never uses `std::process::Command` or imports jj-lib.
+- **Facade boundary:** `lajjzy-tui` never imports `RepoBackend`, `std::process::Command`, or jj-lib. The `Effect::SuspendForEditor` variant is *defined* in `lajjzy-tui` (as part of the `Effect` enum) but *executed* in `lajjzy-cli` — the `execute_effects` function in `main.rs` intercepts it before it reaches the executor and handles the terminal suspend/resume + `std::process::Command` launch there. No subprocess is ever spawned from `lajjzy-tui` code.
 - **No panics on repo ops:** All `RepoBackend` methods return `Result`. Errors update `AppState.error`, never panic.
-- **Dispatch purity (aspirational):** For M0, dispatch takes `&dyn RepoBackend`. In M2+, repo calls move to an effect executor.
+- **Dispatch purity:** `dispatch()` takes `(&mut AppState, Action)` and returns `Vec<Effect>`. It never calls backend methods or performs I/O.
+- **Effect executor boundary:** Effects executed in `lajjzy-cli` only. `lajjzy-tui` defines the `Effect` enum but never executes effects.
+- **Mutation gate:** At most one local mutation in flight, enforced by `AppState.pending_mutation`. Background ops (push/fetch) gated independently.
+- **Interaction patterns:** Every mutation declares its slot (Instant, Mini-modal, Background). New patterns require design justification.
+- **Working-copy gate for filesystem ops:** Any operation that reads or writes repo files on disk (file editing, merge tools, anything that touches the working tree) requires the target change to be `@`. If it is not, dispatch must emit `Effect::Edit` first to switch the working copy, then proceed. This is visible to the user — the `@` marker moves before the tool launches.
 
 ## Key Patterns
 
-- Elm-style state machine: `fn dispatch(state: &mut AppState, action: Action, backend: &dyn RepoBackend)`
+- Elm-style state machine: `fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect>`
 - Graph data loaded in bulk via `load_graph()` — one jj subprocess call, not per-keypress.
 - Cursor skips connector lines; always lands on change nodes.
-- Backend calls in dispatch: `load_graph()` (Refresh) and `file_diff()` (DetailEnter). Both are pragmatic impurities that move to the effect executor in M2.
+- Three concurrency lanes: local mutations, push, fetch — independent gates, no blocking between lanes.
+- Dispatch is pure: all backend calls and I/O flow through the effect executor in `lajjzy-cli`.

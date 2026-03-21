@@ -40,6 +40,27 @@ impl JjCliBackend {
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }
+
+    /// Run a jj command and return a status message.
+    ///
+    /// jj prints human-readable feedback to stderr on success, so stderr is
+    /// preferred when non-empty. stdout is returned as a fallback.
+    fn run_jj(&self, args: &[&str]) -> Result<String> {
+        let output = Command::new("jj")
+            .args(args)
+            .current_dir(&self.workspace_root)
+            .output()
+            .with_context(|| format!("Failed to run `jj {}`", args.join(" ")))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+        if !output.status.success() {
+            bail!("{}", if stderr.is_empty() { &stdout } else { &stderr });
+        }
+
+        Ok(if stderr.is_empty() { stdout } else { stderr })
+    }
 }
 
 /// Separator between display text and metadata in template output.
@@ -111,7 +132,7 @@ fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
 }
 
 /// Parse the raw output of `jj log` with our custom template into `GraphData`.
-fn parse_graph_output(output: &str) -> Result<GraphData> {
+fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
     let mut lines = Vec::new();
     let mut details = std::collections::HashMap::new();
     let mut working_copy_index = None;
@@ -196,7 +217,7 @@ fn parse_graph_output(output: &str) -> Result<GraphData> {
         );
     }
 
-    Ok(GraphData::new(lines, details, working_copy_index))
+    Ok(GraphData::new(lines, details, working_copy_index, op_id))
 }
 
 /// Parse git-format diff output into hunks.
@@ -318,6 +339,18 @@ impl RepoBackend for JjCliBackend {
     }
 
     fn load_graph(&self) -> Result<GraphData> {
+        // Capture current operation head for snapshot versioning.
+        let op_id = self
+            .run_jj(&[
+                "op",
+                "log",
+                "--limit=1",
+                "--no-graph",
+                "-T",
+                "self.id().short(16)",
+            ])
+            .unwrap_or_else(|_| "unknown".to_string());
+
         // `working_copies` is empty in jj 0.39.0; use self.current_working_copy() instead.
         let template = concat!(
             "change_id.short() ++ \" \" ++ ",
@@ -351,7 +384,7 @@ impl RepoBackend for JjCliBackend {
         let stdout =
             String::from_utf8(output.stdout).context("jj log output was not valid UTF-8")?;
 
-        parse_graph_output(&stdout)
+        parse_graph_output(&stdout, op_id)
     }
 
     fn op_log(&self) -> Result<Vec<crate::types::OpLogEntry>> {
@@ -379,6 +412,58 @@ impl RepoBackend for JjCliBackend {
             String::from_utf8(output.stdout).context("jj op log output was not valid UTF-8")?;
 
         parse_op_log_output(&stdout)
+    }
+
+    fn describe(&self, change_id: &str, text: &str) -> Result<String> {
+        self.run_jj(&["describe", change_id, "-m", text])
+    }
+
+    fn new_change(&self, after: &str) -> Result<String> {
+        // --insert-after rebases children onto the new change, inserting into
+        // the stack rather than forking it. Plain `jj new <rev>` would create
+        // a sibling branch on non-leaf changes.
+        self.run_jj(&["new", "--insert-after", after])
+    }
+
+    fn edit_change(&self, change_id: &str) -> Result<String> {
+        self.run_jj(&["edit", change_id])
+    }
+
+    fn abandon(&self, change_id: &str) -> Result<String> {
+        self.run_jj(&["abandon", change_id])
+    }
+
+    fn squash(&self, change_id: &str) -> Result<String> {
+        // `-u` / `--use-destination-message` prevents jj from opening an editor
+        // to compose a combined description when both source and destination have
+        // non-empty descriptions.
+        self.run_jj(&["squash", "-r", change_id, "-u"])
+    }
+
+    /// Undo the most recent operation.
+    ///
+    fn undo(&self) -> Result<String> {
+        self.run_jj(&["undo"])
+    }
+
+    fn redo(&self) -> Result<String> {
+        self.run_jj(&["redo"])
+    }
+
+    fn bookmark_set(&self, change_id: &str, name: &str) -> Result<String> {
+        self.run_jj(&["bookmark", "set", name, "-r", change_id])
+    }
+
+    fn bookmark_delete(&self, name: &str) -> Result<String> {
+        self.run_jj(&["bookmark", "delete", name])
+    }
+
+    fn git_push(&self, bookmark: &str) -> Result<String> {
+        self.run_jj(&["git", "push", "--bookmark", bookmark])
+    }
+
+    fn git_fetch(&self) -> Result<String> {
+        self.run_jj(&["git", "fetch"])
     }
 }
 
@@ -428,7 +513,7 @@ mod tests {
 ◉  def45 bob 1h ago\x1Fdef45\x1Ebbb22\x1Ebob\x1Ebob@ex.com\x1E1h ago\x1Eadd feature\x1E\x1Efalse\x1Efalse\x1E
 │  add feature";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         assert_eq!(graph.lines.len(), 4);
         assert_eq!(graph.node_indices(), vec![0, 2]);
         assert_eq!(graph.working_copy_index, Some(0));
@@ -448,7 +533,7 @@ mod tests {
 │  some description
 │";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         assert!(graph.lines[0].change_id.is_some());
         assert!(graph.lines[1].change_id.is_none());
         assert!(graph.lines[2].change_id.is_none());
@@ -457,21 +542,21 @@ mod tests {
     #[test]
     fn parse_graph_output_empty_bookmarks() {
         let output = "◉  x y 1m\x1Fx\x1Ey\x1Ez\x1Ea@b\x1E1m\x1Ed\x1E\x1Efalse\x1Efalse\x1E";
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         assert!(graph.details.get("x").unwrap().bookmarks.is_empty());
     }
 
     #[test]
     fn parse_graph_output_rejects_incomplete_metadata() {
         let output = "◉  x y 1m\x1Fx\x1Ey"; // only 2 fields
-        let result = parse_graph_output(output);
+        let result = parse_graph_output(output, String::new());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Expected 10"));
     }
 
     #[test]
     fn parse_graph_output_empty_input() {
-        let graph = parse_graph_output("").unwrap();
+        let graph = parse_graph_output("", String::new()).unwrap();
         assert!(graph.lines.is_empty());
         assert!(graph.node_indices().is_empty());
     }
@@ -486,7 +571,7 @@ mod tests {
 │  A foo.txt
 ◆  zzzzzzzz (no description)\x1Fzzzzzzzz\x1E000000000000\x1E\x1E\x1E56y ago\x1E\x1E\x1Etrue\x1Efalse\x1E";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
 
         // File lines are compacted out of graph.lines; only node lines remain.
         assert_eq!(graph.lines.len(), 3);
@@ -512,7 +597,7 @@ mod tests {
 @  abc rename\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Erename\x1E\x1Efalse\x1Efalse\x1E@
 │  R {foo.txt => bar.txt}";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         let detail = graph.details.get("abc").unwrap();
         assert_eq!(detail.files.len(), 1);
         assert_eq!(detail.files[0].status, crate::types::FileStatus::Renamed);
@@ -527,7 +612,7 @@ mod tests {
 ◆  zuk root\x1Fzuk\x1E000\x1ELewdwig\x1Ea@b\x1E8h ago\x1E\x1E\x1Efalse\x1Efalse\x1E
 ~  A LICENSE";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         // Only the node line — the file line is compacted out.
         assert_eq!(graph.lines.len(), 1);
         let detail = graph.details.get("zuk").unwrap();
@@ -541,7 +626,7 @@ mod tests {
         let output = "\
 @  abc (no description)\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1E\x1E\x1Etrue\x1Efalse\x1E@";
 
-        let graph = parse_graph_output(output).unwrap();
+        let graph = parse_graph_output(output, String::new()).unwrap();
         let detail = graph.details.get("abc").unwrap();
         assert!(detail.files.is_empty());
     }
@@ -728,5 +813,407 @@ new mode 100755";
         for &idx in graph.node_indices() {
             assert!(graph.detail_at(idx).is_some());
         }
+    }
+
+    // ── mutation method tests ────────────────────────────────────────────────
+
+    fn init_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        Command::new("jj")
+            .args(["git", "init"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        tmp
+    }
+
+    #[test]
+    fn abandon_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Create a second change so we can abandon it without touching the root.
+        backend.describe("@", "to-abandon").unwrap();
+        backend.new_change("@").unwrap();
+
+        let graph_before = backend.load_graph().unwrap();
+        let node_count_before = graph_before.node_indices().len();
+
+        // Identify the non-working-copy, non-root change to abandon.
+        let wc_idx = graph_before.working_copy_index.unwrap();
+        let wc_id = graph_before.lines[wc_idx]
+            .change_id
+            .as_ref()
+            .unwrap()
+            .clone();
+        // The parent of the working copy is the one we described.
+        let parent_id = graph_before
+            .node_indices()
+            .iter()
+            .filter_map(|&i| graph_before.lines[i].change_id.as_ref())
+            .find(|id| *id != &wc_id)
+            .and_then(|id| {
+                let d = graph_before.details.get(id)?;
+                if d.description == "to-abandon" {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("should find the 'to-abandon' change");
+
+        backend.abandon(&parent_id).unwrap();
+
+        let graph_after = backend.load_graph().unwrap();
+        assert!(
+            graph_after.node_indices().len() < node_count_before,
+            "node count should decrease after abandon"
+        );
+        assert!(
+            !graph_after.details.contains_key(&parent_id),
+            "abandoned change should not appear in graph"
+        );
+    }
+
+    #[test]
+    fn describe_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        backend.describe("@", "my description").unwrap();
+
+        let graph = backend.load_graph().unwrap();
+        let wc_idx = graph.working_copy_index.unwrap();
+        let change_id = graph.lines[wc_idx].change_id.as_ref().unwrap();
+        let detail = graph.details.get(change_id).unwrap();
+        assert_eq!(detail.description, "my description");
+    }
+
+    #[test]
+    fn new_change_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        let graph_before = backend.load_graph().unwrap();
+        let node_count_before = graph_before.node_indices().len();
+
+        backend.new_change("@").unwrap();
+
+        let graph_after = backend.load_graph().unwrap();
+        assert!(
+            graph_after.node_indices().len() > node_count_before,
+            "node count should increase after new_change"
+        );
+    }
+
+    #[test]
+    fn new_change_inserts_into_stack() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Create a stack: root -> parent -> child
+        Command::new("jj")
+            .args(["describe", "-m", "parent"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        Command::new("jj")
+            .args(["new", "-m", "child"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+
+        // Get the parent's change ID
+        let graph = backend.load_graph().unwrap();
+        let parent_id = graph
+            .node_indices()
+            .iter()
+            .find_map(|&i| {
+                let cid = graph.lines[i].change_id.as_ref()?;
+                let detail = graph.details.get(cid)?;
+                if detail.description == "parent" {
+                    Some(cid.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("parent change not found");
+
+        // Insert after parent — should NOT fork, child should be reparented
+        backend.new_change(&parent_id).unwrap();
+
+        let graph_after = backend.load_graph().unwrap();
+        // The new change is now between parent and child (inserted, not forked).
+        // Verify child still exists (wasn't lost) and there's one more node.
+        let has_child = graph_after.node_indices().iter().any(|&i| {
+            graph_after
+                .details
+                .get(
+                    graph_after.lines[i]
+                        .change_id
+                        .as_ref()
+                        .unwrap_or(&String::new()),
+                )
+                .is_some_and(|d| d.description == "child")
+        });
+        assert!(
+            has_child,
+            "child change should still exist after insert-after"
+        );
+    }
+
+    #[test]
+    fn edit_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Create two changes: wc (@) and a parent with a known description.
+        backend.describe("@", "first").unwrap();
+        backend.new_change("@").unwrap();
+        backend.describe("@", "second").unwrap();
+
+        let graph_before = backend.load_graph().unwrap();
+        let prev_wc_idx = graph_before.working_copy_index.unwrap();
+        let prev_wc_id = graph_before.lines[prev_wc_idx]
+            .change_id
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        // Find the "first" change.
+        let first_id = graph_before
+            .node_indices()
+            .iter()
+            .filter_map(|&i| graph_before.lines[i].change_id.as_ref())
+            .find(|id| {
+                graph_before
+                    .details
+                    .get(*id)
+                    .is_some_and(|d| d.description == "first")
+            })
+            .expect("should find 'first' change")
+            .clone();
+
+        backend.edit_change(&first_id).unwrap();
+
+        let graph_after = backend.load_graph().unwrap();
+        let new_wc_idx = graph_after.working_copy_index.unwrap();
+        let new_wc_id = graph_after.lines[new_wc_idx].change_id.as_ref().unwrap();
+
+        assert_ne!(new_wc_id, &prev_wc_id, "working copy should have moved");
+        assert_eq!(new_wc_id, &first_id, "working copy should now be 'first'");
+    }
+
+    #[test]
+    fn squash_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+
+        // Write a file in the initial change.
+        std::fs::write(tmp.path().join("parent.txt"), "parent content\n").unwrap();
+        Command::new("jj")
+            .args(["describe", "-m", "parent"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+
+        // Create a child change and write another file.
+        Command::new("jj")
+            .args(["new"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        std::fs::write(tmp.path().join("child.txt"), "child content\n").unwrap();
+        Command::new("jj")
+            .args(["describe", "-m", "child"])
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        let graph_before = backend.load_graph().unwrap();
+        let wc_idx = graph_before.working_copy_index.unwrap();
+        let child_id = graph_before.lines[wc_idx]
+            .change_id
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        backend.squash(&child_id).unwrap();
+
+        let graph_after = backend.load_graph().unwrap();
+        // After squash the child change ID is gone from the graph.
+        // jj creates a new empty working-copy commit in its place, so the
+        // total node count stays the same — we verify absence of the original ID.
+        assert!(
+            !graph_after.details.contains_key(&child_id),
+            "squashed child change should not appear in graph"
+        );
+        // child.txt should now appear in the surviving parent change's files.
+        let surviving_id = graph_after
+            .node_indices()
+            .iter()
+            .filter_map(|&i| graph_after.lines[i].change_id.as_ref())
+            .find(|id| {
+                graph_after
+                    .details
+                    .get(*id)
+                    .is_some_and(|d| d.files.iter().any(|f| f.path == "child.txt"))
+            });
+        assert!(
+            surviving_id.is_some(),
+            "child.txt should appear in the squashed parent"
+        );
+    }
+
+    #[test]
+    fn undo_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        backend.describe("@", "before undo").unwrap();
+        {
+            let graph = backend.load_graph().unwrap();
+            let wc_idx = graph.working_copy_index.unwrap();
+            let id = graph.lines[wc_idx].change_id.as_ref().unwrap();
+            assert_eq!(graph.details[id].description, "before undo");
+        }
+
+        backend.undo().unwrap();
+
+        let graph = backend.load_graph().unwrap();
+        let wc_idx = graph.working_copy_index.unwrap();
+        let id = graph.lines[wc_idx].change_id.as_ref().unwrap();
+        assert_ne!(
+            graph.details[id].description, "before undo",
+            "description should be reverted after undo"
+        );
+    }
+
+    #[test]
+    fn redo_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        backend.describe("@", "redo target").unwrap();
+        backend.undo().unwrap();
+
+        {
+            let graph = backend.load_graph().unwrap();
+            let wc_idx = graph.working_copy_index.unwrap();
+            let id = graph.lines[wc_idx].change_id.as_ref().unwrap();
+            assert_ne!(graph.details[id].description, "redo target");
+        }
+
+        backend.redo().unwrap();
+
+        let graph = backend.load_graph().unwrap();
+        let wc_idx = graph.working_copy_index.unwrap();
+        let id = graph.lines[wc_idx].change_id.as_ref().unwrap();
+        assert_eq!(
+            graph.details[id].description, "redo target",
+            "description should be restored after redo"
+        );
+    }
+
+    #[test]
+    fn bookmark_set_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        backend.bookmark_set("@", "mybookmark").unwrap();
+
+        let graph = backend.load_graph().unwrap();
+        let has_bookmark = graph.details.values().any(|d| {
+            d.bookmarks
+                .iter()
+                .any(|b| b.trim_end_matches('*') == "mybookmark")
+        });
+        assert!(has_bookmark, "mybookmark should appear in graph details");
+    }
+
+    #[test]
+    fn bookmark_delete_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        backend.bookmark_set("@", "todelete").unwrap();
+        backend.bookmark_delete("todelete").unwrap();
+
+        let graph = backend.load_graph().unwrap();
+        let has_bookmark = graph.details.values().any(|d| {
+            d.bookmarks
+                .iter()
+                .any(|b| b.trim_end_matches('*') == "todelete")
+        });
+        assert!(!has_bookmark, "todelete should be gone from graph details");
+    }
+
+    /// Push requires a configured remote — skip in CI unless a remote is present.
+    #[test]
+    #[ignore = "requires a configured git remote"]
+    fn git_push_requires_remote() {
+        // This test is intentionally ignored because it needs a real git remote.
+        // To run manually: cargo test -p lajjzy-core git_push_requires_remote -- --ignored
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        backend.bookmark_set("@", "main").unwrap();
+        let result = backend.git_push("main");
+        // With no remote configured this will error; the test just validates the
+        // method compiles and returns a Result.
+        let _ = result;
+    }
+
+    /// Fetch requires a configured remote — skip in CI unless a remote is present.
+    #[test]
+    #[ignore = "requires a configured git remote"]
+    fn git_fetch_requires_remote() {
+        // This test is intentionally ignored because it needs a real git remote.
+        // To run manually: cargo test -p lajjzy-core git_fetch_requires_remote -- --ignored
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        let result = backend.git_fetch();
+        // With no remote configured this will error; the test just validates the
+        // method compiles and returns a Result.
+        let _ = result;
     }
 }

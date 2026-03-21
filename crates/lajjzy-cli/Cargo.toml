@@ -12,7 +12,9 @@ lajjzy-core = { path = "../lajjzy-core" }
 lajjzy-tui = { path = "../lajjzy-tui" }
 ratatui = "0.30"
 crossterm = "0.29"
+tui-textarea = "0.7.0"
 anyhow = "1"
+tempfile = "3"
 
 [lints]
 workspace = true
