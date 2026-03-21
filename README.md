@@ -25,11 +25,13 @@ These are enforced from M0 onward. They are non-negotiable and mechanically chec
 
 ### C1: Facade Boundary
 
-`lajjzy-tui` depends on `lajjzy-core` only. It never shells out to `jj` or any external process directly. All repo access goes through the `RepoBackend` trait.
+`lajjzy-tui` is pure: it contains types, dispatch logic, and rendering functions. It never performs IO of any kind — no `RepoBackend` calls, no subprocess spawning, no filesystem access. All IO (repo operations, `$EDITOR` launch, merge tool launch, thread spawning) lives in the effect executor in `lajjzy-cli`.
 
 **Enforcement:**
 - `lajjzy-tui/Cargo.toml` never lists `jj-lib` as a dependency.
 - CI grep check: no `std::process::Command` usage in `lajjzy-tui`.
+- CI grep check: no `std::thread::spawn` in `lajjzy-tui`.
+- No exceptions. If something needs IO, it's an `Effect` that the executor handles.
 
 ### C2: No Panics on Repo Operations
 
@@ -41,13 +43,13 @@ Every `RepoBackend` method returns `Result`. Dispatch handles errors by updating
 
 ### C3: Dispatch Purity (Aspirational)
 
-For M0, dispatch takes `&dyn RepoBackend` for `Refresh`. This is a pragmatic impurity — the graph view needs repo data to render, and threading it through an effect executor before the effect system exists adds complexity without value.
+For M0, dispatch takes `&dyn RepoBackend` for `Refresh`. This is a pragmatic impurity — the graph view needs repo data to render, and threading it through the effect executor before the effect system exists adds complexity without value. The `RepoBackend` call happens through the trait (no `Command` or `spawn` in `lajjzy-tui`), so C1's grep checks still pass.
 
-Starting in M2, repo calls move to an effect executor and dispatch becomes `(AppState, Action) → (AppState, Vec<Effect>)` — a pure function. The effect executor handles `RepoOp`, `SpawnTask`, `Quit`, etc.
+Starting in M2, repo calls move to the effect executor in `lajjzy-cli` and dispatch becomes `(AppState, Action) → (AppState, Vec<Effect>)` — a pure function.
 
 **Enforcement (from M2):**
 - Dispatch function signature takes no `&dyn RepoBackend` parameter.
-- All `RepoBackend` calls originate from the effect executor module only.
+- All `RepoBackend` calls originate from `lajjzy-cli/src/executor.rs` only.
 
 ### C4: jj-lib Gate
 
@@ -178,11 +180,27 @@ The conflict file list shows:
 | Key | Action |
 |-----|--------|
 | `j` / `k` | Move between conflicted files |
-| `Enter` | Open 3-way merge view for selected file |
-| `e` | Open file in `$EDITOR` (for manual conflict resolution) |
-| `m` | Open configured external merge tool |
+| `Enter` | Open 3-way merge view for selected file (in-TUI, no disk access needed) |
+| `e` | Open file in `$EDITOR` (for manual conflict resolution) — **requires working copy** |
+| `m` | Open configured external merge tool — **requires working copy** |
 | `n` / `N` | Jump to next / previous unresolved file |
 | `R` | Refresh conflict state (re-check which files are resolved) |
+
+**Working-copy requirement for filesystem tools:**
+
+`$EDITOR` and external merge tools operate on files on disk. Only the working-copy change (`@`) has its tree materialized. If the user presses `e` or `m` on a change that is *not* the current working copy, lajjzy must switch the working copy first:
+
+1. Emit `Effect::Edit(change_id)` to switch `@` to the selected change.
+2. Wait for `MutationComplete` — the graph refreshes, `@` visibly moves.
+3. *Then* emit `Effect::SuspendForEditor` or launch the merge tool.
+
+This is a two-step effect sequence. Dispatch emits `Edit` first; when `MutationComplete` arrives, dispatch detects the pending editor launch (stored in `AppState` as deferred intent) and emits the editor effect.
+
+The status bar shows "Switched to ksqxwpml → opening editor…" so the user knows `@` moved. This is fully reversible — `undo` restores the previous working-copy position *and* un-edits the file.
+
+The same rule applies to `e` (open file in `$EDITOR`) from the normal detail pane file list: if the selected change is not `@`, auto-switch first. The 3-way merge view (`Enter`) does *not* require this — it renders conflict data from `ChangeInfo` and `RepoBackend::file_diff()`, which work on any change without disk materialization.
+
+This rule is an invariant: **no `Effect::SuspendForEditor` or external tool launch is ever emitted for a non-working-copy change.** The executor can assert this.
 
 **3-way merge view:**
 
@@ -257,7 +275,7 @@ This dual-mode is invisible to the user: they type, the graph updates. Revset sy
 ```rust
 pub struct AppState {
     // ...
-
+    
     /// The active revset filter, if any. None means "default revset."
     /// Displayed in the status bar so the user knows the view is filtered.
     pub active_revset: Option<String>,
@@ -285,22 +303,25 @@ lajjzy/
 │   │       ├── diff.rs       # Diff types (backend-agnostic)
 │   │       ├── error.rs      # RepoError with structured context (C6)
 │   │       └── mock.rs       # Mock backend for testing (cfg(test) or feature-gated)
-│   ├── lajjzy-tui/          # Terminal UI: ratatui widgets, input handling, state machine
+│   ├── lajjzy-tui/          # Pure: types, dispatch, rendering. No IO.
 │   │   └── src/
-│   │       ├── app.rs        # Top-level app state and event loop
-│   │       ├── dispatch.rs   # Action → State+Effects (C3)
-│   │       ├── effects.rs    # Effect executor (from M2)
+│   │       ├── app.rs        # AppState, Action, Effect types
+│   │       ├── dispatch.rs   # (AppState, Action) → (AppState, Vec<Effect>) (C3)
 │   │       ├── input.rs      # Keymap routing, modal input handling
 │   │       ├── panels/       # One module per panel (graph, detail, status, op_log)
-│   │       ├── widgets/      # Custom ratatui widgets (graph renderer, diff viewer, etc.)
-│   │       └── tasks.rs      # Async background task management
-│   └── lajjzy-cli/          # Binary crate: arg parsing, terminal setup, panic handler
+│   │       └── widgets/      # Custom ratatui widgets (graph renderer, diff viewer, etc.)
+│   └── lajjzy-cli/          # Impure boundary: event loop, executor, terminal, subprocesses
 │       └── src/
-│           └── main.rs
+│           ├── main.rs       # Arg parsing, terminal setup, panic handler
+│           ├── event_loop.rs # Poll loop: crossterm input + mpsc channel + dispatch + render
+│           └── executor.rs   # Effect executor: RepoBackend calls, thread spawning,
+│                             #   $EDITOR launch, merge tool launch. All IO lives here.
 ├── Cargo.toml                # Workspace root
 ├── CLAUDE.md                 # C5: from first commit
 └── README.md
 ```
+
+**Rationale:** `lajjzy-tui` contains no IO — no `RepoBackend` calls, no `std::process::Command`, no thread spawning, no terminal operations. It exports pure functions: `dispatch()` and `render()`. The impure boundary — everything that touches the outside world — lives in `lajjzy-cli`. This makes `lajjzy-tui` trivially testable (no mocks for IO) and keeps C1 mechanically enforceable without exceptions.
 
 ### 5.2 The RepoBackend Trait
 
@@ -346,13 +367,15 @@ pub trait RepoBackend: Send + Sync {
 
     /// Load the change graph filtered by a revset expression.
     /// All visible changes with parent relationships, per-change file lists,
-    /// and per-file conflict status. This is the only call required for
-    /// initial render — cursor movement within the graph never triggers
-    /// a backend call.
+    /// and per-file conflict status.
+    ///
+    /// Returns a `GraphSnapshot` which includes the op ID of the repo state
+    /// at the time the snapshot was taken. This is used by dispatch to reject
+    /// stale snapshots when concurrent operations complete out of order.
     ///
     /// If `revset` is None, uses the default revset (configurable,
     /// defaults to jj's built-in default: the user's working set).
-    fn load_graph(&self, revset: Option<&str>) -> Result<Vec<ChangeInfo>, RepoError>;
+    fn load_graph(&self, revset: Option<&str>) -> Result<GraphSnapshot, RepoError>;
 
     /// Compute diff hunks for a file in a change. This is the one read-path
     /// call that remains lazy — hunk-level detail is only needed when the
@@ -384,6 +407,17 @@ pub trait RepoBackend: Send + Sync {
 
     /// Redo a previously undone operation.
     fn op_redo(&self) -> Result<(), RepoError>;
+}
+
+/// A versioned graph snapshot. The op_id allows dispatch to detect
+/// and discard stale snapshots from out-of-order concurrent operations.
+pub struct GraphSnapshot {
+    pub changes: Vec<ChangeInfo>,
+    /// The jj operation ID at the time this snapshot was taken.
+    /// jj's repo lock serialises all mutations, so op IDs are totally
+    /// ordered on the main op chain. A snapshot with a higher op_id
+    /// always reflects a more recent repo state.
+    pub op_id: OpId,
 }
 ```
 
@@ -422,11 +456,11 @@ Note: `tokio` is a transitive dependency via `jj-lib` — it exists in the build
 
 ### 5.4 Event Loop
 
-The main loop follows the standard ratatui pattern, extended with a background task channel:
+The main loop lives in `lajjzy-cli/src/event_loop.rs`. It calls into `lajjzy-tui` for dispatch and rendering (pure functions), and handles all IO itself.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                      Event Loop                          │
+│              Event Loop (lajjzy-cli)                      │
 │                                                          │
 │   ┌──────────┐   ┌──────────┐   ┌────────────────┐      │
 │   │ Terminal  │   │  Tick    │   │  Background    │      │
@@ -436,7 +470,7 @@ The main loop follows the standard ratatui pattern, extended with a background t
 │                       │                                  │
 │                       ▼                                  │
 │  ┌─────────────────────────────────────────────────┐     │
-│  │  Dispatch (C3)                                  │     │
+│  │  Dispatch (lajjzy-tui, C3)                      │     │
 │  │                                                 │     │
 │  │  M0–M1: fn dispatch(&AppState, Action,          │     │
 │  │                      &dyn RepoBackend)          │     │
@@ -450,18 +484,20 @@ The main loop follows the standard ratatui pattern, extended with a background t
 │           ▼                     ▼                        │
 │  ┌──────────────┐     ┌──────────────────┐               │
 │  │   Render     │     │ Effect Executor  │  (M2+)        │
-│  │  (state →    │     │ RepoOp(...)      │               │
-│  │   frame)     │     │ SpawnTask(...)   │               │
-│  └──────────────┘     │ Quit             │               │
+│  │ (lajjzy-tui) │     │ (lajjzy-cli)     │               │
+│  │  state →     │     │ RepoBackend calls│               │
+│  │   frame      │     │ thread::spawn    │               │
+│  └──────────────┘     │ $EDITOR launch   │               │
+│                       │ merge tool launch│               │
 │                       └──────────────────┘               │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
 ```
 
-- **Input** is read from crossterm's async event stream.
-- **Dispatch** maps `(state, action)` to new state. In M0–M1, it takes a `&dyn RepoBackend` for reads (C3 pragmatic impurity). From M2 onward, it returns `Vec<Effect>` and the effect executor handles repo calls.
-- **Effect Executor** (M2+) processes effects: repo mutations via `RepoBackend`, spawning background tasks, or triggering a re-render.
-- **Render** is a pure function of `AppState` — standard immediate-mode ratatui.
+- **Input** is read from crossterm's event stream in the event loop (`lajjzy-cli`).
+- **Dispatch** is a pure function exported by `lajjzy-tui`. In M0–M1, it takes a `&dyn RepoBackend` for reads (C3 pragmatic impurity). From M2 onward, it returns `Vec<Effect>` and the effect executor handles all IO.
+- **Effect Executor** lives in `lajjzy-cli`. It processes effects: repo mutations via `RepoBackend`, thread spawning, `$EDITOR` launch, merge tool launch. All `std::process::Command` and `std::thread::spawn` calls originate here.
+- **Render** is a pure function exported by `lajjzy-tui` — standard immediate-mode ratatui. No IO.
 
 ### 5.5 Effect and Action Types (M2+)
 
@@ -491,6 +527,7 @@ pub enum Effect {
     // --- TUI lifecycle ---
     RefreshGraph,
     SuspendForEditor { change: ChangeId, current_text: String },
+    LaunchMergeTool { change: ChangeId, path: RepoPath },
     Quit,
 }
 ```
@@ -505,33 +542,41 @@ pub enum Action {
     Key(KeyEvent),
     Resize(u16, u16),
 
-    // --- Repo operation results ---
-    RepoOpSuccess(OpSuccess),
-    RepoOpFailed(OpFailure),
+    // --- Mutation results (atomic: status + graph in one action) ---
+    MutationComplete(MutationResult),
+    MutationFailed(OpFailure),
 
-    // --- Background completion ---
+    // --- Background completion (atomic: status + graph in one action) ---
     BackgroundComplete(BackgroundResult),
+    BackgroundFailed(BackgroundFailure),
 
     // --- Editor return ---
     EditorReturned { change: ChangeId, new_text: String },
     EditorCancelled,
 
     // --- Internal ---
-    GraphLoaded(Vec<ChangeInfo>),
     Tick,
 }
 ```
 
+**Why no separate `GraphLoaded` action:** An earlier design sent `RepoOpSuccess` and `GraphLoaded` as two actions on the channel. This creates a race: dispatch clears `pending_mutation` on `RepoOpSuccess`, but the graph still reflects pre-mutation state until `GraphLoaded` arrives. If the user presses a mutation key between the two (fast typist, slow `load_graph()`), dispatch allows it — against stale change IDs from the old graph. For `abandon` or `squash`, the selected change may no longer exist.
+
+The fix has two layers: (1) `MutationComplete` carries both the status message and the `GraphSnapshot` atomically, so the gate never opens without a graph update in the same state transition. (2) Each `GraphSnapshot` carries an `op_id` from jj's operation log. When concurrent lanes (local mutation, push, fetch) complete out of order, dispatch compares `snapshot.op_id > state.graph_op_id` before applying — a stale snapshot from an earlier repo state is silently discarded, preventing a fetch snapshot from resurrecting changes that a later abandon removed.
+
 #### Result types
 
 ```rust
-/// Structured success — enough context for the status bar message.
-pub struct OpSuccess {
+/// Atomic mutation result — carries both the status message
+/// and the versioned graph snapshot. Dispatch compares op_ids
+/// before applying: a stale snapshot is silently dropped.
+pub struct MutationResult {
     pub op: OpKind,
-    pub description: String,  // e.g. "Abandoned ksqxwpml"
+    pub description: String,       // e.g. "Abandoned ksqxwpml"
+    pub snapshot: GraphSnapshot,   // versioned graph from load_graph()
 }
 
 /// Structured failure — enough context for user-facing error (C6).
+/// No graph refresh on failure — the repo state hasn't changed.
 pub struct OpFailure {
     pub op: OpKind,
     pub error: RepoError,
@@ -549,35 +594,52 @@ pub enum OpKind {
     Redo,
 }
 
+/// Background results also carry the versioned graph snapshot.
 pub enum BackgroundResult {
-    PushSuccess { bookmark: String, remote: String },
-    PushFailed(RepoError),
-    FetchSuccess { new_changes: usize },
-    FetchFailed(RepoError),
+    PushSuccess { bookmark: String, remote: String, snapshot: GraphSnapshot },
+    FetchSuccess { new_changes: usize, snapshot: GraphSnapshot },
+}
+
+pub struct BackgroundFailure {
+    pub kind: BackgroundKind,
+    pub error: RepoError,
 }
 ```
 
 #### Executor cycle
 
-Every repo-mutating effect follows the same cycle: executor calls the `RepoBackend` method on a spawned thread, then always calls `load_graph()` after success, and sends both result actions back on the channel. Dispatch processes them before the next render — the user sees the updated graph and status message in the same frame.
+Every repo-mutating effect follows the same cycle: the executor calls the `RepoBackend` method on a spawned thread, then calls `load_graph()`, and sends a single `MutationComplete` action back on the channel. Dispatch compares the snapshot's `op_id` against the current graph's `op_id` before applying it.
 
 ```
 dispatch(state, Action::Key('d'))
   → (state with pending_mutation set, vec![Effect::Abandon(id)])
 
 executor: std::thread::spawn → backend.abandon(&id)
-  → Ok:  tx.send(RepoOpSuccess { ... })
-         tx.send(GraphLoaded(backend.load_graph(revset)?))
-  → Err: tx.send(RepoOpFailed { ... })
+  → Ok:  let snapshot = backend.load_graph(revset)?;
+         tx.send(MutationComplete { op, description, snapshot })
+  → Err: tx.send(MutationFailed { op, error })
 
-dispatch(state, Action::RepoOpSuccess(op))
-  → (state with status bar message, pending_mutation cleared, vec![])
+dispatch(state, Action::MutationComplete(result))
+  → if result.snapshot.op_id > state.graph_op_id:
+      state.graph = ChangeGraph::from(result.snapshot)
+      state.graph_op_id = result.snapshot.op_id
+    // else: stale snapshot, silently discard the graph
+    //       (a newer snapshot from another lane already landed)
+  → state.pending_mutation = None
+  → state.notifications.push(result.description)
+  → (new_state, vec![])
 
-dispatch(state, Action::GraphLoaded(changes))
-  → (state with new graph, vec![])
+dispatch(state, Action::MutationFailed(failure))
+  → state.pending_mutation = None
+  → state.last_error = Some(failure.error)
+  → (new_state, vec![])
 ```
 
-Background effects (push, fetch) work identically but are expected to take longer. The UI remains fully interactive during their execution.
+**Out-of-order arrival:** Push, fetch, and local mutations can all call `load_graph()` concurrently. jj's repo lock serialises the mutations themselves, but the threads calling `load_graph()` after their mutation may complete in any order. A fetch snapshot taken at op 5 can arrive *after* an abandon snapshot taken at op 6. Without versioning, the stale fetch snapshot would overwrite the newer abandon snapshot, temporarily resurrecting the abandoned change in the UI.
+
+The fix is simple: `GraphSnapshot` carries the `op_id` of the repo state it was read from. Dispatch only applies a snapshot whose `op_id` is strictly greater than the current `state.graph_op_id`. Stale snapshots are silently discarded — the status message and gate-clearing still apply (the operation *did* succeed), but the graph is not regressed.
+
+Background effects (push, fetch) work identically — `BackgroundComplete` carries a `GraphSnapshot`, and dispatch applies the same `op_id` comparison before updating the graph.
 
 ### 5.6 Mutation UX Patterns
 
@@ -630,24 +692,66 @@ Action::Key('f') if state.pending_background.contains(&Fetch) => {
 }
 ```
 
-On completion, the corresponding gate clears:
+On completion, the corresponding gate clears. The graph is only updated if the snapshot is newer than what's currently displayed:
 
 ```rust
-Action::RepoOpSuccess(op) => {
+Action::MutationComplete(result) => {
+    if result.snapshot.op_id > state.graph_op_id {
+        new_state.graph = ChangeGraph::from(result.snapshot);
+        new_state.graph_op_id = result.snapshot.op_id;
+    }
+    // Gate always clears and status always shows,
+    // even if graph was stale (the op did succeed).
     new_state.pending_mutation = None;
-    // ...
+    new_state.notifications.push_back(/* ... */);
 }
-Action::BackgroundComplete(FetchSuccess { .. }) => {
+Action::MutationFailed(failure) => {
+    new_state.pending_mutation = None;
+    new_state.last_error = Some(failure.error);
+}
+Action::BackgroundComplete(FetchSuccess { snapshot, .. }) => {
+    if snapshot.op_id > state.graph_op_id {
+        new_state.graph = ChangeGraph::from(snapshot);
+        new_state.graph_op_id = snapshot.op_id;
+    }
     new_state.pending_background.remove(&Fetch);
-    // ...
 }
 ```
 
-**Why push and fetch are independent of local mutations:** `jj-lib` serialises on its repo lock — concurrent calls won't corrupt anything. `GraphLoaded` always reflects the repo state at the time `load_graph()` runs, so the last one to arrive wins and is always the most complete picture. Blocking fetch during a local mutation would mean "sorry, can't check for remote changes because you're abandoning a change." That's hostile.
+**Why push and fetch are independent of local mutations:** `jj-lib` serialises on its repo lock — concurrent calls won't corrupt anything. When multiple lanes complete, each `BackgroundComplete` or `MutationComplete` carries a graph snapshot taken at the moment `load_graph()` ran; the last one to be processed by dispatch wins and always reflects the most complete state. Blocking fetch during a local mutation would mean "sorry, can't check for remote changes because you're abandoning a change." That's hostile.
 
-### 5.8 $EDITOR Suspend/Resume
+### 5.8 $EDITOR and External Tool Materialization
 
-The `$EDITOR` path is an `Effect::SuspendForEditor` → `Action::EditorReturned` cycle:
+#### Working-copy invariant
+
+`$EDITOR` and external merge tools operate on files on disk. Only the working-copy change (`@`) has its tree materialized. **No `Effect::SuspendForEditor` or external tool launch is ever emitted for a non-working-copy change.** The executor can assert this.
+
+When the user presses `e` (open in editor) or `m` (merge tool) on a change that is not `@`, dispatch executes a two-step sequence:
+
+```
+// User presses 'e' on file in non-@ change ksqxwpml
+dispatch(state, Action::Key('e'))
+  → state.deferred_intent = Some(DeferredIntent::OpenEditor { path })
+  → (state, vec![Effect::Edit(ksqxwpml)])  // switch @ first
+
+// Edit completes, @ is now on ksqxwpml
+dispatch(state, Action::MutationComplete(result))
+  → state.graph = result.graph
+  → state.pending_mutation = None
+  → // Check deferred_intent:
+  → state.deferred_intent = None
+  → (state, vec![Effect::SuspendForEditor { ... }])  // now safe
+
+// Status bar: "Switched to ksqxwpml → opening editor…"
+```
+
+If the `Edit` fails (e.g. change has been abandoned), `MutationFailed` clears both the gate and `deferred_intent`, and shows the error. The editor never opens.
+
+This does not apply to the 3-way merge view (`Enter` in the conflict file list), which renders from `ChangeInfo` and `RepoBackend::file_diff()` — no disk access needed, works on any change.
+
+#### Describe modal ($EDITOR escalation)
+
+The `Shift-E` escalation from the describe modal is different — it edits a *tempfile* containing the description text, not a working-tree file. No working-copy switch is needed.
 
 ```
 dispatch(state, Action::Key('E'))  // Shift-E from within describe modal
@@ -666,17 +770,17 @@ dispatch(state, Action::EditorReturned { change, new_text })
   // User reviews editor output, then Ctrl-S to save or Escape to discard.
 ```
 
-**C1 exception:** `$EDITOR` launch is the one permitted subprocess in `lajjzy-tui`. It is for user-facing text editing only, never for repo operations. This is documented in CLAUDE.md.
+**C1 compliance:** `$EDITOR` and merge tool launches are `Effect` variants executed by `lajjzy-cli/src/executor.rs`, not by `lajjzy-tui`. Dispatch emits `Effect::SuspendForEditor` or `Effect::LaunchMergeTool`; the executor in `lajjzy-cli` handles `std::process::Command`, TUI suspend/resume, and tempfile management. No subprocess code exists in `lajjzy-tui`.
 
-**Note:** The `RepoBackend` lock is *not* held during editing. The editor edits a tempfile; `Effect::SetDescription` fires only after the user confirms in the describe modal. No lock contention.
+**Note:** The `RepoBackend` lock is *not* held during editing. The editor edits a tempfile (describe) or the working tree (conflict resolution); `Effect::SetDescription` or graph refresh fires only after the user finishes. No lock contention.
 
 ### 5.9 Repo Access Model
 
 `jj-lib` requires careful handling: repo operations take a mutable lock, and some (like `rebase`) can be expensive.
 
-- **Read path:** The graph view is built from data returned by `RepoBackend::load_graph()`, which returns all visible changes *with their file lists* in a single batch. This means cursor navigation never triggers a backend call. Internally, `load_graph()` takes a read-only snapshot — cheap thanks to jj's copy-on-write store. The only lazy read is `file_diff()`, called when the user drills into a specific file's hunks.
-- **Write path:** Mutations go through `RepoBackend` methods, which internally acquire the repo lock, perform the operation, record an op, and return. The executor always calls `load_graph()` after a successful mutation and sends `GraphLoaded` as a separate action — dispatch never does surgery on its graph model, it replaces the whole thing.
-- **Background tasks:** Fetch/push run on a spawned `std::thread` with results sent back via `mpsc`. On completion, the event loop triggers a `load_graph()` refresh.
+- **Read path:** The graph view is built from `RepoBackend::load_graph()`, which returns a `GraphSnapshot` — the visible changes *with their file lists* plus the `op_id` of the repo state at read time. Cursor navigation never triggers a backend call. Internally, `load_graph()` takes a read-only snapshot — cheap thanks to jj's copy-on-write store. The only lazy read is `file_diff()`, called when the user drills into a specific file's hunks.
+- **Write path:** Mutations go through `RepoBackend` methods, which internally acquire the repo lock, perform the operation, record an op, and return. The executor always calls `load_graph()` after a successful mutation and packages the result into a `MutationComplete` action. Dispatch compares the snapshot's `op_id` against `state.graph_op_id` — stale out-of-order snapshots are silently discarded, ensuring the graph never regresses to an older state.
+- **Background tasks:** Fetch/push run on a spawned `std::thread` with results sent back via `mpsc`. Each result carries a `GraphSnapshot` with its `op_id`, subject to the same freshness check on arrival.
 
 ### 5.10 Forge Integration (Gerrit / GitHub / GitLab)
 
@@ -748,7 +852,7 @@ Detail pane (file list):
 |-----|--------|
 | `j` / `k` | Move cursor |
 | `Enter` | Open hunk diff view for file |
-| `e` | Open file in `$EDITOR` |
+| `e` | Open file in `$EDITOR` — auto-switches working copy if change is not `@` (see §4.4) |
 | `Space` | Toggle file selection (for partial squash/split) |
 
 Detail pane (diff view):
@@ -772,6 +876,11 @@ pub struct AppState {
     /// The change graph as returned by RepoBackend::load_graph(),
     /// with layout information computed for rendering.
     pub graph: ChangeGraph,
+
+    /// The op_id of the repo state that produced the current graph.
+    /// Dispatch only applies a GraphSnapshot whose op_id is strictly
+    /// greater than this — stale out-of-order snapshots are discarded.
+    pub graph_op_id: OpId,
 
     /// Index of the working-copy change (@) in the graph.
     /// Cursor initialises here on load; `@` key jumps back to it.
@@ -812,7 +921,21 @@ pub struct AppState {
     /// Gates background operations independently. Push and fetch can
     /// each be in flight simultaneously, but not two pushes or two fetches.
     pub pending_background: HashSet<BackgroundKind>,
+
+    /// Deferred intent: an action to perform after the current mutation
+    /// completes. Used for two-step sequences like "auto-edit then open
+    /// editor" — dispatch emits Edit first, and when MutationComplete
+    /// arrives, checks this field to emit the follow-up effect.
+    pub deferred_intent: Option<DeferredIntent>,
 }
+```
+
+```rust
+pub enum DeferredIntent {
+    /// After switching working copy, open this file in $EDITOR.
+    OpenEditor { path: RepoPath },
+    /// After switching working copy, open this file in the merge tool.
+    OpenMergeTool { path: RepoPath },
 }
 ```
 
@@ -830,7 +953,7 @@ pub struct AppState {
   - End-to-end: a small suite of scripted scenarios using `expect`-style terminal automation (stretch goal).
 - **CI checks:**
   - `cargo clippy`, `cargo test`, `cargo fmt --check`
-  - C1 enforcement: `lajjzy-tui/Cargo.toml` does not contain `jj-lib`; `grep -r 'std::process::Command' crates/lajjzy-tui/` returns nothing.
+  - C1 enforcement: `lajjzy-tui/Cargo.toml` does not contain `jj-lib`; `grep -r 'std::process::Command' crates/lajjzy-tui/` returns nothing; `grep -r 'std::thread::spawn' crates/lajjzy-tui/` returns nothing.
   - C2 enforcement: `#[deny(clippy::unwrap_used, clippy::expect_used)]` on `lajjzy-tui`.
   - C5 enforcement: `test -f CLAUDE.md`
 
@@ -874,11 +997,11 @@ pub struct AppState {
 **Constraints active:** all M0/M1 constraints + C3 (dispatch becomes pure), C4.
 
 - Dispatch refactored: `(AppState, Action) → (AppState, Vec<Effect>)` (C3).
-- Effect executor: `std::thread::spawn` + `mpsc` for all mutations. Three gating lanes: `pending_mutation`, `pending_background{Push}`, `pending_background{Fetch}`.
+- Effect executor in `lajjzy-cli`: `std::thread::spawn` + `mpsc` for all mutations. Three gating lanes: `pending_mutation`, `pending_background{Push}`, `pending_background{Fetch}`.
 - `RepoBackend` extended with mutation methods (signatures validated by C4 audit).
 - Instant mutations: `describe`, `new`, `edit`, `abandon`, `squash` (full change only), `undo`, `redo`, `bookmark set`, `bookmark delete`.
 - Background mutations: `git push`, `git fetch` (proves the async effect path under real network latency).
-- Describe UX: inline `tui-textarea` modal with `Shift-E` escalation to `$EDITOR`. C1 exception for editor subprocess documented in CLAUDE.md.
+- Describe UX: inline `tui-textarea` modal with `Shift-E` escalation to `$EDITOR`. Editor launch handled by executor in `lajjzy-cli` (C1 stays clean).
 - Inline status notifications for success and failure (C6).
 - No confirmation dialogs — undo is the safety net.
 
@@ -896,9 +1019,8 @@ pub struct AppState {
 ### M4 — Conflict Handling (weeks 11–12)
 
 - Conflict file navigation in detail pane: `j`/`k` between files, `n`/`N` to jump between unresolved files, `R` to refresh resolution state.
-- 3-way merge view widget: three-column layout (left/base/right) with synchronised scrolling, hunk-level conflict navigation (`n`/`N`), and accept-left/accept-right (`1`/`2`) per hunk.
-- External merge tool launch (`m` from conflict file list).
-- `$EDITOR` escape hatch (`e` from conflict file list) for manual resolution.
+- 3-way merge view widget: three-column layout (left/base/right) with synchronised scrolling, hunk-level conflict navigation (`n`/`N`), and accept-left/accept-right (`1`/`2`) per hunk. Does *not* require working copy — renders from backend data.
+- External merge tool launch (`m` from conflict file list) and `$EDITOR` escape hatch (`e`): both require working-copy materialization. If the conflicted change is not `@`, dispatch auto-switches via `Effect::Edit` with `deferred_intent` before opening the tool (see §5.8).
 - Resolve-and-amend flow: resolution detected from file content (no "mark resolved" command), graph refreshes automatically via `load_graph()`.
 - Graph narrows to slim column when merge view is active, restores on `Escape`.
 
@@ -977,11 +1099,10 @@ M5 establishes basic PR creation. M9 adds the Graphite-style stack-aware workflo
 
 - ~~**Naming.**~~ `lajjzy`.
 - ~~**Async runtime.**~~ `std::thread` + `std::sync::mpsc`. No tokio in the TUI.
-- ~~**M2 scope.**~~ Describe, new, edit, abandon, squash, undo/redo, bookmark set/delete, push, fetch. Dispatch becomes pure. Effect executor with three gating lanes.
-- ~~**Describe UX.**~~ Inline `tui-textarea` with `Shift-E` escalation to `$EDITOR`.
+- ~~**M2 scope.**~~ Describe, new, edit, abandon, squash, undo/redo, bookmark set/delete, push, fetch. Dispatch becomes pure. Effect executor in `lajjzy-cli` with three gating lanes.
+- ~~**Describe UX.**~~ Inline `tui-textarea` with `Shift-E` escalation to `$EDITOR`. Editor launch is an `Effect` handled by the executor in `lajjzy-cli` (C1: no exceptions).
 - ~~**Eager vs lazy loading.**~~ File lists eager (in `load_graph()`), hunk diffs lazy (`file_diff()`).
 - ~~**Gerrit Change-Id mapping (M8).**~~ Solved by the jj/GitButler/Gerrit standardization effort. As of jj 0.30, jj writes a `change-id` header into Git commit objects by default. `jj gerrit upload` handles the jj-change-id → Gerrit-Change-Id footer mapping automatically. Gerrit has an accepted design doc for native header support, pending upstream Git adoption. lajjzy should use `jj gerrit upload` semantics, not invent a custom mapping.
-
 ### Why There Is No "M7: jj Branchless Workflow" Milestone
 
 An earlier draft proposed a milestone for "jj's branchless and safe history editing" covering automatic commits, stable Change IDs, first-class conflicts, and operation log undo. This was absorbed into M0–M4 because these are not features to *add* — they are jj's native semantics that the TUI *already surfaces*:
