@@ -1,9 +1,11 @@
+use std::collections::{HashMap, HashSet};
+
 use lajjzy_core::types::GraphData;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-use crate::action::{Action, BackgroundKind, DetailMode, MutationKind, PanelFocus};
-use crate::app::AppState;
+use crate::action::{Action, BackgroundKind, DetailMode, MutationKind, PanelFocus, RebaseMode};
+use crate::app::{AppState, PickingMode, TargetPick};
 use crate::effect::Effect;
 use crate::modal::{HelpContext, Modal};
 
@@ -33,6 +35,89 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
     }
 }
 
+/// Compute all descendants of `source` in the graph using a BFS through
+/// the parent→child edges (reversed from the stored child→parent `parents` field).
+/// O(N) index build + O(D) BFS where D is the number of descendants.
+fn compute_descendants(source: &str, graph: &GraphData) -> HashSet<String> {
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (cid, detail) in &graph.details {
+        for parent in &detail.parents {
+            children
+                .entry(parent.as_str())
+                .or_default()
+                .push(cid.as_str());
+        }
+    }
+    let mut descendants = HashSet::new();
+    let mut queue = vec![source];
+    while let Some(ancestor) = queue.pop() {
+        if let Some(kids) = children.get(ancestor) {
+            for &kid in kids {
+                if descendants.insert(kid.to_string()) {
+                    queue.push(kid);
+                }
+            }
+        }
+    }
+    descendants
+}
+
+/// Returns the valid node indices for navigation. When in picking mode,
+/// excludes changes in the excluded set and (if filtering) non-matching changes.
+fn picking_valid_nodes(state: &AppState) -> Vec<usize> {
+    let nodes = state.graph.node_indices();
+    let Some(ref pick) = state.target_pick else {
+        return nodes.to_vec();
+    };
+    nodes
+        .iter()
+        .copied()
+        .filter(|&idx| {
+            let Some(cid) = state.graph.lines[idx].change_id.as_deref() else {
+                return false;
+            };
+            if pick.excluded.contains(cid) {
+                return false;
+            }
+            if let PickingMode::Filtering { ref query } = pick.picking {
+                return change_matches_filter(cid, &state.graph, query);
+            }
+            true
+        })
+        .collect()
+}
+
+/// Check if a change matches a filter query (case-insensitive substring match
+/// against change ID, author, and description).
+fn change_matches_filter(cid: &str, graph: &GraphData, query: &str) -> bool {
+    let query_lower = query.to_lowercase();
+    if cid.to_lowercase().contains(&query_lower) {
+        return true;
+    }
+    if let Some(detail) = graph.details.get(cid) {
+        if detail.author.to_lowercase().contains(&query_lower)
+            || detail.description.to_lowercase().contains(&query_lower)
+        {
+            return true;
+        }
+        for bm in &detail.bookmarks {
+            if bm.to_lowercase().contains(&query_lower) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Jump cursor to the first valid (non-excluded, matching) change.
+fn jump_to_first_matching(state: &mut AppState) {
+    let valid = picking_valid_nodes(state);
+    if let Some(&first) = valid.first() {
+        state.cursor = first;
+        state.reset_detail();
+    }
+}
+
 #[expect(clippy::too_many_lines)]
 pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
     // Clear stale omnibar fallback on any action except RevsetLoaded.
@@ -44,15 +129,15 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
 
     match action {
         Action::MoveDown => {
-            let nodes = state.graph.node_indices();
-            if let Some(next) = nodes.iter().find(|&&i| i > state.cursor) {
+            let valid = picking_valid_nodes(state);
+            if let Some(next) = valid.iter().find(|&&i| i > state.cursor) {
                 state.cursor = *next;
             }
             state.reset_detail();
         }
         Action::MoveUp => {
-            let nodes = state.graph.node_indices();
-            if let Some(prev) = nodes.iter().rev().find(|&&i| i < state.cursor) {
+            let valid = picking_valid_nodes(state);
+            if let Some(prev) = valid.iter().rev().find(|&&i| i < state.cursor) {
                 state.cursor = *prev;
             }
             state.reset_detail();
@@ -122,6 +207,21 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
                 Err(e) => {
                     state.error = Some(format!("Failed to load graph: {e}"));
+                }
+            }
+
+            // Validate picking source still exists after graph refresh
+            if let Some(ref pick) = state.target_pick
+                && !state.graph.details.contains_key(&pick.source)
+            {
+                let original_cursor = pick.original_cursor;
+                state.target_pick = None;
+                state.status_message =
+                    Some("Rebase cancelled: source change no longer exists".into());
+                // Best-effort restore cursor
+                let nodes = state.graph.node_indices();
+                if nodes.contains(&original_cursor) {
+                    state.cursor = original_cursor;
                 }
             }
         }
@@ -290,6 +390,11 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             // from in-flight EvalRevset results arriving after dismiss.
             if matches!(state.modal, Some(Modal::Omnibar { .. })) {
                 state.omnibar_fallback_idx = None;
+                // Defensive: if dismissing omnibar while in picking mode, exit picking
+                if let Some(ref pick) = state.target_pick {
+                    state.cursor = pick.original_cursor;
+                    state.target_pick = None;
+                }
             }
             state.modal = None;
         }
@@ -680,13 +785,123 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return vec![Effect::BookmarkDelete { name }];
             }
         }
-        // Placeholder arms — behavior implemented in Task 5
-        Action::RebaseSingle
-        | Action::RebaseWithDescendants
-        | Action::PickConfirm
-        | Action::PickCancel
-        | Action::PickFilterChar(_)
-        | Action::PickFilterBackspace => {}
+        Action::RebaseSingle => {
+            if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
+                return vec![];
+            }
+            if state.target_pick.is_some() {
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                state.target_pick = Some(TargetPick {
+                    source: cid.clone(),
+                    mode: RebaseMode::Single,
+                    excluded: HashSet::from([cid]),
+                    picking: PickingMode::Browsing,
+                    original_cursor: state.cursor,
+                    descendant_count: 0,
+                });
+            }
+        }
+        Action::RebaseWithDescendants => {
+            if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
+                return vec![];
+            }
+            if state.target_pick.is_some() {
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                let descendants = compute_descendants(&cid, &state.graph);
+                let descendant_count = descendants.len();
+                let mut excluded = descendants;
+                excluded.insert(cid.clone());
+                state.target_pick = Some(TargetPick {
+                    source: cid,
+                    mode: RebaseMode::WithDescendants,
+                    excluded,
+                    picking: PickingMode::Browsing,
+                    original_cursor: state.cursor,
+                    descendant_count,
+                });
+            }
+        }
+        Action::PickConfirm => {
+            if let Some(pick) = state.target_pick.take() {
+                if let Some(dest) = state.selected_change_id().map(String::from) {
+                    if pick.excluded.contains(&dest) {
+                        // Safety: should not happen with navigation skip, but defend
+                        state.status_message = Some("Cannot rebase onto excluded change".into());
+                        state.target_pick = Some(pick);
+                        return vec![];
+                    }
+                    let mutation_kind = match pick.mode {
+                        RebaseMode::Single => MutationKind::RebaseSingle,
+                        RebaseMode::WithDescendants => MutationKind::RebaseWithDescendants,
+                    };
+                    state.pending_mutation = Some(mutation_kind);
+                    let effect = match pick.mode {
+                        RebaseMode::Single => Effect::RebaseSingle {
+                            source: pick.source,
+                            destination: dest,
+                        },
+                        RebaseMode::WithDescendants => Effect::RebaseWithDescendants {
+                            source: pick.source,
+                            destination: dest,
+                        },
+                    };
+                    return vec![effect];
+                }
+                // No selected change — restore pick
+                state.target_pick = Some(pick);
+            }
+        }
+        Action::PickCancel => {
+            if let Some(ref mut pick) = state.target_pick {
+                match pick.picking {
+                    PickingMode::Filtering { .. } => {
+                        // Clear filter, stay in picking mode
+                        pick.picking = PickingMode::Browsing;
+                    }
+                    PickingMode::Browsing => {
+                        // Exit picking mode, restore cursor
+                        let original = pick.original_cursor;
+                        state.target_pick = None;
+                        state.cursor = original;
+                        state.reset_detail();
+                    }
+                }
+            }
+        }
+        Action::PickFilterChar(c) => {
+            if let Some(ref mut pick) = state.target_pick {
+                match &mut pick.picking {
+                    PickingMode::Browsing => {
+                        pick.picking = PickingMode::Filtering {
+                            query: c.to_string(),
+                        };
+                    }
+                    PickingMode::Filtering { query } => {
+                        query.push(c);
+                    }
+                }
+                // Jump cursor to first matching non-excluded change
+                jump_to_first_matching(state);
+            }
+        }
+        Action::PickFilterBackspace => {
+            if let Some(ref mut pick) = state.target_pick {
+                if let PickingMode::Filtering { query } = &mut pick.picking {
+                    query.pop();
+                    if query.is_empty() {
+                        pick.picking = PickingMode::Browsing;
+                    }
+                }
+                // Re-jump after query change
+                jump_to_first_matching(state);
+            }
+        }
     }
 
     // Release-mode invariant check: cursor must point to a node line
@@ -2317,5 +2532,483 @@ mod tests {
                 revset: Some("mine()".into())
             }]
         );
+    }
+
+    // --- Picking mode helpers ---
+
+    /// Graph with parent relationships: abc→def→ghi (abc is child of def, def is child of ghi).
+    /// So descendants of ghi = {def, abc}, descendants of def = {abc}.
+    fn sample_graph_with_parents() -> GraphData {
+        GraphData::new(
+            vec![
+                GraphLine {
+                    raw: "◉  abc".into(),
+                    change_id: Some("abc".into()),
+                    glyph_prefix: String::new(),
+                },
+                GraphLine {
+                    raw: "│  desc1".into(),
+                    change_id: None,
+                    glyph_prefix: String::new(),
+                },
+                GraphLine {
+                    raw: "◉  def".into(),
+                    change_id: Some("def".into()),
+                    glyph_prefix: String::new(),
+                },
+                GraphLine {
+                    raw: "│  desc2".into(),
+                    change_id: None,
+                    glyph_prefix: String::new(),
+                },
+                GraphLine {
+                    raw: "◉  ghi".into(),
+                    change_id: Some("ghi".into()),
+                    glyph_prefix: String::new(),
+                },
+            ],
+            HashMap::from([
+                (
+                    "abc".into(),
+                    ChangeDetail {
+                        commit_id: "a1".into(),
+                        author: "alice".into(),
+                        email: "a@b".into(),
+                        timestamp: "1m".into(),
+                        description: "first change".into(),
+                        bookmarks: vec![],
+                        is_empty: false,
+                        has_conflict: false,
+                        files: vec![],
+                        parents: vec!["def".into()],
+                    },
+                ),
+                (
+                    "def".into(),
+                    ChangeDetail {
+                        commit_id: "d1".into(),
+                        author: "bob".into(),
+                        email: "b@c".into(),
+                        timestamp: "2m".into(),
+                        description: "second change".into(),
+                        bookmarks: vec!["main".into()],
+                        is_empty: false,
+                        has_conflict: false,
+                        files: vec![],
+                        parents: vec!["ghi".into()],
+                    },
+                ),
+                (
+                    "ghi".into(),
+                    ChangeDetail {
+                        commit_id: "g1".into(),
+                        author: "charlie".into(),
+                        email: "c@d".into(),
+                        timestamp: "3m".into(),
+                        description: "root change".into(),
+                        bookmarks: vec![],
+                        is_empty: false,
+                        has_conflict: false,
+                        files: vec![],
+                        parents: vec![],
+                    },
+                ),
+            ]),
+            Some(0),
+            String::new(),
+        )
+    }
+
+    // --- compute_descendants tests ---
+
+    #[test]
+    fn compute_descendants_of_root() {
+        let graph = sample_graph_with_parents();
+        let desc = compute_descendants("ghi", &graph);
+        assert_eq!(desc.len(), 2);
+        assert!(desc.contains("abc"));
+        assert!(desc.contains("def"));
+    }
+
+    #[test]
+    fn compute_descendants_of_middle() {
+        let graph = sample_graph_with_parents();
+        let desc = compute_descendants("def", &graph);
+        assert_eq!(desc.len(), 1);
+        assert!(desc.contains("abc"));
+    }
+
+    #[test]
+    fn compute_descendants_of_leaf() {
+        let graph = sample_graph_with_parents();
+        let desc = compute_descendants("abc", &graph);
+        assert!(desc.is_empty());
+    }
+
+    // --- RebaseSingle tests ---
+
+    #[test]
+    fn rebase_single_enters_picking_mode() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        // Cursor on abc (idx 0)
+        let effects = dispatch(&mut state, Action::RebaseSingle);
+        assert!(effects.is_empty());
+        let pick = state.target_pick.as_ref().unwrap();
+        assert_eq!(pick.source, "abc");
+        assert_eq!(pick.mode, RebaseMode::Single);
+        assert_eq!(pick.excluded, HashSet::from(["abc".into()]));
+        assert_eq!(pick.original_cursor, 0);
+        assert_eq!(pick.descendant_count, 0);
+        assert_eq!(pick.picking, PickingMode::Browsing);
+    }
+
+    #[test]
+    fn rebase_single_blocked_by_mutation_gate() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        state.pending_mutation = Some(MutationKind::Describe);
+        let effects = dispatch(&mut state, Action::RebaseSingle);
+        assert!(effects.is_empty());
+        assert!(state.target_pick.is_none());
+        assert!(
+            state
+                .status_message
+                .as_ref()
+                .unwrap()
+                .contains("in progress")
+        );
+    }
+
+    #[test]
+    fn rebase_single_blocked_by_active_picking() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle);
+        assert!(state.target_pick.is_some());
+        // Second attempt is no-op
+        dispatch(&mut state, Action::RebaseSingle);
+        assert_eq!(state.target_pick.as_ref().unwrap().source, "abc");
+    }
+
+    // --- RebaseWithDescendants tests ---
+
+    #[test]
+    fn rebase_with_descendants_enters_picking_with_descendants() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        state.set_cursor_for_test(2); // cursor on def
+        let effects = dispatch(&mut state, Action::RebaseWithDescendants);
+        assert!(effects.is_empty());
+        let pick = state.target_pick.as_ref().unwrap();
+        assert_eq!(pick.source, "def");
+        assert_eq!(pick.mode, RebaseMode::WithDescendants);
+        assert_eq!(pick.descendant_count, 1); // abc is descendant
+        assert!(pick.excluded.contains("def"));
+        assert!(pick.excluded.contains("abc"));
+        assert!(!pick.excluded.contains("ghi"));
+        assert_eq!(pick.original_cursor, 2);
+    }
+
+    #[test]
+    fn rebase_with_descendants_from_root_excludes_all() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        state.set_cursor_for_test(4); // cursor on ghi (root)
+        dispatch(&mut state, Action::RebaseWithDescendants);
+        let pick = state.target_pick.as_ref().unwrap();
+        assert_eq!(pick.descendant_count, 2);
+        assert!(pick.excluded.contains("ghi"));
+        assert!(pick.excluded.contains("def"));
+        assert!(pick.excluded.contains("abc"));
+    }
+
+    #[test]
+    fn rebase_with_descendants_blocked_by_mutation_gate() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        state.pending_mutation = Some(MutationKind::New);
+        dispatch(&mut state, Action::RebaseWithDescendants);
+        assert!(state.target_pick.is_none());
+    }
+
+    // --- PickConfirm tests ---
+
+    #[test]
+    fn pick_confirm_emits_rebase_single_effect() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        // Enter picking from abc
+        dispatch(&mut state, Action::RebaseSingle);
+        // Move cursor to ghi (idx 4) — a valid destination
+        state.set_cursor_for_test(4);
+        let effects = dispatch(&mut state, Action::PickConfirm);
+        assert_eq!(
+            effects,
+            vec![Effect::RebaseSingle {
+                source: "abc".into(),
+                destination: "ghi".into(),
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::RebaseSingle));
+        assert!(state.target_pick.is_none());
+    }
+
+    #[test]
+    fn pick_confirm_emits_rebase_with_descendants_effect() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        state.set_cursor_for_test(2); // def
+        dispatch(&mut state, Action::RebaseWithDescendants);
+        // Move cursor to ghi (idx 4) — valid destination (not excluded)
+        state.set_cursor_for_test(4);
+        let effects = dispatch(&mut state, Action::PickConfirm);
+        assert_eq!(
+            effects,
+            vec![Effect::RebaseWithDescendants {
+                source: "def".into(),
+                destination: "ghi".into(),
+            }]
+        );
+        assert_eq!(
+            state.pending_mutation,
+            Some(MutationKind::RebaseWithDescendants)
+        );
+    }
+
+    #[test]
+    fn pick_confirm_on_excluded_shows_message() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle); // source = abc, excluded = {abc}
+        // Force cursor onto excluded change
+        state.set_cursor_for_test(0); // abc
+        let effects = dispatch(&mut state, Action::PickConfirm);
+        assert!(effects.is_empty());
+        assert!(state.target_pick.is_some()); // pick restored
+        assert!(state.status_message.as_ref().unwrap().contains("excluded"));
+    }
+
+    #[test]
+    fn pick_confirm_without_picking_is_noop() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let effects = dispatch(&mut state, Action::PickConfirm);
+        assert!(effects.is_empty());
+        assert!(state.target_pick.is_none());
+    }
+
+    // --- PickCancel tests ---
+
+    #[test]
+    fn pick_cancel_from_browsing_exits_picking_restores_cursor() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        // Enter picking at cursor 0
+        dispatch(&mut state, Action::RebaseSingle);
+        // Move cursor away
+        state.set_cursor_for_test(4);
+        // Cancel
+        dispatch(&mut state, Action::PickCancel);
+        assert!(state.target_pick.is_none());
+        assert_eq!(state.cursor(), 0); // restored to original
+    }
+
+    #[test]
+    fn pick_cancel_from_filtering_returns_to_browsing() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle);
+        dispatch(&mut state, Action::PickFilterChar('x'));
+        assert!(matches!(
+            state.target_pick.as_ref().unwrap().picking,
+            PickingMode::Filtering { .. }
+        ));
+        dispatch(&mut state, Action::PickCancel);
+        // Still in picking mode, but browsing
+        assert!(state.target_pick.is_some());
+        assert_eq!(
+            state.target_pick.as_ref().unwrap().picking,
+            PickingMode::Browsing
+        );
+    }
+
+    #[test]
+    fn pick_cancel_without_picking_is_noop() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::PickCancel);
+        assert!(state.target_pick.is_none());
+    }
+
+    // --- PickFilterChar tests ---
+
+    #[test]
+    fn pick_filter_char_transitions_browsing_to_filtering() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle);
+        dispatch(&mut state, Action::PickFilterChar('b'));
+        let pick = state.target_pick.as_ref().unwrap();
+        assert_eq!(pick.picking, PickingMode::Filtering { query: "b".into() });
+    }
+
+    #[test]
+    fn pick_filter_char_appends_in_filtering_mode() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle);
+        dispatch(&mut state, Action::PickFilterChar('b'));
+        dispatch(&mut state, Action::PickFilterChar('o'));
+        let pick = state.target_pick.as_ref().unwrap();
+        assert_eq!(pick.picking, PickingMode::Filtering { query: "bo".into() });
+    }
+
+    #[test]
+    fn pick_filter_char_jumps_to_matching_change() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        // Picking from abc (excluded), cursor at 0
+        dispatch(&mut state, Action::RebaseSingle);
+        // Type 'c' — matches "charlie" (author of ghi) and "second change" (desc of def)
+        dispatch(&mut state, Action::PickFilterChar('c'));
+        // Should jump to first non-excluded match (def at idx 2 or ghi at idx 4)
+        let cursor = state.cursor();
+        assert!(cursor == 2 || cursor == 4);
+        // Cursor should be on a non-excluded change
+        let cid = state.selected_change_id().unwrap();
+        assert_ne!(cid, "abc");
+    }
+
+    // --- PickFilterBackspace tests ---
+
+    #[test]
+    fn pick_filter_backspace_pops_char() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle);
+        dispatch(&mut state, Action::PickFilterChar('a'));
+        dispatch(&mut state, Action::PickFilterChar('b'));
+        dispatch(&mut state, Action::PickFilterBackspace);
+        let pick = state.target_pick.as_ref().unwrap();
+        assert_eq!(pick.picking, PickingMode::Filtering { query: "a".into() });
+    }
+
+    #[test]
+    fn pick_filter_backspace_to_empty_returns_to_browsing() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle);
+        dispatch(&mut state, Action::PickFilterChar('x'));
+        dispatch(&mut state, Action::PickFilterBackspace);
+        assert_eq!(
+            state.target_pick.as_ref().unwrap().picking,
+            PickingMode::Browsing
+        );
+    }
+
+    // --- Navigation skip-excluded tests ---
+
+    #[test]
+    fn move_down_skips_excluded_in_picking_mode() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        state.set_cursor_for_test(2); // def
+        dispatch(&mut state, Action::RebaseWithDescendants);
+        // excluded = {def, abc}. Cursor on def (idx 2). MoveDown should skip to ghi (idx 4).
+        // But wait, cursor is ON an excluded node. Let's move to a valid node first.
+        // Actually, we need a graph where excluded changes are between valid ones.
+        // With excluded = {def, abc}, only ghi is valid. Let's set cursor to ghi.
+        // Actually — let's test with RebaseSingle from abc where excluded = {abc}.
+        // Then MoveDown from 0 should skip abc (already at 0) → go to def (2).
+        let mut state2 = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state2, Action::RebaseSingle); // excluded = {abc}
+        // Currently at abc (0), which IS excluded. MoveDown should go to def (2).
+        let effects = dispatch(&mut state2, Action::MoveDown);
+        assert!(effects.is_empty());
+        assert_eq!(state2.cursor(), 2);
+        assert_eq!(state2.selected_change_id(), Some("def"));
+    }
+
+    #[test]
+    fn move_up_skips_excluded_in_picking_mode() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        state.set_cursor_for_test(4); // ghi
+        dispatch(&mut state, Action::RebaseWithDescendants);
+        // excluded = {ghi, def, abc}. All excluded — move should stay.
+        // This is a degenerate case. Let's use a 4-node graph.
+        // Instead, test: RebaseSingle from def. Excluded = {def}.
+        let mut state2 = AppState::new(sample_graph_with_parents());
+        state2.set_cursor_for_test(2); // def
+        dispatch(&mut state2, Action::RebaseSingle); // excluded = {def}
+        // Move cursor to ghi (4)
+        state2.set_cursor_for_test(4);
+        // MoveUp should skip def (2) and go to abc (0)
+        dispatch(&mut state2, Action::MoveUp);
+        assert_eq!(state2.cursor(), 0);
+        assert_eq!(state2.selected_change_id(), Some("abc"));
+    }
+
+    #[test]
+    fn navigation_with_filter_skips_non_matching() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        // Rebase from abc (excluded = {abc})
+        dispatch(&mut state, Action::RebaseSingle);
+        // Filter by "root" — matches ghi's description "root change"
+        dispatch(&mut state, Action::PickFilterChar('r'));
+        dispatch(&mut state, Action::PickFilterChar('o'));
+        dispatch(&mut state, Action::PickFilterChar('o'));
+        dispatch(&mut state, Action::PickFilterChar('t'));
+        // Cursor should jump to ghi (first matching non-excluded)
+        assert_eq!(state.cursor(), 4);
+        assert_eq!(state.selected_change_id(), Some("ghi"));
+        // MoveDown should stay (no more valid nodes below)
+        dispatch(&mut state, Action::MoveDown);
+        assert_eq!(state.cursor(), 4);
+    }
+
+    // --- GraphLoaded cancels picking if source disappears ---
+
+    #[test]
+    fn graph_loaded_cancels_picking_when_source_gone() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle); // source = abc
+        assert!(state.target_pick.is_some());
+
+        // Load a new graph without abc
+        let new_graph = test_graph_with_changes(&["def", "ghi"]);
+        dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(new_graph),
+            },
+        );
+
+        assert!(state.target_pick.is_none());
+        assert!(
+            state
+                .status_message
+                .as_ref()
+                .unwrap()
+                .contains("no longer exists")
+        );
+    }
+
+    #[test]
+    fn graph_loaded_preserves_picking_when_source_still_present() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle); // source = abc
+        assert!(state.target_pick.is_some());
+
+        // Load a new graph that still has abc
+        let new_graph = sample_graph_with_parents();
+        dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(new_graph),
+            },
+        );
+
+        assert!(state.target_pick.is_some());
+        assert_eq!(state.target_pick.as_ref().unwrap().source, "abc");
+    }
+
+    // --- ModalDismiss clears picking ---
+
+    #[test]
+    fn modal_dismiss_clears_picking_when_omnibar_active() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        dispatch(&mut state, Action::RebaseSingle);
+        state.modal = Some(Modal::Omnibar {
+            query: String::new(),
+            matches: vec![],
+            cursor: 0,
+        });
+        dispatch(&mut state, Action::ModalDismiss);
+        assert!(state.target_pick.is_none());
+        assert_eq!(state.cursor(), 0); // restored to original_cursor
     }
 }
