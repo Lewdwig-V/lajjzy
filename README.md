@@ -111,7 +111,9 @@ See `CLAUDE.md` for architectural constraints and crate structure.
 
 ### Planned
 
-- **M3 — Stack Workflows**: rebase with target picker, split with interactive hunk picker, partial squash, revset bar (omnibar)
+- **M3a — Omnibar**: revset-first search/filter bar, replaces fuzzy-find
+- **M3b — Rebase**: target picker modal, `jj rebase` with destination selection
+- **M3c — Split & Partial Squash**: interactive hunk picker widget, the hardest UI in the app
 - **M4 — Conflict Handling**: conflict file navigation, 3-way merge view, external merge tool launch
 - **M5 — Forge Integration**: Gerrit, GitHub, GitLab — review status in graph, push-for-review
 - **M6 — Polish**: configurable keymap, theming, mouse support, packaging
