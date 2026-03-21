@@ -36,7 +36,9 @@ Rebase is jj's primary tool for reorganizing change history. Without it, the TUI
 
 Safe, surgical, the default. A wrong `-r` rebase affects one change. Descendants stay connected. `undo` restores topology trivially.
 
-**`R` (Graph context)** — Source+descendants rebase. Same picker, but status bar shows blast radius: `Rebase ksqxwpml + 3 descendants onto → (j/k navigate, Enter confirm, Esc cancel)`. The descendant count is static — computed once from the graph when picking mode opens, since descendants are defined by the source, not the destination.
+**`Ctrl-R` (Graph context)** — Source+descendants rebase. Same picker, but status bar shows blast radius: `Rebase ksqxwpml + 3 descendants onto → (j/k navigate, Enter confirm, Esc cancel)`. The descendant count is static — computed once from the graph when picking mode opens, since descendants are defined by the source, not the destination.
+
+**Key conflict resolution:** `R` (Shift-R) is currently a global key for Refresh. To avoid collision, rebase-with-descendants uses `Ctrl-R` instead. This displaces Redo (`Ctrl-R`), which moves to `Ctrl-Shift-R`. The rationale: Redo is rare (used after Undo, which is itself rare), while rebase-with-descendants is a primary workflow action that benefits from a single chord.
 
 Deliberate escalation. A wrong `-s` rebase moves an entire subtree. Still reversible via `undo`, but the visual disruption is larger. The count preview makes the blast radius explicit.
 
@@ -46,7 +48,7 @@ Two sub-modes:
 
 **Browsing** — `j`/`k` navigate the graph (skipping excluded changes). `Enter` confirms target, emits rebase effect. `Escape` cancels picking mode, restores cursor to original position.
 
-**Filtering** — Any non-navigation key while browsing starts typing a filter query. The graph dims non-matching changes. `j`/`k` cycle through matches only (using `Ctrl-J`/`Ctrl-K` or arrow keys since `j`/`k` are text input in filtering mode). `Enter` confirms. `Escape` clears the filter (back to Browsing). Second `Escape` cancels picking mode.
+**Filtering** — Any non-navigation key while browsing starts typing a filter query. The fuzzy match runs against the same fields as the omnibar: change ID, description, and author (reuses the existing `fuzzy_match()` function). The graph dims non-matching changes. `j`/`k` cycle through matches only (using `Ctrl-J`/`Ctrl-K` or arrow keys since `j`/`k` are text input in filtering mode). `Enter` confirms. `Escape` clears the filter (back to Browsing). Second `Escape` cancels picking mode. Backspace on an empty query transitions back to Browsing mode.
 
 ### Excluded targets
 
@@ -55,6 +57,10 @@ The source change and (for `-s` mode) all its descendants are excluded from navi
 - "Rebase onto descendant" — creates a cycle, jj rejects with a confusing error
 
 Filtering candidates by exclusion at the UI layer is more helpful than letting jj reject the operation after the fact.
+
+### Graph refresh during picking
+
+If a background fetch completes while picking is active, `GraphLoaded` refreshes the graph. If the source change disappears from the refreshed graph (e.g., remote force-push), picking mode is cancelled and the cursor is restored. The `GraphLoaded` handler checks `state.target_pick` and validates that the source is still present; if not, it clears `target_pick` and sets `status_message` to "Rebase cancelled: source change no longer exists."
 
 ### After confirmation
 
@@ -174,7 +180,7 @@ Action::RebaseSingle => {
 }
 ```
 
-For `RebaseWithDescendants`, compute descendants by walking the graph's parent edges from the source, then populate `excluded` and `descendant_count`.
+For `RebaseWithDescendants`, compute descendants by finding all changes whose `parents` contain the source (direct children), then transitively collecting changes whose `parents` contain any already-collected descendant. This is a BFS from the source through the child→parent edges *in reverse* (parent→child direction). Populate `excluded` with source + all descendants, set `descendant_count`.
 
 ### Navigation during picking
 
@@ -223,12 +229,14 @@ Action::PickCancel => {
                 // Cancel picking, restore cursor
                 let original = pick.original_cursor;
                 state.target_pick = None;
-                state.cursor = original;
+                state.cursor = original; // pub(crate) — valid in dispatch.rs (same crate)
             }
         }
     }
 }
 ```
+
+Note: `state.cursor` is `pub(crate)`. All picking dispatch handlers live in `dispatch.rs` within `lajjzy-tui`, so direct field access is valid. `TargetPick` and related types also live in `lajjzy-tui` (in `action.rs` or `app.rs`).
 
 ### PickFilterChar / PickFilterBackspace
 
@@ -287,7 +295,9 @@ pub fn map_picking_event(event: KeyEvent, picking: &PickingMode) -> Option<Actio
 }
 ```
 
-Picking mode swallows all keys not in its map — no modals, no global shortcuts.
+Picking mode swallows all keys not in its map — no modals, no global shortcuts. Note: `map_picking_event` is defined in `input.rs` (lajjzy-tui) and called from `run_loop` in `main.rs` (lajjzy-cli).
+
+**Revset interaction:** If an active revset filter is set when picking mode opens, the filtered graph is what the user navigates. This is correct — the user wants to pick from the changes they're currently viewing. The filter is neither cleared nor modified by picking mode.
 
 **Event loop integration:**
 
@@ -374,11 +384,11 @@ Add `parents.map(|p| p.change_id().short())` to the template, joined by a space.
 
 | File | Changes |
 |------|---------|
-| `crates/lajjzy-tui/src/action.rs` | Add `RebaseSingle`, `RebaseWithDescendants`, `PickConfirm`, `PickCancel`, `PickFilterChar`, `PickFilterBackspace`. Add `RebaseMode`, `PickingMode`, `TargetPick`. |
+| `crates/lajjzy-tui/src/action.rs` | Add `RebaseSingle`, `RebaseWithDescendants`, `PickConfirm`, `PickCancel`, `PickFilterChar`, `PickFilterBackspace`. Add `RebaseMode` (action-level enum). |
+| `crates/lajjzy-tui/src/app.rs` | Add `PickingMode`, `TargetPick` (state types, alongside `AppState`). Add `target_pick: Option<TargetPick>` field. |
 | `crates/lajjzy-tui/src/effect.rs` | Add `RebaseSingle`, `RebaseWithDescendants` |
-| `crates/lajjzy-tui/src/app.rs` | Add `target_pick: Option<TargetPick>` |
 | `crates/lajjzy-tui/src/dispatch.rs` | Picking mode dispatch, navigation skip-excluded, `PickConfirm`/`PickCancel`/`PickFilter*` handlers. Update `MoveUp`/`MoveDown` to skip excluded when picking. |
-| `crates/lajjzy-tui/src/input.rs` | Add `map_picking_event`. Add `r`/`R` key bindings in Graph context. |
+| `crates/lajjzy-tui/src/input.rs` | Add `map_picking_event`. Add `r` (RebaseSingle) and `Ctrl-R` (RebaseWithDescendants) in Graph context. Move Redo from `Ctrl-R` to `Ctrl-Shift-R`. |
 | `crates/lajjzy-tui/src/render.rs` | Graph dimming for excluded/filtered changes in picking mode. Status bar picking-mode text. |
 | `crates/lajjzy-tui/src/widgets/graph.rs` | Style computation checks `target_pick` for dimming. |
 | `crates/lajjzy-tui/src/widgets/status_bar.rs` | Picking mode status text with blast radius count. |
