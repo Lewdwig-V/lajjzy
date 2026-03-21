@@ -2,7 +2,7 @@ use lajjzy_core::types::GraphData;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-use crate::action::{Action, DetailMode, PanelFocus};
+use crate::action::{Action, BackgroundKind, DetailMode, MutationKind, PanelFocus};
 use crate::app::AppState;
 use crate::effect::Effect;
 use crate::modal::{HelpContext, Modal};
@@ -340,17 +340,88 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 *cursor = 0;
             }
         }
+        Action::Abandon => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                state.pending_mutation = Some(MutationKind::Abandon);
+                return vec![Effect::Abandon { change_id: cid }];
+            }
+        }
+        Action::Squash => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                state.pending_mutation = Some(MutationKind::Squash);
+                return vec![Effect::Squash { change_id: cid }];
+            }
+        }
+        Action::NewChange => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                state.pending_mutation = Some(MutationKind::New);
+                state.cursor_follows_working_copy = true;
+                return vec![Effect::New { after: cid }];
+            }
+        }
+        Action::EditChange => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                state.pending_mutation = Some(MutationKind::Edit);
+                return vec![Effect::Edit { change_id: cid }];
+            }
+        }
+        Action::Undo => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
+            state.pending_mutation = Some(MutationKind::Undo);
+            return vec![Effect::Undo];
+        }
+        Action::Redo => {
+            if state.pending_mutation.is_some() {
+                return vec![];
+            }
+            state.pending_mutation = Some(MutationKind::Redo);
+            return vec![Effect::Redo];
+        }
+        Action::RepoOpSuccess { op, message } => {
+            match op {
+                MutationKind::GitPush => {
+                    state.pending_background.remove(&BackgroundKind::Push);
+                }
+                MutationKind::GitFetch => {
+                    state.pending_background.remove(&BackgroundKind::Fetch);
+                }
+                _ => {
+                    state.pending_mutation = None;
+                }
+            }
+            state.status_message = Some(message);
+        }
+        Action::RepoOpFailed { op, error } => {
+            match op {
+                MutationKind::GitPush => {
+                    state.pending_background.remove(&BackgroundKind::Push);
+                }
+                MutationKind::GitFetch => {
+                    state.pending_background.remove(&BackgroundKind::Fetch);
+                }
+                _ => {
+                    state.pending_mutation = None;
+                }
+            }
+            state.error = Some(error);
+        }
         // M2 actions — handled in later tasks; no-op for now.
-        Action::RepoOpSuccess { .. }
-        | Action::RepoOpFailed { .. }
-        | Action::EditorComplete { .. }
-        | Action::Abandon
-        | Action::Squash
-        | Action::NewChange
-        | Action::EditChange
+        Action::EditorComplete { .. }
         | Action::OpenDescribe
-        | Action::Undo
-        | Action::Redo
         | Action::OpenBookmarkSet
         | Action::BookmarkInputChar(_)
         | Action::BookmarkInputBackspace
@@ -1184,5 +1255,178 @@ mod tests {
         dispatch(&mut state, Action::OpenHelp);
         dispatch(&mut state, Action::ModalEnter);
         assert!(matches!(state.modal, Some(Modal::Help { .. })));
+    }
+
+    // --- Instant mutation dispatch tests ---
+
+    #[test]
+    fn abandon_emits_effect_and_sets_gate() {
+        let mut state = AppState::new(sample_graph());
+        assert_eq!(state.selected_change_id(), Some("abc"));
+        let effects = dispatch(&mut state, Action::Abandon);
+        assert_eq!(
+            effects,
+            vec![Effect::Abandon {
+                change_id: "abc".into()
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
+    }
+
+    #[test]
+    fn squash_emits_effect_and_sets_gate() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::Squash);
+        assert_eq!(
+            effects,
+            vec![Effect::Squash {
+                change_id: "abc".into()
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::Squash));
+    }
+
+    #[test]
+    fn edit_change_emits_effect_and_sets_gate() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::EditChange);
+        assert_eq!(
+            effects,
+            vec![Effect::Edit {
+                change_id: "abc".into()
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::Edit));
+    }
+
+    #[test]
+    fn undo_emits_effect_and_sets_gate() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::Undo);
+        assert_eq!(effects, vec![Effect::Undo]);
+        assert_eq!(state.pending_mutation, Some(MutationKind::Undo));
+    }
+
+    #[test]
+    fn redo_emits_effect_and_sets_gate() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::Redo);
+        assert_eq!(effects, vec![Effect::Redo]);
+        assert_eq!(state.pending_mutation, Some(MutationKind::Redo));
+    }
+
+    #[test]
+    fn new_change_sets_cursor_follows_flag() {
+        let mut state = AppState::new(sample_graph());
+        assert!(!state.cursor_follows_working_copy);
+        let effects = dispatch(&mut state, Action::NewChange);
+        assert_eq!(
+            effects,
+            vec![Effect::New {
+                after: "abc".into()
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::New));
+        assert!(state.cursor_follows_working_copy);
+    }
+
+    #[test]
+    fn mutation_suppressed_while_pending() {
+        let mut state = AppState::new(sample_graph());
+        // Set the gate manually as if a prior mutation is in flight
+        state.pending_mutation = Some(MutationKind::Abandon);
+        let effects = dispatch(&mut state, Action::Squash);
+        assert!(effects.is_empty());
+        // Gate must still be the original Abandon — not overwritten
+        assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
+    }
+
+    #[test]
+    fn undo_suppressed_while_pending() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Edit);
+        let effects = dispatch(&mut state, Action::Undo);
+        assert!(effects.is_empty());
+        assert_eq!(state.pending_mutation, Some(MutationKind::Edit));
+    }
+
+    #[test]
+    fn repo_op_success_clears_gate_and_sets_status() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Abandon);
+        let effects = dispatch(
+            &mut state,
+            Action::RepoOpSuccess {
+                op: MutationKind::Abandon,
+                message: "abandoned".into(),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.pending_mutation.is_none());
+        assert_eq!(state.status_message.as_deref(), Some("abandoned"));
+    }
+
+    #[test]
+    fn repo_op_failed_clears_gate_and_sets_error() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Squash);
+        let effects = dispatch(
+            &mut state,
+            Action::RepoOpFailed {
+                op: MutationKind::Squash,
+                error: "squash failed".into(),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.pending_mutation.is_none());
+        assert_eq!(state.error.as_deref(), Some("squash failed"));
+    }
+
+    #[test]
+    fn repo_op_success_push_clears_background_not_gate() {
+        use crate::action::BackgroundKind;
+        let mut state = AppState::new(sample_graph());
+        state.pending_background.insert(BackgroundKind::Push);
+        state.pending_mutation = Some(MutationKind::Abandon); // should be untouched
+        dispatch(
+            &mut state,
+            Action::RepoOpSuccess {
+                op: MutationKind::GitPush,
+                message: "pushed".into(),
+            },
+        );
+        assert!(!state.pending_background.contains(&BackgroundKind::Push));
+        // pending_mutation preserved — push doesn't clear it
+        assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
+    }
+
+    #[test]
+    fn repo_op_failed_fetch_clears_background_not_gate() {
+        use crate::action::BackgroundKind;
+        let mut state = AppState::new(sample_graph());
+        state.pending_background.insert(BackgroundKind::Fetch);
+        state.pending_mutation = Some(MutationKind::Edit);
+        dispatch(
+            &mut state,
+            Action::RepoOpFailed {
+                op: MutationKind::GitFetch,
+                error: "fetch failed".into(),
+            },
+        );
+        assert!(!state.pending_background.contains(&BackgroundKind::Fetch));
+        assert_eq!(state.pending_mutation, Some(MutationKind::Edit));
+    }
+
+    #[test]
+    fn navigation_unaffected_by_pending_mutation() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Abandon);
+        // Navigation should work normally even with gate set
+        let effects = dispatch(&mut state, Action::MoveDown);
+        assert!(effects.is_empty());
+        assert_eq!(state.cursor(), 2);
+        assert_eq!(state.selected_change_id(), Some("def"));
+        // Gate untouched
+        assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
     }
 }

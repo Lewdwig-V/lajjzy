@@ -25,6 +25,16 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => Some(Action::MoveUp),
             (KeyCode::Char('g'), KeyModifiers::NONE) => Some(Action::JumpToTop),
             (KeyCode::Char('G'), _) => Some(Action::JumpToBottom),
+            (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Action::Abandon),
+            (KeyCode::Char('n'), KeyModifiers::NONE) => Some(Action::NewChange),
+            (KeyCode::Char('e'), KeyModifiers::CONTROL) => Some(Action::EditChange),
+            (KeyCode::Char('e'), KeyModifiers::NONE) => Some(Action::OpenDescribe),
+            (KeyCode::Char('S'), _) => Some(Action::Squash),
+            (KeyCode::Char('u'), KeyModifiers::NONE) => Some(Action::Undo),
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => Some(Action::Redo),
+            (KeyCode::Char('B'), _) => Some(Action::OpenBookmarkSet),
+            (KeyCode::Char('P'), _) => Some(Action::GitPush),
+            (KeyCode::Char('f'), KeyModifiers::NONE) => Some(Action::GitFetch),
             _ => None,
         },
         PanelFocus::Detail => match detail_mode {
@@ -358,6 +368,74 @@ mod tests {
         assert_eq!(
             map_modal_event(key(KeyCode::Char('?')), &modal),
             Some(Action::ModalDismiss)
+        );
+    }
+
+    #[test]
+    fn graph_mutation_keys() {
+        // Abandon
+        assert_eq!(map_graph(key(KeyCode::Char('d'))), Some(Action::Abandon));
+        // NewChange
+        assert_eq!(map_graph(key(KeyCode::Char('n'))), Some(Action::NewChange));
+        // OpenDescribe (plain e)
+        assert_eq!(
+            map_graph(key(KeyCode::Char('e'))),
+            Some(Action::OpenDescribe)
+        );
+        // EditChange (Ctrl-E)
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('e'), KeyModifiers::CONTROL)),
+            Some(Action::EditChange)
+        );
+        // Squash (capital S)
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('S'), KeyModifiers::SHIFT)),
+            Some(Action::Squash)
+        );
+        // Undo
+        assert_eq!(map_graph(key(KeyCode::Char('u'))), Some(Action::Undo));
+        // Redo (Ctrl-R)
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+            Some(Action::Redo)
+        );
+        // OpenBookmarkSet (capital B)
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('B'), KeyModifiers::SHIFT)),
+            Some(Action::OpenBookmarkSet)
+        );
+        // GitPush (capital P)
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('P'), KeyModifiers::SHIFT)),
+            Some(Action::GitPush)
+        );
+        // GitFetch
+        assert_eq!(map_graph(key(KeyCode::Char('f'))), Some(Action::GitFetch));
+    }
+
+    #[test]
+    fn mutation_keys_not_active_in_detail_context() {
+        // 'd' in detail file list should not map to Abandon
+        assert_eq!(map_file_list(key(KeyCode::Char('d'))), None);
+        // 'n' in diff view should not map to NewChange (it maps to DiffNextHunk)
+        assert_eq!(
+            map_diff_view(key(KeyCode::Char('n'))),
+            Some(Action::DiffNextHunk)
+        );
+        // 'f' in detail should not map to GitFetch
+        assert_eq!(map_file_list(key(KeyCode::Char('f'))), None);
+    }
+
+    #[test]
+    fn ctrl_e_edit_before_plain_e_describe() {
+        // Both are distinct tuples; ensure Ctrl-E maps to EditChange, not OpenDescribe
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('e'), KeyModifiers::CONTROL)),
+            Some(Action::EditChange)
+        );
+        assert_ne!(
+            map_graph(key_mod(KeyCode::Char('e'), KeyModifiers::CONTROL)),
+            Some(Action::OpenDescribe)
         );
     }
 }
