@@ -6,6 +6,13 @@ members = [
     "crates/lajjzy-cli",
 ]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+repository = "https://github.com/Lewdwig-V/lajjzy"
+description = "A keyboard-driven, lazygit-style TUI for Jujutsu (jj)"
+
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
