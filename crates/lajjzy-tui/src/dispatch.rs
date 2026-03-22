@@ -1201,6 +1201,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.pending_mutation = Some(MutationKind::Absorb);
                 return vec![Effect::Absorb { change_id: cid }];
             }
+            state.status_message = Some("No change selected".into());
         }
         Action::DuplicateChange => {
             if state.pending_mutation.is_some() {
@@ -1211,6 +1212,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.pending_mutation = Some(MutationKind::Duplicate);
                 return vec![Effect::Duplicate { change_id: cid }];
             }
+            state.status_message = Some("No change selected".into());
         }
         Action::Revert => {
             if state.pending_mutation.is_some() {
@@ -1221,6 +1223,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.pending_mutation = Some(MutationKind::Revert);
                 return vec![Effect::Revert { change_id: cid }];
             }
+            state.status_message = Some("No change selected".into());
         }
 
         Action::NewChange => {

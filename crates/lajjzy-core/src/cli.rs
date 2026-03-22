@@ -91,6 +91,38 @@ impl JjCliBackend {
 
         Ok(repo)
     }
+
+    /// Resolve a short change id (reverse-hex) to a single non-divergent
+    /// commit ID. Returns an error if the id is invalid, not found, ambiguous,
+    /// or divergent.
+    fn resolve_change(
+        repo: &dyn jj_lib::repo::Repo,
+        change_id: &str,
+    ) -> Result<jj_lib::backend::CommitId> {
+        let prefix = jj_lib::object_id::HexPrefix::try_from_reverse_hex(change_id)
+            .ok_or_else(|| anyhow::anyhow!("Invalid change id: {change_id}"))?;
+        let resolution = repo
+            .resolve_change_id_prefix(&prefix)
+            .map_err(|e| anyhow::anyhow!("Index error resolving change id: {e}"))?;
+        let targets = match resolution {
+            jj_lib::object_id::PrefixResolution::NoMatch => {
+                bail!("Change id not found: {change_id}");
+            }
+            jj_lib::object_id::PrefixResolution::AmbiguousMatch => {
+                bail!("Ambiguous change id: {change_id}");
+            }
+            jj_lib::object_id::PrefixResolution::SingleMatch(t) => t,
+        };
+        if targets.is_divergent() {
+            bail!("Change id {change_id} is divergent (multiple visible commits)");
+        }
+        targets
+            .targets
+            .into_iter()
+            .find(|(_, state)| *state == jj_lib::index::ResolvedChangeState::Visible)
+            .map(|(id, _)| id)
+            .ok_or_else(|| anyhow::anyhow!("No visible commit for change id: {change_id}"))
+    }
 }
 
 /// Truncate text to its first line, capped at 50 chars, for status bar display.
@@ -745,38 +777,21 @@ impl RepoBackend for JjCliBackend {
         // TODO: migrate to jj-lib transaction once revset construction is
         // straightforward (requires building ResolvedRevsetExpression for
         // "mutable() & ancestors(source)").
-        self.run_jj(&["absorb", "--from", change_id])?;
-        Ok(format!("Absorbed changes from {change_id}"))
+        let output = self.run_jj(&["absorb", "--from", change_id])?;
+        if output.is_empty() {
+            Ok(format!("Absorbed changes from {change_id}"))
+        } else {
+            Ok(output)
+        }
     }
 
     fn duplicate(&self, change_id: &str) -> Result<String> {
         use jj_lib::object_id::ObjectId as _;
-        use jj_lib::repo::Repo as _;
         use pollster::FutureExt as _;
 
         let repo = self.open_jj_repo()?;
 
-        // Resolve change_id to commit
-        let prefix = jj_lib::object_id::HexPrefix::try_from_reverse_hex(change_id)
-            .ok_or_else(|| anyhow::anyhow!("Invalid change id: {change_id}"))?;
-        let resolution = repo
-            .resolve_change_id_prefix(&prefix)
-            .map_err(|e| anyhow::anyhow!("Index error resolving change id: {e}"))?;
-        let targets = match resolution {
-            jj_lib::object_id::PrefixResolution::NoMatch => {
-                bail!("Change id not found: {change_id}");
-            }
-            jj_lib::object_id::PrefixResolution::AmbiguousMatch => {
-                bail!("Ambiguous change id: {change_id}");
-            }
-            jj_lib::object_id::PrefixResolution::SingleMatch(t) => t,
-        };
-        let commit_id = targets
-            .targets
-            .first()
-            .map(|(id, _)| id)
-            .ok_or_else(|| anyhow::anyhow!("No commit for change id: {change_id}"))?
-            .clone();
+        let commit_id = Self::resolve_change(repo.as_ref(), change_id)?;
 
         // Start transaction and duplicate
         let mut tx = repo.start_transaction();
@@ -796,7 +811,7 @@ impl RepoBackend for JjCliBackend {
             .duplicated_commits
             .get(&commit_id)
             .map(|c| c.change_id().hex())
-            .unwrap_or_default();
+            .expect("duplicate succeeded but commit not in stats");
 
         Ok(format!("Duplicated {change_id} → {new_change_id}"))
     }
@@ -808,29 +823,10 @@ impl RepoBackend for JjCliBackend {
 
         let repo = self.open_jj_repo()?;
 
-        // Resolve change_id to commit
-        let prefix = jj_lib::object_id::HexPrefix::try_from_reverse_hex(change_id)
-            .ok_or_else(|| anyhow::anyhow!("Invalid change id: {change_id}"))?;
-        let resolution = repo
-            .resolve_change_id_prefix(&prefix)
-            .map_err(|e| anyhow::anyhow!("Index error resolving change id: {e}"))?;
-        let targets = match resolution {
-            jj_lib::object_id::PrefixResolution::NoMatch => {
-                bail!("Change id not found: {change_id}");
-            }
-            jj_lib::object_id::PrefixResolution::AmbiguousMatch => {
-                bail!("Ambiguous change id: {change_id}");
-            }
-            jj_lib::object_id::PrefixResolution::SingleMatch(t) => t,
-        };
-        let commit_id = targets
-            .targets
-            .first()
-            .map(|(id, _)| id)
-            .ok_or_else(|| anyhow::anyhow!("No commit for change id: {change_id}"))?;
+        let commit_id = Self::resolve_change(repo.as_ref(), change_id)?;
         let commit = repo
             .store()
-            .get_commit(commit_id)
+            .get_commit(&commit_id)
             .map_err(|e| anyhow::anyhow!("Failed to load commit: {e}"))?;
 
         // Get the commit's tree and its parent tree
@@ -866,6 +862,8 @@ impl RepoBackend for JjCliBackend {
             .block_on()
             .map_err(|e| anyhow::anyhow!("Failed to merge trees: {e}"))?;
 
+        let has_conflicts = new_tree.has_conflict();
+
         // Start transaction, create new commit as child of @
         let mut tx = repo.start_transaction();
         let description = format!("revert {change_id}");
@@ -880,7 +878,11 @@ impl RepoBackend for JjCliBackend {
             .block_on()
             .map_err(|e| anyhow::anyhow!("Failed to commit transaction: {e}"))?;
 
-        Ok(format!("Reverted {change_id}"))
+        if has_conflicts {
+            Ok(format!("Reverted {change_id} (new commit has conflicts)"))
+        } else {
+            Ok(format!("Reverted {change_id}"))
+        }
     }
 
     fn conflict_sides(&self, change_id: &str, path: &str) -> Result<crate::types::ConflictData> {
@@ -892,29 +894,11 @@ impl RepoBackend for JjCliBackend {
 
         // Resolve short change_id prefix to a commit.
         // change_id.short() outputs reverse-hex format (alphabet: k-z + a-j),
-        // not standard hex. Use try_from_reverse_hex, not try_from_hex.
-        let prefix = jj_lib::object_id::HexPrefix::try_from_reverse_hex(change_id)
-            .ok_or_else(|| anyhow::anyhow!("Invalid change id: {change_id}"))?;
-        let resolution = repo
-            .resolve_change_id_prefix(&prefix)
-            .map_err(|e| anyhow::anyhow!("Index error resolving change id: {e}"))?;
-        let targets = match resolution {
-            jj_lib::object_id::PrefixResolution::NoMatch => {
-                bail!("Change id not found: {change_id}");
-            }
-            jj_lib::object_id::PrefixResolution::AmbiguousMatch => {
-                bail!("Ambiguous change id: {change_id}");
-            }
-            jj_lib::object_id::PrefixResolution::SingleMatch(t) => t,
-        };
-        let commit_id = targets
-            .targets
-            .first()
-            .map(|(id, _)| id)
-            .ok_or_else(|| anyhow::anyhow!("No commit for change id: {change_id}"))?;
+        // not standard hex. resolve_change uses try_from_reverse_hex internally.
+        let commit_id = Self::resolve_change(repo.as_ref(), change_id)?;
         let commit = repo
             .store()
-            .get_commit(commit_id)
+            .get_commit(&commit_id)
             .map_err(|e| anyhow::anyhow!("Failed to load commit: {e}"))?;
 
         // Get the merged tree value at the given path.
