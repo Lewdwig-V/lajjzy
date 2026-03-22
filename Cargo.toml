@@ -9,9 +9,12 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MPL-2.0"
 repository = "https://github.com/Lewdwig-V/lajjzy"
 description = "A keyboard-driven, lazygit-style TUI for Jujutsu (jj)"
+keywords = ["jujutsu", "jj", "tui", "vcs", "git"]
+categories = ["command-line-utilities", "development-tools"]
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
