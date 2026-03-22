@@ -45,6 +45,8 @@ impl HelpWidget {
                 ("a", "Absorb into ancestors"),
                 ("D", "Duplicate change"),
                 ("x", "Revert (apply reverse after @)"),
+                ("F", "Fetch PR status (GitHub)"),
+                ("W", "Open/create PR in browser"),
             ],
             HelpContext::DetailFileList => vec![
                 ("j/k", "Move between files"),

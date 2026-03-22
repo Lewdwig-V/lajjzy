@@ -88,6 +88,8 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
             (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::Absorb),
             (KeyCode::Char('D'), _) => Some(Action::DuplicateChange),
             (KeyCode::Char('x'), KeyModifiers::NONE) => Some(Action::Revert),
+            (KeyCode::Char('F'), _) => Some(Action::FetchForgeStatus),
+            (KeyCode::Char('W'), _) => Some(Action::OpenOrCreatePr),
             _ => None,
         },
         PanelFocus::Detail => match detail_mode {
@@ -977,5 +979,29 @@ mod tests {
     fn m7_keys_not_active_in_detail() {
         assert_eq!(map_file_list(key(KeyCode::Char('a'))), None);
         assert_eq!(map_file_list(key(KeyCode::Char('x'))), None);
+    }
+
+    #[test]
+    fn forge_keys_in_graph_context() {
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('F'), KeyModifiers::SHIFT)),
+            Some(Action::FetchForgeStatus)
+        );
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('W'), KeyModifiers::SHIFT)),
+            Some(Action::OpenOrCreatePr)
+        );
+    }
+
+    #[test]
+    fn forge_keys_not_active_in_detail() {
+        assert_eq!(
+            map_file_list(key_mod(KeyCode::Char('F'), KeyModifiers::SHIFT)),
+            None
+        );
+        assert_eq!(
+            map_file_list(key_mod(KeyCode::Char('W'), KeyModifiers::SHIFT)),
+            None
+        );
     }
 }
