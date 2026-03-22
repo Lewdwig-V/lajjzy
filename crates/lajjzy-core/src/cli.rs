@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use crate::backend::RepoBackend;
 use crate::types::GraphData;
@@ -60,6 +61,35 @@ impl JjCliBackend {
         }
 
         Ok(if stderr.is_empty() { stdout } else { stderr })
+    }
+
+    /// Open a jj-lib repo handle for read-only conflict data extraction.
+    ///
+    /// Reopened each call so it picks up mutations made by CLI commands.
+    fn open_jj_repo(&self) -> Result<Arc<jj_lib::repo::ReadonlyRepo>> {
+        use pollster::FutureExt as _;
+
+        let config = jj_lib::config::StackedConfig::with_defaults();
+        let settings = jj_lib::settings::UserSettings::from_config(config)
+            .map_err(|e| anyhow::anyhow!("Failed to create UserSettings: {e}"))?;
+        let store_factories = jj_lib::repo::StoreFactories::default();
+        let wc_factories = jj_lib::workspace::default_working_copy_factories();
+
+        let workspace = jj_lib::workspace::Workspace::load(
+            &settings,
+            &self.workspace_root,
+            &store_factories,
+            &wc_factories,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to load jj workspace: {e}"))?;
+
+        let repo = workspace
+            .repo_loader()
+            .load_at_head()
+            .block_on()
+            .map_err(|e| anyhow::anyhow!("Failed to load repo at head: {e}"))?;
+
+        Ok(repo)
     }
 }
 
@@ -700,8 +730,81 @@ impl RepoBackend for JjCliBackend {
         Ok(format!("Squashed from {change_id}"))
     }
 
-    fn conflict_sides(&self, _change_id: &str, _path: &str) -> Result<crate::types::ConflictData> {
-        bail!("conflict_sides not yet implemented — pending jj-lib integration")
+    fn conflict_sides(&self, change_id: &str, path: &str) -> Result<crate::types::ConflictData> {
+        use crate::types::{ConflictData, ConflictRegion};
+        use jj_lib::repo::Repo as _;
+        use pollster::FutureExt as _;
+
+        let repo = self.open_jj_repo()?;
+
+        // Resolve short change_id prefix to a commit.
+        let prefix = jj_lib::object_id::HexPrefix::try_from_hex(change_id)
+            .ok_or_else(|| anyhow::anyhow!("Invalid change id hex: {change_id}"))?;
+        let resolution = repo
+            .resolve_change_id_prefix(&prefix)
+            .map_err(|e| anyhow::anyhow!("Index error resolving change id: {e}"))?;
+        let targets = match resolution {
+            jj_lib::object_id::PrefixResolution::NoMatch => {
+                bail!("Change id not found: {change_id}");
+            }
+            jj_lib::object_id::PrefixResolution::AmbiguousMatch => {
+                bail!("Ambiguous change id: {change_id}");
+            }
+            jj_lib::object_id::PrefixResolution::SingleMatch(t) => t,
+        };
+        let commit_id = targets
+            .targets
+            .first()
+            .map(|(id, _)| id)
+            .ok_or_else(|| anyhow::anyhow!("No commit for change id: {change_id}"))?;
+        let commit = repo
+            .store()
+            .get_commit(commit_id)
+            .map_err(|e| anyhow::anyhow!("Failed to load commit: {e}"))?;
+
+        // Get the merged tree value at the given path.
+        let repo_path = jj_lib::repo_path::RepoPathBuf::from_internal_string(path)
+            .map_err(|e| anyhow::anyhow!("Invalid repo path '{path}': {e}"))?;
+        let tree = commit.tree();
+        let value = tree
+            .path_value(&repo_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read tree path: {e}"))?;
+
+        if value.is_resolved() {
+            bail!("File is not conflicted: {path}");
+        }
+        if value.num_sides() > 2 {
+            bail!(
+                "Complex conflict ({}-way) — use external merge tool",
+                value.num_sides()
+            );
+        }
+
+        // Extract file IDs for each conflict side.
+        let file_merge = value
+            .to_file_merge()
+            .ok_or_else(|| anyhow::anyhow!("Conflict on non-file entry: {path}"))?;
+
+        // Get full file contents for each side (base, left, right).
+        let contents =
+            jj_lib::conflicts::extract_as_single_hunk(&file_merge, repo.store(), &repo_path)
+                .block_on()
+                .map_err(|e| anyhow::anyhow!("Failed to extract conflict hunks: {e}"))?;
+
+        // For a 2-sided conflict: adds[0]=left, removes[0]=base, adds[1]=right
+        let left = String::from_utf8_lossy(contents.first()).into_owned();
+        let base = contents
+            .get_remove(0)
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_default();
+        let right = contents
+            .get_add(1)
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_default();
+
+        Ok(ConflictData {
+            regions: vec![ConflictRegion::Conflict { base, left, right }],
+        })
     }
 
     fn resolve_file(&self, change_id: &str, path: &str, content: Vec<u8>) -> Result<String> {
