@@ -60,6 +60,10 @@ When multiple candidates match:
 
 Capped at 20 total items.
 
+**Completions are context-free:** There is no awareness of being inside a function's argument list. Typing `author(al` will show both the function `all()` and any author named "alice". This is a known simplification — context-aware completion (only showing valid arguments inside a function call) is deferred.
+
+**Author names with spaces:** An author like "Alice Smith" won't be discoverable by typing "Alice" inside a function argument (space is a word boundary). The user would need to start a new word. This is a known limitation consistent with revset syntax requiring quoting for multi-word values.
+
 ## Word Extraction
 
 Completion operates on the **current word**, not the full query. Operators and parens are word boundaries.
@@ -78,10 +82,14 @@ Examples:
 ```rust
 fn extract_current_word(query: &str) -> (usize, &str) {
     let boundary = query.rfind(|c: char| {
-        matches!(c, '&' | '|' | '~' | '(' | ')' | ':') || c.is_whitespace()
+        // ASCII-only boundaries — non-ASCII whitespace is not a word boundary.
+        matches!(c, '&' | '|' | '~' | '(' | ')' | ':') || c.is_ascii_whitespace()
     });
     match boundary {
-        Some(pos) => (pos + 1, &query[pos + 1..]),
+        Some(pos) => {
+            // All boundary chars are ASCII (1 byte), so pos + 1 is always safe.
+            (pos + 1, &query[pos + 1..])
+        }
         None => (0, query),
     }
 }
@@ -110,6 +118,13 @@ pub enum Modal {
 ```
 
 When `completions` is non-empty, the widget renders completions. When empty, renders fuzzy matches. No new `AppState` field — completions live on the modal.
+
+**All existing `Modal::Omnibar` destructure sites must be updated** to include the two new fields. Exhaustive list:
+- `OpenOmnibar` — construction (add `completions: compute_completions(&query, &state.graph)`, `completion_cursor: 0` so completions appear immediately when reopening with pre-filled active revset)
+- `ModalEnter` — destructure match arm
+- `ModalMoveDown` / `ModalMoveUp` — need to move `completion_cursor` when completions visible
+- `OmnibarInput` / `OmnibarBackspace` — recompute completions after query change
+- Omnibar widget rendering — read completions for display
 
 ## Insertion
 
@@ -171,10 +186,26 @@ fn compute_completions(query: &str, graph: &GraphData) -> Vec<String> {
         }
     }
 
-    // 2. Bookmarks
-    let mut bookmarks: Vec<&str> = graph.details.values()
-        .flat_map(|d| d.bookmarks.iter().map(String::as_str))
-        .collect();
+    // 2-4: Repo entities — iterate node_indices() for deterministic order
+    // (avoids HashMap iteration non-determinism from details.values())
+    let mut bookmarks = Vec::new();
+    let mut authors = Vec::new();
+    for &idx in graph.node_indices() {
+        if let Some(cid) = graph.lines[idx].change_id.as_deref()
+            && let Some(detail) = graph.details.get(cid)
+        {
+            for bm in &detail.bookmarks {
+                bookmarks.push(bm.as_str());
+            }
+            authors.push(detail.author.as_str());
+            // Change IDs
+            if cid.to_lowercase().starts_with(&word_lower) {
+                results.push(cid.to_string());
+            }
+        }
+    }
+
+    // Bookmarks (deduplicated, alphabetical)
     bookmarks.sort_unstable();
     bookmarks.dedup();
     for bm in bookmarks {
@@ -183,19 +214,7 @@ fn compute_completions(query: &str, graph: &GraphData) -> Vec<String> {
         }
     }
 
-    // 3. Change IDs
-    for &idx in graph.node_indices() {
-        if let Some(cid) = graph.lines[idx].change_id.as_deref() {
-            if cid.to_lowercase().starts_with(&word_lower) {
-                results.push(cid.to_string());
-            }
-        }
-    }
-
-    // 4. Authors
-    let mut authors: Vec<&str> = graph.details.values()
-        .map(|d| d.author.as_str())
-        .collect();
+    // Authors (deduplicated, alphabetical)
     authors.sort_unstable();
     authors.dedup();
     for author in authors {
@@ -255,6 +274,8 @@ if let Modal::Omnibar { completions, .. } = modal {
 ```
 
 Tab is only routed to `OmnibarAcceptCompletion` when completions are visible. Otherwise it's swallowed (no-op).
+
+**No Tab conflict with global `TabFocus`:** When a modal is active, the event loop calls `map_modal_event` instead of `map_event`. The global Tab → TabFocus mapping in `map_event` never runs while the omnibar is open. Modal routing takes complete precedence.
 
 ## Widget Rendering
 
