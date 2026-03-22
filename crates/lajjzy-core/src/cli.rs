@@ -746,8 +746,10 @@ impl RepoBackend for JjCliBackend {
         let repo = self.open_jj_repo()?;
 
         // Resolve short change_id prefix to a commit.
-        let prefix = jj_lib::object_id::HexPrefix::try_from_hex(change_id)
-            .ok_or_else(|| anyhow::anyhow!("Invalid change id hex: {change_id}"))?;
+        // change_id.short() outputs reverse-hex format (alphabet: k-z + a-j),
+        // not standard hex. Use try_from_reverse_hex, not try_from_hex.
+        let prefix = jj_lib::object_id::HexPrefix::try_from_reverse_hex(change_id)
+            .ok_or_else(|| anyhow::anyhow!("Invalid change id: {change_id}"))?;
         let resolution = repo
             .resolve_change_id_prefix(&prefix)
             .map_err(|e| anyhow::anyhow!("Index error resolving change id: {e}"))?;
