@@ -57,6 +57,15 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
                 "Hunk Picker".to_string()
             }
         }
+        DetailMode::ConflictView => {
+            if let Some(cv) = state.conflict_view.as_ref() {
+                let hunk_num = cv.cursor + 1;
+                let total = cv.resolutions.len();
+                format!("Conflict — {} (hunk {}/{})", cv.path, hunk_num, total)
+            } else {
+                "Conflict".to_string()
+            }
+        }
     };
 
     let block = Block::default()
@@ -84,6 +93,9 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
                 let widget = HunkPickerWidget::new(hp);
                 frame.render_widget(widget, inner);
             }
+        }
+        DetailMode::ConflictView => {
+            // Widget rendering added in Task 7
         }
     }
 }

@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use lajjzy_core::types::{ChangeDetail, DiffHunk, DiffLine, GraphData};
+use lajjzy_core::types::{
+    ChangeDetail, ConflictData, DiffHunk, DiffLine, GraphData, HunkResolution,
+};
 
 pub use crate::action::{Action, BackgroundKind, DetailMode, MutationKind, PanelFocus};
 use crate::action::{HunkPickerOp, RebaseMode};
@@ -48,6 +50,19 @@ pub struct PickerHunk {
     pub selected: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConflictView {
+    pub change_id: String,
+    pub path: String,
+    pub data: ConflictData,
+    /// Per conflict hunk resolution state. Parallel to Conflict variants only.
+    pub resolutions: Vec<HunkResolution>,
+    /// Cursor indexes into conflict hunks only (0..N).
+    pub cursor: usize,
+    pub scroll: usize,
+    pub viewport_height: usize,
+}
+
 pub struct AppState {
     pub graph: GraphData,
     pub(crate) cursor: usize,
@@ -72,6 +87,7 @@ pub struct AppState {
     pub(crate) omnibar_fallback_idx: Option<usize>,
     pub target_pick: Option<TargetPick>,
     pub hunk_picker: Option<HunkPicker>,
+    pub conflict_view: Option<ConflictView>,
 }
 
 impl AppState {
@@ -99,6 +115,7 @@ impl AppState {
             omnibar_fallback_idx: None,
             target_pick: None,
             hunk_picker: None,
+            conflict_view: None,
         }
     }
 

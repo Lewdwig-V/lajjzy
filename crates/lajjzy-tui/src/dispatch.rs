@@ -33,7 +33,8 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
         | MutationKind::BookmarkSet
         | MutationKind::BookmarkDelete
         | MutationKind::RebaseSingle
-        | MutationKind::RebaseWithDescendants => {
+        | MutationKind::RebaseWithDescendants
+        | MutationKind::ResolveConflict => {
             state.pending_mutation = None;
         }
     }
@@ -439,6 +440,10 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             // HunkPicker back handled by HunkCancel in Task 4
             DetailMode::HunkPicker => {}
+            DetailMode::ConflictView => {
+                state.conflict_view = None;
+                state.detail_mode = DetailMode::FileList;
+            }
         },
         Action::DiffScrollDown => {
             let total_lines: usize = state
@@ -535,8 +540,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 PanelFocus::Detail => match state.detail_mode {
                     DetailMode::FileList => HelpContext::DetailFileList,
                     DetailMode::DiffView => HelpContext::DetailDiffView,
-                    // Use Graph context for HunkPicker until dedicated help is added
-                    DetailMode::HunkPicker => HelpContext::Graph,
+                    // Use Graph context for HunkPicker/ConflictView until dedicated help is added
+                    DetailMode::HunkPicker | DetailMode::ConflictView => HelpContext::Graph,
                 },
             };
             state.modal = Some(Modal::Help { context, scroll: 0 });
@@ -914,6 +919,22 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.hunk_picker = None;
             state.detail_mode = DetailMode::FileList;
         }
+
+        // --- Conflict view stubs (implementations in Task 5) ---
+        Action::ConflictAcceptLeft
+        | Action::ConflictAcceptRight
+        | Action::ConflictConfirm
+        | Action::ConflictLaunchMerge
+        | Action::ConflictNextHunk
+        | Action::ConflictPrevHunk
+        | Action::ConflictScrollDown
+        | Action::ConflictScrollUp
+        | Action::NextConflictFile
+        | Action::PrevConflictFile
+        | Action::ConflictDataLoaded { .. }
+        | Action::MergeToolComplete { .. }
+        | Action::MergeToolFailed { .. } => {}
+
         Action::NewChange => {
             if state.pending_mutation.is_some() {
                 state.status_message = Some("Operation in progress\u{2026}".into());

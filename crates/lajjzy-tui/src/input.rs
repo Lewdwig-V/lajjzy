@@ -93,6 +93,11 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
                 (KeyCode::Esc, _) => Some(Action::DetailBack),
                 _ => None,
             },
+            // Stub — full implementation in Task 6
+            DetailMode::ConflictView => match (event.code, event.modifiers) {
+                (KeyCode::Esc, _) => Some(Action::DetailBack),
+                _ => None,
+            },
             DetailMode::HunkPicker => match (event.code, event.modifiers) {
                 (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
                     Some(Action::DetailMoveDown)

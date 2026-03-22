@@ -237,7 +237,15 @@ impl EffectExecutor {
                 );
             }
 
-            // SuspendForEditor is intercepted before reaching the executor
+            // Conflict handling — stubs until Task 8 wires them up
+            Effect::LoadConflictData { .. } | Effect::ResolveFile { .. } => {
+                // TODO: Task 8 — wire up conflict effects
+            }
+
+            // LaunchMergeTool and SuspendForEditor are intercepted before reaching the executor
+            Effect::LaunchMergeTool { .. } => {
+                unreachable!("LaunchMergeTool must be intercepted by execute_effects")
+            }
             Effect::SuspendForEditor { .. } => {
                 unreachable!("SuspendForEditor must be intercepted by execute_effects")
             }
@@ -263,12 +271,15 @@ impl EffectExecutor {
             | Effect::GitFetch
             | Effect::EvalRevset { .. }
             | Effect::RebaseSingle { .. }
-            | Effect::RebaseWithDescendants { .. } => {
+            | Effect::RebaseWithDescendants { .. }
+            | Effect::ResolveFile { .. } => {
                 self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1
             }
             Effect::LoadOpLog
             | Effect::LoadFileDiff { .. }
             | Effect::LoadChangeDiff { .. }
+            | Effect::LoadConflictData { .. }
+            | Effect::LaunchMergeTool { .. }
             | Effect::SuspendForEditor { .. } => 0,
         }
     }
