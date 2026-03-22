@@ -85,7 +85,8 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
             query,
             matches,
             cursor,
-            ..
+            completions,
+            completion_cursor,
         } => {
             let modal_area = centered_rect(60, 80, area);
             frame.render_widget(Clear, modal_area);
@@ -96,6 +97,8 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
                 &state.graph,
                 *cursor,
                 has_active,
+                completions,
+                *completion_cursor,
             );
             frame.render_widget(widget, modal_area);
         }
