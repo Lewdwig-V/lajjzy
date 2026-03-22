@@ -256,7 +256,6 @@ See `CLAUDE.md` for architectural constraints and crate structure.
 
 ## Roadmap
 
-- **M6 — Forge Integration**: Gerrit, GitHub, GitLab — review status in graph, push-for-review
 - **M8 — jj-lib Backend Migration**: incremental migration from CLI shelling to jj-lib. M4 established read path (conflict_sides), M7 established write path (transactions). Remaining methods migrate by value:
   - **M8a**: `load_graph` — eliminates jj log output parsing, structured revset evaluation
   - **M8b**: `file_diff` / `change_diff` — structured hunks without parsing unified diff
@@ -273,8 +272,7 @@ See `CLAUDE.md` for architectural constraints and crate structure.
 - **M9g — Polish**: workspace name in status bar, workspace picker modal (list, switch, create)
 - **M10 — Blame / Annotate**: file content with annotation gutter (change ID, author, date), drill into blame line to jump to originating change
 - **M11 — Parallel Branches**: lane view for concurrent work (git-butler model)
-- **M12 — Gerrit Depth**: patchset comparison, review actions, inline comments
-- **M13 — GitHub/GitLab Stacked PRs**: Graphite-style stack-aware PR management
+- **M12 — GitHub Stacked PRs**: Graphite-style stack-aware PR management
 
 ## License
 
