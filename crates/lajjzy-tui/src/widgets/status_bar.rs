@@ -201,7 +201,7 @@ mod tests {
             description: "fix: parser bug".into(),
             bookmarks: vec!["main".into()],
             is_empty: false,
-            has_conflict: false,
+            conflict_count: 0,
             files: vec![],
             parents: vec![],
         }

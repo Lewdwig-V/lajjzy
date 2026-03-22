@@ -133,6 +133,10 @@ fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
             path: after_status.trim().to_string(),
             status: crate::types::FileStatus::Renamed,
         }),
+        b'C' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Conflicted,
+        }),
         c if c.is_ascii_uppercase() && after_status.starts_with(' ') => {
             Some(crate::types::FileChange {
                 path: after_status.trim().to_string(),
@@ -193,7 +197,7 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
                         fields[6].split(' ').map(String::from).collect()
                     },
                     is_empty: fields[7] == "true",
-                    has_conflict: fields[8] == "true",
+                    conflict_count: usize::from(fields[8] == "true"),
                     files: vec![],
                     parents: if fields[10].is_empty() {
                         vec![]
@@ -675,6 +679,26 @@ impl RepoBackend for JjCliBackend {
         args.extend(selected_paths);
         self.run_jj(&args)?;
         Ok(format!("Squashed from {change_id}"))
+    }
+
+    fn conflict_sides(&self, _change_id: &str, _path: &str) -> Result<crate::types::ConflictData> {
+        bail!("conflict_sides not yet implemented — pending jj-lib integration")
+    }
+
+    fn resolve_file(&self, change_id: &str, path: &str, content: Vec<u8>) -> Result<String> {
+        // Defense-in-depth: verify change_id is the working copy
+        let wc_id = self.run_jj(&["log", "-r", "@", "--no-graph", "-T", "change_id.short()"])?;
+        if wc_id.trim() != change_id {
+            bail!(
+                "resolve_file: change {} is not the working copy (@={})",
+                change_id,
+                wc_id.trim()
+            );
+        }
+        let abs_path = self.workspace_root.join(path);
+        std::fs::write(&abs_path, &content)
+            .with_context(|| format!("Failed to write resolved file: {}", abs_path.display()))?;
+        Ok(format!("Resolved {path}"))
     }
 }
 
