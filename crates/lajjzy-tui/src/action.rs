@@ -1,3 +1,4 @@
+use lajjzy_core::forge::PrInfo;
 use lajjzy_core::types::{ConflictData, DiffHunk, FileDiff, GraphData, OpLogEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,6 +201,18 @@ pub enum Action {
     },
     MergeToolFailed {
         path: String,
+        error: String,
+    },
+
+    // Forge actions
+    FetchForgeStatus,
+    OpenOrCreatePr,
+    ForgeStatusLoaded(Result<Option<Vec<PrInfo>>, String>),
+    PrViewUrl {
+        url: String,
+    },
+    PrCreateComplete,
+    PrCreateFailed {
         error: String,
     },
 }

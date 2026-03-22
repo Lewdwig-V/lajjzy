@@ -238,6 +238,16 @@ impl EffectExecutor {
                 );
             }
 
+            // Forge stubs (wired in Task 6)
+            Effect::FetchForgeStatus | Effect::OpenPrInBrowser { .. } => {
+                // TODO: Task 6
+            }
+
+            // CreatePr is intercepted in execute_effects (suspend pattern)
+            Effect::CreatePr { .. } => {
+                unreachable!("CreatePr must be intercepted by execute_effects")
+            }
+
             // M7 mutations
             Effect::Absorb { change_id } => {
                 run_mutation(
@@ -340,6 +350,9 @@ impl EffectExecutor {
             | Effect::LoadChangeDiff { .. }
             | Effect::LoadConflictData { .. }
             | Effect::LaunchMergeTool { .. }
+            | Effect::FetchForgeStatus
+            | Effect::OpenPrInBrowser { .. }
+            | Effect::CreatePr { .. }
             | Effect::SuspendForEditor { .. } => 0,
         }
     }
@@ -535,7 +548,7 @@ fn main() -> Result<()> {
     let backend = Arc::new(JjCliBackend::new(&cwd).context("Failed to open jj workspace")?);
 
     let graph = backend.load_graph(None).context("Failed to load graph")?;
-    let mut state = AppState::new(graph);
+    let mut state = AppState::new(graph, None);
 
     let (tx, rx) = mpsc::channel();
     let executor = EffectExecutor {

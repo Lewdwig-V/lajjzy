@@ -95,6 +95,16 @@ pub enum Effect {
         path: String,
     },
 
+    // Forge
+    FetchForgeStatus,
+    OpenPrInBrowser {
+        bookmark: String,
+        url: String,
+    },
+    CreatePr {
+        bookmark: String,
+    },
+
     // Non-repo
     SuspendForEditor {
         change_id: String,

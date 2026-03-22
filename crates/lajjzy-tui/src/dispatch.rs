@@ -1192,6 +1192,14 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
 
+        // Forge stubs (implementations in Task 4)
+        Action::FetchForgeStatus
+        | Action::OpenOrCreatePr
+        | Action::ForgeStatusLoaded(_)
+        | Action::PrViewUrl { .. }
+        | Action::PrCreateComplete
+        | Action::PrCreateFailed { .. } => {}
+
         Action::Absorb => {
             if state.pending_mutation.is_some() {
                 state.status_message = Some("Operation in progress\u{2026}".into());
@@ -2012,14 +2020,14 @@ mod tests {
 
     #[test]
     fn initial_cursor_on_working_copy() {
-        let state = AppState::new(sample_graph());
+        let state = AppState::new(sample_graph(), None);
         assert_eq!(state.cursor(), 0);
         assert_eq!(state.selected_change_id(), Some("abc"));
     }
 
     #[test]
     fn move_down_skips_connector_lines() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::MoveDown);
         assert!(effects.is_empty());
         assert_eq!(state.cursor(), 2);
@@ -2028,7 +2036,7 @@ mod tests {
 
     #[test]
     fn move_up_skips_connector_lines() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.set_cursor_for_test(2);
         let effects = dispatch(&mut state, Action::MoveUp);
         assert!(effects.is_empty());
@@ -2037,7 +2045,7 @@ mod tests {
 
     #[test]
     fn move_down_at_bottom_stays() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.set_cursor_for_test(4);
         let effects = dispatch(&mut state, Action::MoveDown);
         assert!(effects.is_empty());
@@ -2046,7 +2054,7 @@ mod tests {
 
     #[test]
     fn move_up_at_top_stays() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::MoveUp);
         assert!(effects.is_empty());
         assert_eq!(state.cursor(), 0);
@@ -2054,7 +2062,7 @@ mod tests {
 
     #[test]
     fn jump_to_top() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.set_cursor_for_test(4);
         let effects = dispatch(&mut state, Action::JumpToTop);
         assert!(effects.is_empty());
@@ -2063,7 +2071,7 @@ mod tests {
 
     #[test]
     fn jump_to_bottom() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::JumpToBottom);
         assert!(effects.is_empty());
         assert_eq!(state.cursor(), 4);
@@ -2071,7 +2079,7 @@ mod tests {
 
     #[test]
     fn quit_sets_flag() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::Quit);
         assert!(effects.is_empty());
         assert!(state.should_quit);
@@ -2081,7 +2089,7 @@ mod tests {
 
     #[test]
     fn refresh_emits_load_graph() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.error = Some("old error".into());
         let effects = dispatch(&mut state, Action::Refresh);
         assert_eq!(effects, vec![Effect::LoadGraph { revset: None }]);
@@ -2090,7 +2098,7 @@ mod tests {
 
     #[test]
     fn graph_loaded_success_updates_graph() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let new_graph = test_graph_with_changes(&["xxx", "yyy"]);
         let effects = dispatch(
             &mut state,
@@ -2106,7 +2114,7 @@ mod tests {
 
     #[test]
     fn graph_loaded_error_sets_error() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(
             &mut state,
             Action::GraphLoaded {
@@ -2122,7 +2130,7 @@ mod tests {
 
     #[test]
     fn graph_loaded_preserves_selected_change() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.set_cursor_for_test(2); // at "def"
         let new_graph = sample_graph();
         let effects = dispatch(
@@ -2139,7 +2147,7 @@ mod tests {
 
     #[test]
     fn graph_loaded_falls_back_when_change_disappears() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.set_cursor_for_test(2); // at "def"
 
         // Build a new graph without the "def" change
@@ -2165,7 +2173,7 @@ mod tests {
 
     #[test]
     fn graph_loaded_follows_working_copy() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.cursor_follows_working_copy = true;
         // New graph has working copy at index 0 (first node)
         let new_graph = test_graph_with_changes(&["zzz", "yyy"]);
@@ -2184,7 +2192,7 @@ mod tests {
 
     #[test]
     fn graph_loaded_resets_detail_state() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.detail_mode = DetailMode::DiffView;
         state.diff_scroll = 5;
         let new_graph = sample_graph();
@@ -2203,7 +2211,7 @@ mod tests {
 
     #[test]
     fn stale_graph_loaded_rejected() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         // Accept a fresh graph at generation 2
         let new_graph = test_graph_with_changes(&["xxx"]);
         dispatch(
@@ -2234,13 +2242,13 @@ mod tests {
     fn initial_cursor_fallback_without_working_copy() {
         let mut graph = sample_graph();
         graph.working_copy_index = None;
-        let state = AppState::new(graph);
+        let state = AppState::new(graph, None);
         assert_eq!(state.cursor(), 0);
     }
 
     #[test]
     fn navigation_preserves_error() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.error = Some("old error".into());
         let effects = dispatch(&mut state, Action::MoveDown);
         assert!(effects.is_empty());
@@ -2251,7 +2259,7 @@ mod tests {
 
     #[test]
     fn new_state_initializes_detail_fields() {
-        let state = AppState::new(sample_graph());
+        let state = AppState::new(sample_graph(), None);
         assert_eq!(state.focus, PanelFocus::Graph);
         assert_eq!(state.detail_cursor(), 0);
         assert_eq!(state.detail_mode, DetailMode::FileList);
@@ -2261,7 +2269,7 @@ mod tests {
 
     #[test]
     fn tab_focus_toggles() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         assert_eq!(state.focus, PanelFocus::Graph);
         dispatch(&mut state, Action::TabFocus);
         assert_eq!(state.focus, PanelFocus::Detail);
@@ -2273,7 +2281,7 @@ mod tests {
 
     #[test]
     fn graph_cursor_move_resets_detail() {
-        let mut state = AppState::new(sample_graph_with_files());
+        let mut state = AppState::new(sample_graph_with_files(), None);
         state.set_detail_cursor_for_test(1);
         state.detail_mode = DetailMode::DiffView;
         state.diff_scroll = 5;
@@ -2286,7 +2294,7 @@ mod tests {
 
     #[test]
     fn jump_to_working_copy() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.set_cursor_for_test(4);
         dispatch(&mut state, Action::JumpToWorkingCopy);
         assert_eq!(state.cursor(), 0);
@@ -2297,7 +2305,7 @@ mod tests {
     fn jump_to_working_copy_noop_when_none() {
         let mut graph = sample_graph();
         graph.working_copy_index = None;
-        let mut state = AppState::new(graph);
+        let mut state = AppState::new(graph, None);
         state.set_cursor_for_test(4);
         dispatch(&mut state, Action::JumpToWorkingCopy);
         assert_eq!(state.cursor(), 4);
@@ -2305,7 +2313,7 @@ mod tests {
 
     #[test]
     fn detail_back_from_diff_returns_to_file_list() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.focus = PanelFocus::Detail;
         state.detail_mode = DetailMode::DiffView;
         dispatch(&mut state, Action::DetailBack);
@@ -2315,7 +2323,7 @@ mod tests {
 
     #[test]
     fn detail_back_from_file_list_returns_focus_to_graph() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.focus = PanelFocus::Detail;
         state.detail_mode = DetailMode::FileList;
         dispatch(&mut state, Action::DetailBack);
@@ -2324,7 +2332,7 @@ mod tests {
 
     #[test]
     fn detail_enter_with_no_files_is_noop() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.focus = PanelFocus::Detail;
         let effects = dispatch(&mut state, Action::DetailEnter);
         assert!(effects.is_empty());
@@ -2334,7 +2342,7 @@ mod tests {
 
     #[test]
     fn detail_enter_emits_load_file_diff() {
-        let mut state = AppState::new(sample_graph_with_files());
+        let mut state = AppState::new(sample_graph_with_files(), None);
         state.focus = PanelFocus::Detail;
         let effects = dispatch(&mut state, Action::DetailEnter);
         assert_eq!(
@@ -2349,7 +2357,7 @@ mod tests {
     #[test]
     fn file_diff_loaded_success_updates_state() {
         use lajjzy_core::types::{DiffHunk, DiffLine, DiffLineKind};
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let hunks = vec![DiffHunk {
             header: "@@ -1,1 +1,1 @@".into(),
             lines: vec![
@@ -2372,7 +2380,7 @@ mod tests {
 
     #[test]
     fn file_diff_loaded_error_sets_error() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::FileDiffLoaded(Err("disk error".into())));
         assert!(effects.is_empty());
         assert!(state.error.as_deref().unwrap().contains("disk error"));
@@ -2381,7 +2389,7 @@ mod tests {
 
     #[test]
     fn detail_move_down_with_files() {
-        let mut state = AppState::new(sample_graph_with_files());
+        let mut state = AppState::new(sample_graph_with_files(), None);
         assert_eq!(state.detail_cursor(), 0);
         dispatch(&mut state, Action::DetailMoveDown);
         assert_eq!(state.detail_cursor(), 1);
@@ -2389,7 +2397,7 @@ mod tests {
 
     #[test]
     fn detail_move_down_at_boundary_stays() {
-        let mut state = AppState::new(sample_graph_with_files());
+        let mut state = AppState::new(sample_graph_with_files(), None);
         let file_count = state.selected_detail().unwrap().files.len();
         for _ in 0..file_count {
             dispatch(&mut state, Action::DetailMoveDown);
@@ -2401,7 +2409,7 @@ mod tests {
 
     #[test]
     fn detail_move_up_at_zero_stays() {
-        let mut state = AppState::new(sample_graph_with_files());
+        let mut state = AppState::new(sample_graph_with_files(), None);
         dispatch(&mut state, Action::DetailMoveUp);
         assert_eq!(state.detail_cursor(), 0);
     }
@@ -2410,7 +2418,7 @@ mod tests {
 
     #[test]
     fn toggle_op_log_emits_load_op_log() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         assert!(state.modal.is_none());
         let effects = dispatch(&mut state, Action::ToggleOpLog);
         assert_eq!(effects, vec![Effect::LoadOpLog]);
@@ -2418,7 +2426,7 @@ mod tests {
 
     #[test]
     fn toggle_op_log_closes_when_open() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.modal = Some(Modal::OpLog {
             entries: vec![],
             cursor: 0,
@@ -2432,7 +2440,7 @@ mod tests {
     #[test]
     fn op_log_loaded_success_opens_modal() {
         use lajjzy_core::types::OpLogEntry;
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let entries = vec![OpLogEntry {
             id: "op1".into(),
             description: "test op".into(),
@@ -2456,7 +2464,7 @@ mod tests {
 
     #[test]
     fn op_log_loaded_error_sets_error() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::OpLogLoaded(Err("op fail".into())));
         assert!(effects.is_empty());
         assert!(state.error.as_deref().unwrap().contains("op fail"));
@@ -2467,7 +2475,7 @@ mod tests {
 
     #[test]
     fn modal_dismiss_clears_modal() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.modal = Some(Modal::OpLog {
             entries: vec![],
             cursor: 0,
@@ -2480,7 +2488,7 @@ mod tests {
 
     #[test]
     fn open_help_captures_context() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.focus = PanelFocus::Detail;
         state.detail_mode = DetailMode::DiffView;
         dispatch(&mut state, Action::OpenHelp);
@@ -2492,7 +2500,7 @@ mod tests {
 
     #[test]
     fn open_bookmarks_collects_from_graph() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenBookmarks);
         match &state.modal {
             Some(Modal::BookmarkPicker { bookmarks, .. }) => {
@@ -2504,7 +2512,7 @@ mod tests {
 
     #[test]
     fn omnibar_opens_with_all_matches() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         match &state.modal {
             Some(Modal::Omnibar { matches, query, .. }) => {
@@ -2517,7 +2525,7 @@ mod tests {
 
     #[test]
     fn modal_move_down_and_up() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         dispatch(&mut state, Action::ModalMoveDown);
         match &state.modal {
@@ -2533,7 +2541,7 @@ mod tests {
 
     #[test]
     fn omnibar_input_and_backspace() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         dispatch(&mut state, Action::OmnibarInput('a'));
         dispatch(&mut state, Action::OmnibarInput('b'));
@@ -2550,7 +2558,7 @@ mod tests {
 
     #[test]
     fn modal_enter_on_omnibar_empty_closes() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         dispatch(&mut state, Action::ModalMoveDown);
         let effects = dispatch(&mut state, Action::ModalEnter);
@@ -2562,7 +2570,7 @@ mod tests {
 
     #[test]
     fn bookmark_enter_jumps_cursor() {
-        let mut state = AppState::new(sample_graph_with_bookmarks());
+        let mut state = AppState::new(sample_graph_with_bookmarks(), None);
         dispatch(&mut state, Action::OpenBookmarks);
         assert!(matches!(state.modal, Some(Modal::BookmarkPicker { .. })));
 
@@ -2579,7 +2587,7 @@ mod tests {
 
     #[test]
     fn omnibar_input_narrows_matches() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
 
         let initial_count = match &state.modal {
@@ -2602,7 +2610,7 @@ mod tests {
 
     #[test]
     fn help_scroll_clamped_to_content() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.focus = PanelFocus::Detail;
         state.detail_mode = DetailMode::DiffView;
         dispatch(&mut state, Action::OpenHelp);
@@ -2625,7 +2633,7 @@ mod tests {
 
     #[test]
     fn modal_enter_on_help_keeps_modal() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenHelp);
         dispatch(&mut state, Action::ModalEnter);
         assert!(matches!(state.modal, Some(Modal::Help { .. })));
@@ -2635,7 +2643,7 @@ mod tests {
 
     #[test]
     fn abandon_emits_effect_and_sets_gate() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         assert_eq!(state.selected_change_id(), Some("abc"));
         let effects = dispatch(&mut state, Action::Abandon);
         assert_eq!(
@@ -2652,7 +2660,7 @@ mod tests {
 
     #[test]
     fn edit_change_emits_effect_and_sets_gate() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::EditChange);
         assert_eq!(
             effects,
@@ -2665,7 +2673,7 @@ mod tests {
 
     #[test]
     fn undo_emits_effect_and_sets_gate() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::Undo);
         assert_eq!(effects, vec![Effect::Undo]);
         assert_eq!(state.pending_mutation, Some(MutationKind::Undo));
@@ -2673,7 +2681,7 @@ mod tests {
 
     #[test]
     fn redo_emits_effect_and_sets_gate() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::Redo);
         assert_eq!(effects, vec![Effect::Redo]);
         assert_eq!(state.pending_mutation, Some(MutationKind::Redo));
@@ -2681,7 +2689,7 @@ mod tests {
 
     #[test]
     fn new_change_sets_cursor_follows_flag() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         assert!(!state.cursor_follows_working_copy);
         let effects = dispatch(&mut state, Action::NewChange);
         assert_eq!(
@@ -2696,7 +2704,7 @@ mod tests {
 
     #[test]
     fn mutation_suppressed_while_pending() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         // Set the gate manually as if a prior mutation is in flight
         state.pending_mutation = Some(MutationKind::Abandon);
         let effects = dispatch(&mut state, Action::NewChange);
@@ -2707,7 +2715,7 @@ mod tests {
 
     #[test]
     fn undo_suppressed_while_pending() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Edit);
         let effects = dispatch(&mut state, Action::Undo);
         assert!(effects.is_empty());
@@ -2716,7 +2724,7 @@ mod tests {
 
     #[test]
     fn repo_op_success_clears_gate_and_sets_status() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Abandon);
         let effects = dispatch(
             &mut state,
@@ -2733,7 +2741,7 @@ mod tests {
 
     #[test]
     fn repo_op_success_without_graph_still_clears_gate() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Abandon);
         let effects = dispatch(
             &mut state,
@@ -2751,7 +2759,7 @@ mod tests {
     fn repo_op_success_installs_graph_before_clearing_gate() {
         // Verifies the ordering: graph replaced, THEN gate cleared.
         // If gate cleared first, a fast mutation could fire against stale graph.
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Abandon);
 
         let new_graph = test_graph_with_changes(&["xxx"]);
@@ -2772,7 +2780,7 @@ mod tests {
 
     #[test]
     fn repo_op_failed_clears_gate_and_sets_error() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::SquashPartial);
         let effects = dispatch(
             &mut state,
@@ -2789,7 +2797,7 @@ mod tests {
     #[test]
     fn repo_op_success_push_clears_background_not_gate() {
         use crate::action::BackgroundKind;
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_background.insert(BackgroundKind::Push);
         state.pending_mutation = Some(MutationKind::Abandon); // should be untouched
         dispatch(
@@ -2808,7 +2816,7 @@ mod tests {
     #[test]
     fn repo_op_failed_fetch_clears_background_not_gate() {
         use crate::action::BackgroundKind;
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_background.insert(BackgroundKind::Fetch);
         state.pending_mutation = Some(MutationKind::Edit);
         dispatch(
@@ -2824,7 +2832,7 @@ mod tests {
 
     #[test]
     fn navigation_unaffected_by_pending_mutation() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Abandon);
         // Navigation should work normally even with gate set
         let effects = dispatch(&mut state, Action::MoveDown);
@@ -2866,7 +2874,7 @@ mod tests {
 
     #[test]
     fn push_uses_background_gate() {
-        let mut state = AppState::new(sample_graph_bookmarked());
+        let mut state = AppState::new(sample_graph_bookmarked(), None);
         let effects = dispatch(&mut state, Action::GitPush);
         assert_eq!(
             effects,
@@ -2881,7 +2889,7 @@ mod tests {
 
     #[test]
     fn push_suppressed_while_pushing() {
-        let mut state = AppState::new(sample_graph_bookmarked());
+        let mut state = AppState::new(sample_graph_bookmarked(), None);
         state.pending_background.insert(BackgroundKind::Push);
         let effects = dispatch(&mut state, Action::GitPush);
         assert!(effects.is_empty());
@@ -2892,7 +2900,7 @@ mod tests {
     #[test]
     fn push_no_bookmark_sets_error() {
         // sample_graph has no bookmarks on "abc"
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::GitPush);
         assert!(effects.is_empty());
         assert!(state.error.as_deref().unwrap().contains("No bookmark"));
@@ -2901,7 +2909,7 @@ mod tests {
 
     #[test]
     fn fetch_uses_background_gate() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::GitFetch);
         assert_eq!(effects, vec![Effect::GitFetch]);
         assert!(state.pending_background.contains(&BackgroundKind::Fetch));
@@ -2910,7 +2918,7 @@ mod tests {
 
     #[test]
     fn fetch_suppressed_while_fetching() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_background.insert(BackgroundKind::Fetch);
         let effects = dispatch(&mut state, Action::GitFetch);
         assert!(effects.is_empty());
@@ -2920,7 +2928,7 @@ mod tests {
     #[test]
     fn fetch_concurrent_with_local_mutation() {
         // A local mutation is in flight; fetch must still proceed on its independent lane.
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Abandon);
         let effects = dispatch(&mut state, Action::GitFetch);
         assert_eq!(effects, vec![Effect::GitFetch]);
@@ -2932,7 +2940,7 @@ mod tests {
     #[test]
     fn push_concurrent_with_fetch() {
         // Fetch is already in flight; push must still proceed independently.
-        let mut state = AppState::new(sample_graph_bookmarked());
+        let mut state = AppState::new(sample_graph_bookmarked(), None);
         state.pending_background.insert(BackgroundKind::Fetch);
         let effects = dispatch(&mut state, Action::GitPush);
         assert_eq!(
@@ -2950,7 +2958,7 @@ mod tests {
 
     #[test]
     fn open_describe_opens_modal() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         // Cursor starts at "abc" (working copy) with description "desc1"
         assert_eq!(state.selected_change_id(), Some("abc"));
         let effects = dispatch(&mut state, Action::OpenDescribe);
@@ -2994,7 +3002,7 @@ mod tests {
             Some(0),
             String::new(),
         );
-        let mut state = AppState::new(graph);
+        let mut state = AppState::new(graph, None);
         let effects = dispatch(&mut state, Action::OpenDescribe);
         assert!(effects.is_empty());
         assert!(matches!(state.modal, Some(Modal::Describe { .. })));
@@ -3005,7 +3013,7 @@ mod tests {
 
     #[test]
     fn describe_save_emits_effect_and_closes_modal() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         // Open the modal first
         dispatch(&mut state, Action::OpenDescribe);
         assert!(matches!(state.modal, Some(Modal::Describe { .. })));
@@ -3024,7 +3032,7 @@ mod tests {
 
     #[test]
     fn describe_escalate_editor_emits_suspend() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         // Open the modal first
         dispatch(&mut state, Action::OpenDescribe);
         assert!(matches!(state.modal, Some(Modal::Describe { .. })));
@@ -3042,7 +3050,7 @@ mod tests {
 
     #[test]
     fn open_describe_suppressed_while_pending() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Abandon);
         let effects = dispatch(&mut state, Action::OpenDescribe);
         assert!(effects.is_empty());
@@ -3052,7 +3060,7 @@ mod tests {
 
     #[test]
     fn editor_complete_emits_describe_effect() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(
             &mut state,
             Action::EditorComplete {
@@ -3074,7 +3082,7 @@ mod tests {
 
     #[test]
     fn open_bookmark_set_opens_modal() {
-        let mut state = AppState::new(sample_graph_with_bookmarks());
+        let mut state = AppState::new(sample_graph_with_bookmarks(), None);
         // cursor is at "abc" which has bookmark "main"
         let effects = dispatch(&mut state, Action::OpenBookmarkSet);
         assert!(effects.is_empty());
@@ -3091,7 +3099,7 @@ mod tests {
 
     #[test]
     fn bookmark_input_char_appends() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.modal = Some(Modal::BookmarkInput {
             change_id: "abc".into(),
             input: "ma".into(),
@@ -3108,7 +3116,7 @@ mod tests {
 
     #[test]
     fn bookmark_input_backspace_removes() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.modal = Some(Modal::BookmarkInput {
             change_id: "abc".into(),
             input: "main".into(),
@@ -3125,7 +3133,7 @@ mod tests {
 
     #[test]
     fn bookmark_input_confirm_emits_effect() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.modal = Some(Modal::BookmarkInput {
             change_id: "abc".into(),
             input: "new-branch".into(),
@@ -3149,7 +3157,7 @@ mod tests {
 
     #[test]
     fn bookmark_input_confirm_empty_does_nothing() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.modal = Some(Modal::BookmarkInput {
             change_id: "abc".into(),
             input: String::new(),
@@ -3167,7 +3175,7 @@ mod tests {
 
     #[test]
     fn bookmark_delete_from_picker_emits_effect() {
-        let mut state = AppState::new(sample_graph_with_bookmarks());
+        let mut state = AppState::new(sample_graph_with_bookmarks(), None);
         state.modal = Some(Modal::BookmarkPicker {
             bookmarks: vec![
                 ("main".into(), "abc".into()),
@@ -3188,7 +3196,7 @@ mod tests {
 
     #[test]
     fn bookmark_delete_suppressed_while_pending() {
-        let mut state = AppState::new(sample_graph_with_bookmarks());
+        let mut state = AppState::new(sample_graph_with_bookmarks(), None);
         state.pending_mutation = Some(MutationKind::Abandon);
         state.modal = Some(Modal::BookmarkPicker {
             bookmarks: vec![("main".into(), "abc".into())],
@@ -3208,7 +3216,7 @@ mod tests {
 
     #[test]
     fn open_omnibar_prefills_active_revset() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.active_revset = Some("mine()".into());
         dispatch(&mut state, Action::OpenOmnibar);
         match &state.modal {
@@ -3219,7 +3227,7 @@ mod tests {
 
     #[test]
     fn omnibar_enter_empty_clears_revset() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.active_revset = Some("mine()".into());
         state.modal = Some(Modal::Omnibar {
             query: String::new(),
@@ -3235,7 +3243,7 @@ mod tests {
 
     #[test]
     fn omnibar_enter_empty_no_revset_just_closes() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.modal = Some(Modal::Omnibar {
             query: String::new(),
             matches: vec![],
@@ -3250,7 +3258,7 @@ mod tests {
 
     #[test]
     fn omnibar_enter_nonempty_emits_eval_revset() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let node_idx = state.graph.node_indices()[0];
         state.modal = Some(Modal::Omnibar {
             query: "mine()".into(),
@@ -3271,7 +3279,7 @@ mod tests {
 
     #[test]
     fn revset_loaded_success_sets_active_revset() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let filtered = sample_graph();
         let effects = dispatch(
             &mut state,
@@ -3287,7 +3295,7 @@ mod tests {
 
     #[test]
     fn revset_loaded_empty_graph_shows_feedback() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let empty_graph = GraphData::new(vec![], HashMap::new(), None, String::new());
         let effects = dispatch(
             &mut state,
@@ -3310,7 +3318,7 @@ mod tests {
 
     #[test]
     fn revset_loaded_failure_falls_back_to_fuzzy_jump() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let fallback = state.graph.node_indices()[1];
         state.omnibar_fallback_idx = Some(fallback);
         let effects = dispatch(
@@ -3328,7 +3336,7 @@ mod tests {
 
     #[test]
     fn revset_loaded_stale_generation_rejected() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.graph_generation = 5;
         let effects = dispatch(
             &mut state,
@@ -3344,7 +3352,7 @@ mod tests {
 
     #[test]
     fn refresh_respects_active_revset() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.active_revset = Some("mine()".into());
         let effects = dispatch(&mut state, Action::Refresh);
         assert_eq!(
@@ -3470,7 +3478,7 @@ mod tests {
 
     #[test]
     fn rebase_single_enters_picking_mode() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         // Cursor on abc (idx 0)
         let effects = dispatch(&mut state, Action::RebaseSingle);
         assert!(effects.is_empty());
@@ -3485,7 +3493,7 @@ mod tests {
 
     #[test]
     fn rebase_single_blocked_by_mutation_gate() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         state.pending_mutation = Some(MutationKind::Describe);
         let effects = dispatch(&mut state, Action::RebaseSingle);
         assert!(effects.is_empty());
@@ -3501,7 +3509,7 @@ mod tests {
 
     #[test]
     fn rebase_single_blocked_by_active_picking() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle);
         assert!(state.target_pick.is_some());
         // Second attempt is no-op
@@ -3513,7 +3521,7 @@ mod tests {
 
     #[test]
     fn rebase_with_descendants_enters_picking_with_descendants() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         state.set_cursor_for_test(2); // cursor on def
         let effects = dispatch(&mut state, Action::RebaseWithDescendants);
         assert!(effects.is_empty());
@@ -3529,7 +3537,7 @@ mod tests {
 
     #[test]
     fn rebase_with_descendants_from_root_excludes_all() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         state.set_cursor_for_test(4); // cursor on ghi (root)
         dispatch(&mut state, Action::RebaseWithDescendants);
         let pick = state.target_pick.as_ref().unwrap();
@@ -3541,7 +3549,7 @@ mod tests {
 
     #[test]
     fn rebase_with_descendants_blocked_by_mutation_gate() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         state.pending_mutation = Some(MutationKind::New);
         dispatch(&mut state, Action::RebaseWithDescendants);
         assert!(state.target_pick.is_none());
@@ -3551,7 +3559,7 @@ mod tests {
 
     #[test]
     fn pick_confirm_emits_rebase_single_effect() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         // Enter picking from abc
         dispatch(&mut state, Action::RebaseSingle);
         // Move cursor to ghi (idx 4) — a valid destination
@@ -3570,7 +3578,7 @@ mod tests {
 
     #[test]
     fn pick_confirm_emits_rebase_with_descendants_effect() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         state.set_cursor_for_test(2); // def
         dispatch(&mut state, Action::RebaseWithDescendants);
         // Move cursor to ghi (idx 4) — valid destination (not excluded)
@@ -3591,7 +3599,7 @@ mod tests {
 
     #[test]
     fn pick_confirm_on_excluded_shows_message() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle); // source = abc, excluded = {abc}
         // Force cursor onto excluded change
         state.set_cursor_for_test(0); // abc
@@ -3603,7 +3611,7 @@ mod tests {
 
     #[test]
     fn pick_confirm_without_picking_is_noop() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let effects = dispatch(&mut state, Action::PickConfirm);
         assert!(effects.is_empty());
         assert!(state.target_pick.is_none());
@@ -3613,7 +3621,7 @@ mod tests {
 
     #[test]
     fn pick_cancel_from_browsing_exits_picking_restores_cursor() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         // Enter picking at cursor 0
         dispatch(&mut state, Action::RebaseSingle);
         // Move cursor away
@@ -3626,7 +3634,7 @@ mod tests {
 
     #[test]
     fn pick_cancel_from_filtering_returns_to_browsing() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle);
         dispatch(&mut state, Action::PickFilterChar('x'));
         assert!(matches!(
@@ -3644,7 +3652,7 @@ mod tests {
 
     #[test]
     fn pick_cancel_without_picking_is_noop() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::PickCancel);
         assert!(state.target_pick.is_none());
     }
@@ -3653,7 +3661,7 @@ mod tests {
 
     #[test]
     fn pick_filter_char_transitions_browsing_to_filtering() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle);
         dispatch(&mut state, Action::PickFilterChar('b'));
         let pick = state.target_pick.as_ref().unwrap();
@@ -3662,7 +3670,7 @@ mod tests {
 
     #[test]
     fn pick_filter_char_appends_in_filtering_mode() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle);
         dispatch(&mut state, Action::PickFilterChar('b'));
         dispatch(&mut state, Action::PickFilterChar('o'));
@@ -3672,7 +3680,7 @@ mod tests {
 
     #[test]
     fn pick_filter_char_jumps_to_matching_change() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         // Picking from abc (excluded), cursor at 0
         dispatch(&mut state, Action::RebaseSingle);
         // Type 'c' — matches "charlie" (author of ghi) and "second change" (desc of def)
@@ -3689,7 +3697,7 @@ mod tests {
 
     #[test]
     fn pick_filter_backspace_pops_char() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle);
         dispatch(&mut state, Action::PickFilterChar('a'));
         dispatch(&mut state, Action::PickFilterChar('b'));
@@ -3700,7 +3708,7 @@ mod tests {
 
     #[test]
     fn pick_filter_backspace_to_empty_returns_to_browsing() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle);
         dispatch(&mut state, Action::PickFilterChar('x'));
         dispatch(&mut state, Action::PickFilterBackspace);
@@ -3714,7 +3722,7 @@ mod tests {
 
     #[test]
     fn move_down_skips_excluded_in_picking_mode() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         state.set_cursor_for_test(2); // def
         dispatch(&mut state, Action::RebaseWithDescendants);
         // excluded = {def, abc}. Cursor on def (idx 2). MoveDown should skip to ghi (idx 4).
@@ -3723,7 +3731,7 @@ mod tests {
         // With excluded = {def, abc}, only ghi is valid. Let's set cursor to ghi.
         // Actually — let's test with RebaseSingle from abc where excluded = {abc}.
         // Then MoveDown from 0 should skip abc (already at 0) → go to def (2).
-        let mut state2 = AppState::new(sample_graph_with_parents());
+        let mut state2 = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state2, Action::RebaseSingle); // excluded = {abc}
         // Currently at abc (0), which IS excluded. MoveDown should go to def (2).
         let effects = dispatch(&mut state2, Action::MoveDown);
@@ -3734,13 +3742,13 @@ mod tests {
 
     #[test]
     fn move_up_skips_excluded_in_picking_mode() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         state.set_cursor_for_test(4); // ghi
         dispatch(&mut state, Action::RebaseWithDescendants);
         // excluded = {ghi, def, abc}. All excluded — move should stay.
         // This is a degenerate case. Let's use a 4-node graph.
         // Instead, test: RebaseSingle from def. Excluded = {def}.
-        let mut state2 = AppState::new(sample_graph_with_parents());
+        let mut state2 = AppState::new(sample_graph_with_parents(), None);
         state2.set_cursor_for_test(2); // def
         dispatch(&mut state2, Action::RebaseSingle); // excluded = {def}
         // Move cursor to ghi (4)
@@ -3753,7 +3761,7 @@ mod tests {
 
     #[test]
     fn navigation_with_filter_skips_non_matching() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         // Rebase from abc (excluded = {abc})
         dispatch(&mut state, Action::RebaseSingle);
         // Filter by "root" — matches ghi's description "root change"
@@ -3773,7 +3781,7 @@ mod tests {
 
     #[test]
     fn graph_loaded_cancels_picking_when_source_gone() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle); // source = abc
         assert!(state.target_pick.is_some());
 
@@ -3799,7 +3807,7 @@ mod tests {
 
     #[test]
     fn graph_loaded_preserves_picking_when_source_still_present() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle); // source = abc
         assert!(state.target_pick.is_some());
 
@@ -3821,7 +3829,7 @@ mod tests {
 
     #[test]
     fn modal_dismiss_clears_picking_when_omnibar_active() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         dispatch(&mut state, Action::RebaseSingle);
         state.modal = Some(Modal::Omnibar {
             query: String::new(),
@@ -3894,7 +3902,7 @@ mod tests {
 
     #[test]
     fn split_emits_load_change_diff() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let effects = dispatch(&mut state, Action::Split);
         assert_eq!(effects.len(), 1);
         assert!(matches!(
@@ -3908,7 +3916,7 @@ mod tests {
 
     #[test]
     fn squash_partial_emits_load_change_diff() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let effects = dispatch(&mut state, Action::SquashPartial);
         assert_eq!(effects.len(), 1);
         assert!(matches!(
@@ -3922,7 +3930,7 @@ mod tests {
 
     #[test]
     fn squash_partial_on_root_shows_error() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         // Move cursor to "ghi" which has no parents
         state.set_cursor_for_test(4);
         let effects = dispatch(&mut state, Action::SquashPartial);
@@ -3932,7 +3940,7 @@ mod tests {
 
     #[test]
     fn split_suppressed_while_pending() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         state.pending_mutation = Some(MutationKind::Describe);
         let effects = dispatch(&mut state, Action::Split);
         assert!(effects.is_empty());
@@ -3947,7 +3955,7 @@ mod tests {
 
     #[test]
     fn change_diff_loaded_opens_hunk_picker() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -3975,7 +3983,7 @@ mod tests {
 
     #[test]
     fn change_diff_loaded_empty_shows_error() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -3993,7 +4001,7 @@ mod tests {
 
     #[test]
     fn change_diff_loaded_error_sets_error() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4010,7 +4018,7 @@ mod tests {
 
     #[test]
     fn hunk_toggle_selects_and_deselects() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4032,7 +4040,7 @@ mod tests {
 
     #[test]
     fn hunk_toggle_on_file_header_toggles_all() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4056,7 +4064,7 @@ mod tests {
 
     #[test]
     fn hunk_select_all_and_deselect_all() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4088,7 +4096,7 @@ mod tests {
 
     #[test]
     fn hunk_next_file_and_prev_file() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4117,7 +4125,7 @@ mod tests {
 
     #[test]
     fn hunk_confirm_emits_split_effect() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4155,7 +4163,7 @@ mod tests {
 
     #[test]
     fn hunk_confirm_emits_squash_partial_effect() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Squash {
             source: "abc".into(),
             destination: "def".into(),
@@ -4181,7 +4189,7 @@ mod tests {
 
     #[test]
     fn hunk_confirm_with_nothing_selected_shows_error() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4208,7 +4216,7 @@ mod tests {
 
     #[test]
     fn hunk_confirm_with_mixed_selection_shows_error() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4236,7 +4244,7 @@ mod tests {
 
     #[test]
     fn hunk_cancel_exits_picker() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4255,7 +4263,7 @@ mod tests {
 
     #[test]
     fn detail_move_down_up_in_hunk_picker() {
-        let mut state = AppState::new(sample_graph_with_parents());
+        let mut state = AppState::new(sample_graph_with_parents(), None);
         let op = HunkPickerOp::Split {
             source: "abc".into(),
         };
@@ -4416,7 +4424,7 @@ mod tests {
 
     #[test]
     fn omnibar_completions_appear_on_input() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         for c in ['a', 'n', 'c'] {
             dispatch(&mut state, Action::OmnibarInput(c));
@@ -4436,7 +4444,7 @@ mod tests {
 
     #[test]
     fn omnibar_completions_empty_for_non_matching() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         for c in ['x', 'y', 'z'] {
             dispatch(&mut state, Action::OmnibarInput(c));
@@ -4451,7 +4459,7 @@ mod tests {
 
     #[test]
     fn omnibar_accept_completion_inserts_text() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         for c in ['m', 'i', 'n'] {
             dispatch(&mut state, Action::OmnibarInput(c));
@@ -4468,7 +4476,7 @@ mod tests {
 
     #[test]
     fn omnibar_accept_completion_after_operator() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         for c in ['~', 'm', 'i', 'n'] {
             dispatch(&mut state, Action::OmnibarInput(c));
@@ -4484,7 +4492,7 @@ mod tests {
 
     #[test]
     fn omnibar_accept_completion_function_with_args() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         for c in ['a', 'u', 't'] {
             dispatch(&mut state, Action::OmnibarInput(c));
@@ -4500,7 +4508,7 @@ mod tests {
 
     #[test]
     fn omnibar_backspace_recomputes_completions() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         // "minex" — no matching function
         for c in ['m', 'i', 'n', 'e', 'x'] {
@@ -4527,7 +4535,7 @@ mod tests {
 
     #[test]
     fn omnibar_completion_cursor_moves_down() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         // "a" should produce multiple completions (ancestors(, author(, etc.)
         dispatch(&mut state, Action::OmnibarInput('a'));
@@ -4550,7 +4558,7 @@ mod tests {
 
     #[test]
     fn omnibar_completion_cursor_moves_up() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         dispatch(&mut state, Action::OmnibarInput('a'));
         dispatch(&mut state, Action::ModalMoveDown);
@@ -4567,7 +4575,7 @@ mod tests {
 
     #[test]
     fn omnibar_accept_noop_when_empty() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         dispatch(&mut state, Action::OpenOmnibar);
         // No input — completions are empty
         dispatch(&mut state, Action::OmnibarAcceptCompletion);
@@ -4581,7 +4589,7 @@ mod tests {
 
     #[test]
     fn omnibar_open_with_prefilled_computes_completions() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.active_revset = Some("mine()".into());
         dispatch(&mut state, Action::OpenOmnibar);
         match &state.modal {
@@ -4676,7 +4684,7 @@ mod tests {
     }
 
     fn make_test_state_with_conflict_view() -> AppState {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         state.focus = PanelFocus::Detail;
         state.conflict_view = Some(ConflictView::new(
             "abc".into(),
@@ -4724,7 +4732,7 @@ mod tests {
 
     #[test]
     fn detail_enter_conflicted_file_emits_load_conflict_data() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         state.focus = PanelFocus::Detail;
         state.set_detail_cursor_for_test(0); // conflicted file
         let effects = dispatch(&mut state, Action::DetailEnter);
@@ -4739,7 +4747,7 @@ mod tests {
 
     #[test]
     fn detail_enter_conflicted_file_not_working_copy_sets_error() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         // Make working copy different from cursor
         state.graph = GraphData::new(
             state.graph.lines.clone(),
@@ -4757,7 +4765,7 @@ mod tests {
 
     #[test]
     fn detail_enter_non_conflicted_file_loads_diff() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         state.focus = PanelFocus::Detail;
         state.set_detail_cursor_for_test(1); // Modified file, not conflicted
         let effects = dispatch(&mut state, Action::DetailEnter);
@@ -4772,7 +4780,7 @@ mod tests {
 
     #[test]
     fn conflict_data_loaded_ok_populates_view() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         let data = sample_conflict_data();
         let effects = dispatch(
             &mut state,
@@ -4798,7 +4806,7 @@ mod tests {
 
     #[test]
     fn conflict_data_loaded_err_sets_error() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         let effects = dispatch(
             &mut state,
             Action::ConflictDataLoaded {
@@ -4998,7 +5006,7 @@ mod tests {
 
     #[test]
     fn conflict_launch_merge_from_file_list_conflicted() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         state.focus = PanelFocus::Detail;
         state.set_detail_cursor_for_test(0); // src/main.rs is Conflicted
         let effects = dispatch(&mut state, Action::ConflictLaunchMerge);
@@ -5014,7 +5022,7 @@ mod tests {
 
     #[test]
     fn conflict_launch_merge_from_file_list_not_conflicted() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         state.focus = PanelFocus::Detail;
         state.set_detail_cursor_for_test(1); // src/lib.rs is Modified, not conflicted
         let effects = dispatch(&mut state, Action::ConflictLaunchMerge);
@@ -5024,7 +5032,7 @@ mod tests {
 
     #[test]
     fn conflict_data_loaded_zero_conflicts_sets_error() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         let data = ConflictData {
             regions: vec![ConflictRegion::Resolved("all resolved\n".into())],
         };
@@ -5108,7 +5116,7 @@ mod tests {
 
     #[test]
     fn next_conflict_file_jumps_to_next_conflicted() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         state.focus = PanelFocus::Detail;
         state.set_detail_cursor_for_test(0); // first conflicted file
         dispatch(&mut state, Action::NextConflictFile);
@@ -5117,7 +5125,7 @@ mod tests {
 
     #[test]
     fn next_conflict_file_wraps_around() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         state.focus = PanelFocus::Detail;
         state.set_detail_cursor_for_test(2); // last conflicted file
         dispatch(&mut state, Action::NextConflictFile);
@@ -5126,7 +5134,7 @@ mod tests {
 
     #[test]
     fn prev_conflict_file_jumps_to_prev_conflicted() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         state.focus = PanelFocus::Detail;
         state.set_detail_cursor_for_test(2); // second conflicted file
         dispatch(&mut state, Action::PrevConflictFile);
@@ -5135,7 +5143,7 @@ mod tests {
 
     #[test]
     fn prev_conflict_file_wraps_around() {
-        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let mut state = AppState::new(sample_graph_with_conflicted_file(), None);
         state.focus = PanelFocus::Detail;
         state.set_detail_cursor_for_test(0); // first conflicted file
         dispatch(&mut state, Action::PrevConflictFile);
@@ -5245,7 +5253,7 @@ mod tests {
 
     #[test]
     fn absorb_emits_effect() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::Absorb);
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], Effect::Absorb { .. }));
@@ -5254,7 +5262,7 @@ mod tests {
 
     #[test]
     fn absorb_blocked_when_mutation_pending() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Describe);
         let effects = dispatch(&mut state, Action::Absorb);
         assert!(effects.is_empty());
@@ -5262,7 +5270,7 @@ mod tests {
 
     #[test]
     fn duplicate_emits_effect() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::DuplicateChange);
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], Effect::Duplicate { .. }));
@@ -5271,7 +5279,7 @@ mod tests {
 
     #[test]
     fn duplicate_blocked_when_mutation_pending() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Absorb);
         let effects = dispatch(&mut state, Action::DuplicateChange);
         assert!(effects.is_empty());
@@ -5279,7 +5287,7 @@ mod tests {
 
     #[test]
     fn revert_emits_effect() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         let effects = dispatch(&mut state, Action::Revert);
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], Effect::Revert { .. }));
@@ -5288,7 +5296,7 @@ mod tests {
 
     #[test]
     fn revert_blocked_when_mutation_pending() {
-        let mut state = AppState::new(sample_graph());
+        let mut state = AppState::new(sample_graph(), None);
         state.pending_mutation = Some(MutationKind::Revert);
         let effects = dispatch(&mut state, Action::Revert);
         assert!(effects.is_empty());
