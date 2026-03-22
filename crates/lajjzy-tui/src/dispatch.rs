@@ -1732,13 +1732,6 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::ClickFocusDetail => {
             state.focus = PanelFocus::Detail;
         }
-        Action::ClickPrIndicator { ref bookmark } => {
-            if let Some(pr) = state.pr_status.get(bookmark)
-                && !pr.url.is_empty()
-            {
-                state.status_message = Some(pr.url.clone());
-            }
-        }
         Action::ScrollUp { count } => match state.focus {
             PanelFocus::Graph => {
                 for _ in 0..count {

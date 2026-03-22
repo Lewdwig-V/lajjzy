@@ -41,7 +41,7 @@ fn handle_click(col: u16, row: u16, layout: &LayoutRects, state: &AppState) -> O
     }
     if matches!(
         state.detail_mode,
-        DetailMode::HunkPicker | DetailMode::ConflictView
+        DetailMode::HunkPicker | DetailMode::ConflictView | DetailMode::DiffView
     ) {
         return None;
     }
@@ -78,11 +78,16 @@ fn handle_scroll(
     up: bool,
 ) -> Option<Action> {
     if state.modal.is_some() {
-        return Some(if up {
-            Action::ModalMoveUp
-        } else {
-            Action::ModalMoveDown
-        });
+        if let Some(modal_rect) = layout.modal_area
+            && hit_test(modal_rect, col, row)
+        {
+            return Some(if up {
+                Action::ModalMoveUp
+            } else {
+                Action::ModalMoveDown
+            });
+        }
+        return None;
     }
     if hit_test(layout.graph_outer, col, row) || hit_test(layout.detail_outer, col, row) {
         return Some(if up {
@@ -294,6 +299,8 @@ mod tests {
             context: HelpContext::Graph,
             scroll: 0,
         });
+        state.layout.modal_area = Some(Rect::new(0, 0, 40, 20));
+        // Scroll inside modal area
         let event = make_event(MouseEventKind::ScrollDown, 5, 5);
         let action = map_mouse_event(event, &state);
         assert_eq!(action, Some(Action::ModalMoveDown));
@@ -306,9 +313,25 @@ mod tests {
             context: HelpContext::Graph,
             scroll: 0,
         });
+        state.layout.modal_area = Some(Rect::new(0, 0, 40, 20));
+        // Scroll inside modal area
         let event = make_event(MouseEventKind::ScrollUp, 5, 5);
         let action = map_mouse_event(event, &state);
         assert_eq!(action, Some(Action::ModalMoveUp));
+    }
+
+    #[test]
+    fn scroll_outside_modal_ignored() {
+        let mut state = make_state_with_layout(default_layout());
+        state.modal = Some(Modal::Help {
+            context: HelpContext::Graph,
+            scroll: 0,
+        });
+        state.layout.modal_area = Some(Rect::new(10, 5, 20, 10));
+        // Scroll outside modal area
+        let event = make_event(MouseEventKind::ScrollDown, 5, 3);
+        let action = map_mouse_event(event, &state);
+        assert_eq!(action, None);
     }
 
     // ── modal click tests ────────────────────────────────────────────────────
@@ -413,6 +436,15 @@ mod tests {
     fn click_during_hunk_picker_ignored() {
         let mut state = make_state_with_layout(default_layout());
         state.detail_mode = DetailMode::HunkPicker;
+        let event = make_event(MouseEventKind::Down(MouseButton::Left), 5, 5);
+        let action = map_mouse_event(event, &state);
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn click_during_diff_view_ignored() {
+        let mut state = make_state_with_layout(default_layout());
+        state.detail_mode = DetailMode::DiffView;
         let event = make_event(MouseEventKind::Down(MouseButton::Left), 5, 5);
         let action = map_mouse_event(event, &state);
         assert_eq!(action, None);

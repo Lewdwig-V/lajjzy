@@ -225,9 +225,6 @@ pub enum Action {
     },
     ClickFocusGraph,
     ClickFocusDetail,
-    ClickPrIndicator {
-        bookmark: String,
-    },
     ScrollUp {
         count: usize,
     },

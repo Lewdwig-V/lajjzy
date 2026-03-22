@@ -86,6 +86,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
             ))
         }
         Some(Modal::Help { .. }) => Some(centered_rect(50, 60, outer[0])),
+        Some(Modal::OpLog { .. }) => Some(outer[0]),
         Some(_) => Some(centered_rect(60, 80, outer[0])),
         None => None,
     };
