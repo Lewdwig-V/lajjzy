@@ -161,6 +161,17 @@ fn move_cursor_up(state: &mut AppState) -> bool {
     }
 }
 
+/// Find the nearest node index at or above the given line index.
+fn snap_to_node(graph: &GraphData, line_index: usize) -> Option<usize> {
+    let clamped = line_index.min(graph.lines.len().saturating_sub(1));
+    for i in (0..=clamped).rev() {
+        if graph.lines[i].change_id.is_some() {
+            return Some(i);
+        }
+    }
+    ((clamped + 1)..graph.lines.len()).find(|&i| graph.lines[i].change_id.is_some())
+}
+
 /// Check if a change matches a filter query (case-insensitive substring match
 /// against change ID, author, and description).
 fn change_matches_filter(cid: &str, graph: &GraphData, query: &str) -> bool {
@@ -1702,14 +1713,73 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
 
-        // Mouse actions — handled in subsequent tasks
-        Action::ClickGraphNode { .. }
-        | Action::ClickDetailItem { .. }
-        | Action::ClickFocusGraph
-        | Action::ClickFocusDetail
-        | Action::ClickPrIndicator { .. }
-        | Action::ScrollUp { .. }
-        | Action::ScrollDown { .. } => {}
+        // Mouse actions
+        Action::ClickGraphNode { line_index } => {
+            if let Some(target) = snap_to_node(&state.graph, line_index) {
+                state.cursor = target;
+                state.reset_detail();
+            }
+        }
+        Action::ClickDetailItem { index } => {
+            if let Some(detail) = state.selected_detail() {
+                let max = detail.files.len().saturating_sub(1);
+                state.detail_cursor = index.min(max);
+            }
+        }
+        Action::ClickFocusGraph => {
+            state.focus = PanelFocus::Graph;
+        }
+        Action::ClickFocusDetail => {
+            state.focus = PanelFocus::Detail;
+        }
+        Action::ClickPrIndicator { ref bookmark } => {
+            if let Some(pr) = state.pr_status.get(bookmark)
+                && !pr.url.is_empty()
+            {
+                state.status_message = Some(pr.url.clone());
+            }
+        }
+        Action::ScrollUp { count } => match state.focus {
+            PanelFocus::Graph => {
+                for _ in 0..count {
+                    if !move_cursor_up(state) {
+                        break;
+                    }
+                }
+                state.reset_detail();
+            }
+            PanelFocus::Detail => match state.detail_mode {
+                DetailMode::FileList => {
+                    state.detail_cursor = state.detail_cursor.saturating_sub(count);
+                }
+                DetailMode::DiffView => {
+                    state.diff_scroll = state.diff_scroll.saturating_sub(count);
+                }
+                _ => {}
+            },
+        },
+        Action::ScrollDown { count } => match state.focus {
+            PanelFocus::Graph => {
+                for _ in 0..count {
+                    if !move_cursor_down(state) {
+                        break;
+                    }
+                }
+                state.reset_detail();
+            }
+            PanelFocus::Detail => match state.detail_mode {
+                DetailMode::FileList => {
+                    if let Some(detail) = state.selected_detail() {
+                        let max = detail.files.len().saturating_sub(1);
+                        state.detail_cursor = (state.detail_cursor + count).min(max);
+                    }
+                }
+                DetailMode::DiffView => {
+                    state.diff_scroll = state.diff_scroll.saturating_add(count);
+                }
+                _ => {}
+            },
+        },
     }
 
     // Release-mode invariant check: cursor must point to a node line
@@ -5598,5 +5668,78 @@ mod tests {
             state.status_message,
             Some("https://github.com/org/repo/pull/1".into())
         );
+    }
+
+    #[test]
+    fn click_graph_node_sets_cursor() {
+        let mut state = AppState::new(sample_graph(), None);
+        dispatch(&mut state, Action::ClickGraphNode { line_index: 2 });
+        assert_eq!(state.cursor(), 2);
+    }
+
+    #[test]
+    fn click_graph_node_snaps_connector_to_nearest_node_above() {
+        let mut state = AppState::new(sample_graph(), None);
+        dispatch(&mut state, Action::ClickGraphNode { line_index: 1 });
+        assert_eq!(state.cursor(), 0); // snaps to node above
+    }
+
+    #[test]
+    fn click_graph_node_out_of_bounds_clamps() {
+        let mut state = AppState::new(sample_graph(), None);
+        dispatch(&mut state, Action::ClickGraphNode { line_index: 100 });
+        assert_eq!(state.cursor(), 4); // last node
+    }
+
+    #[test]
+    fn click_focus_graph_switches_focus() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.focus = PanelFocus::Detail;
+        dispatch(&mut state, Action::ClickFocusGraph);
+        assert_eq!(state.focus, PanelFocus::Graph);
+    }
+
+    #[test]
+    fn click_focus_detail_switches_focus() {
+        let mut state = AppState::new(sample_graph(), None);
+        dispatch(&mut state, Action::ClickFocusDetail);
+        assert_eq!(state.focus, PanelFocus::Detail);
+    }
+
+    #[test]
+    fn scroll_down_moves_graph_cursor() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.focus = PanelFocus::Graph;
+        dispatch(&mut state, Action::ScrollDown { count: 3 });
+        // Should move past node 0, should be at node 2 or 4
+        assert!(state.cursor() > 0);
+    }
+
+    #[test]
+    fn scroll_up_at_top_stays() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.focus = PanelFocus::Graph;
+        dispatch(&mut state, Action::ScrollUp { count: 3 });
+        assert_eq!(state.cursor(), 0);
+    }
+
+    #[test]
+    fn scroll_down_in_diff_view() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.focus = PanelFocus::Detail;
+        state.detail_mode = DetailMode::DiffView;
+        state.diff_scroll = 0;
+        dispatch(&mut state, Action::ScrollDown { count: 3 });
+        assert_eq!(state.diff_scroll, 3);
+    }
+
+    #[test]
+    fn scroll_up_in_diff_view() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.focus = PanelFocus::Detail;
+        state.detail_mode = DetailMode::DiffView;
+        state.diff_scroll = 5;
+        dispatch(&mut state, Action::ScrollUp { count: 3 });
+        assert_eq!(state.diff_scroll, 2);
     }
 }
