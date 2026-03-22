@@ -215,4 +215,23 @@ pub enum Action {
     PrCreateFailed {
         error: String,
     },
+
+    // Mouse actions
+    ClickGraphNode {
+        line_index: usize,
+    },
+    ClickDetailItem {
+        index: usize,
+    },
+    ClickFocusGraph,
+    ClickFocusDetail,
+    ClickPrIndicator {
+        bookmark: String,
+    },
+    ScrollUp {
+        count: usize,
+    },
+    ScrollDown {
+        count: usize,
+    },
 }

@@ -4,6 +4,17 @@ use lajjzy_core::forge::{ForgeKind, PrInfo};
 use lajjzy_core::types::{
     ChangeDetail, ConflictData, ConflictRegion, DiffHunk, DiffLine, GraphData,
 };
+use ratatui::layout::Rect;
+
+#[derive(Debug, Clone, Default)]
+pub struct LayoutRects {
+    pub graph_inner: Rect,
+    pub detail_inner: Rect,
+    pub graph_outer: Rect,
+    pub detail_outer: Rect,
+    pub modal_area: Option<Rect>,
+    pub graph_scroll_offset: usize,
+}
 
 /// Per-hunk resolution state for the conflict view.
 /// Lives in lajjzy-tui because it is only used by dispatch and widgets — never by the backend.
@@ -123,6 +134,7 @@ pub struct AppState {
     pub forge: Option<ForgeKind>,
     pub pr_status: HashMap<String, PrInfo>,
     pub pending_forge_fetch: bool,
+    pub layout: LayoutRects,
 }
 
 impl AppState {
@@ -154,6 +166,7 @@ impl AppState {
             forge,
             pr_status: HashMap::new(),
             pending_forge_fetch: false,
+            layout: LayoutRects::default(),
         }
     }
 

@@ -1685,6 +1685,15 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 jump_to_first_matching(state);
             }
         }
+
+        // Mouse actions — handled in subsequent tasks
+        Action::ClickGraphNode { .. }
+        | Action::ClickDetailItem { .. }
+        | Action::ClickFocusGraph
+        | Action::ClickFocusDetail
+        | Action::ClickPrIndicator { .. }
+        | Action::ScrollUp { .. }
+        | Action::ScrollDown { .. } => {}
     }
 
     // Release-mode invariant check: cursor must point to a node line
