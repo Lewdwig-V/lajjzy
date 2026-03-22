@@ -237,9 +237,35 @@ impl EffectExecutor {
                 );
             }
 
-            // Conflict handling — stubs until Task 8 wires them up
-            Effect::LoadConflictData { .. } | Effect::ResolveFile { .. } => {
-                // TODO: Task 8 — wire up conflict effects
+            // Conflict handling
+            Effect::LoadConflictData { change_id, path } => {
+                let result = backend
+                    .conflict_sides(&change_id, &path)
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(Action::ConflictDataLoaded {
+                    change_id,
+                    path,
+                    result,
+                });
+            }
+            Effect::ResolveFile {
+                change_id,
+                path,
+                content,
+            } => {
+                // `content` (Vec<u8>) must be moved into the closure since
+                // resolve_file takes it by value.  We rebind backend so the
+                // move closure doesn't steal the outer Arc that run_mutation
+                // also borrows.
+                let be = &*backend;
+                run_mutation(
+                    be,
+                    &tx,
+                    MutationKind::ResolveConflict,
+                    generation,
+                    &active_revset,
+                    || be.resolve_file(&change_id, &path, content),
+                );
             }
 
             // LaunchMergeTool and SuspendForEditor are intercepted before reaching the executor
@@ -342,6 +368,58 @@ fn execute_effects(
                     }
                     Err(e) => {
                         state.error = Some(format!("Editor failed: {e}"));
+                    }
+                }
+            }
+            Effect::LaunchMergeTool { change_id: _, path } => {
+                ratatui::restore();
+                let status = std::process::Command::new("jj")
+                    .args(["resolve", &path, "-r", "@"])
+                    .current_dir(executor.backend.workspace_root())
+                    .status();
+                *terminal = ratatui::init();
+                match status {
+                    Ok(s) if s.success() => {
+                        let generation =
+                            executor.graph_generation.fetch_add(1, Ordering::SeqCst) + 1;
+                        let revset = executor
+                            .active_revset
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone();
+                        let graph_result = executor
+                            .backend
+                            .load_graph(revset.as_deref())
+                            .map_err(|e| e.to_string());
+                        let new_effects = dispatch(
+                            state,
+                            Action::MergeToolComplete {
+                                path,
+                                graph: Some((generation, graph_result)),
+                            },
+                        );
+                        execute_effects(terminal, state, executor, new_effects);
+                    }
+                    Ok(s) => {
+                        let code = s.code().unwrap_or(-1);
+                        let new_effects = dispatch(
+                            state,
+                            Action::MergeToolFailed {
+                                path,
+                                error: format!("Merge tool exited with status {code}"),
+                            },
+                        );
+                        execute_effects(terminal, state, executor, new_effects);
+                    }
+                    Err(e) => {
+                        let new_effects = dispatch(
+                            state,
+                            Action::MergeToolFailed {
+                                path,
+                                error: format!("Failed to launch merge tool: {e}"),
+                            },
+                        );
+                        execute_effects(terminal, state, executor, new_effects);
                     }
                 }
             }
@@ -453,6 +531,10 @@ fn run_loop(
         if let Some(ref mut hp) = state.hunk_picker {
             let term_height = terminal.size().map_or(20, |s| s.height as usize);
             hp.viewport_height = term_height.saturating_sub(4);
+        }
+        if let Some(ref mut cv) = state.conflict_view {
+            let term_height = terminal.size().map_or(20, |s| s.height as usize);
+            cv.viewport_height = term_height.saturating_sub(4);
         }
 
         if crossterm::event::poll(Duration::from_millis(50))?
