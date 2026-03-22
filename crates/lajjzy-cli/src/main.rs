@@ -408,9 +408,13 @@ fn execute_effects(
                 change_id,
                 initial_text,
             } => {
+                let _ =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
                 ratatui::restore();
                 let result = run_editor(&initial_text);
                 *terminal = ratatui::init();
+                let _ =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
                 match result {
                     Ok(text) => {
                         let new_effects =
@@ -423,12 +427,16 @@ fn execute_effects(
                 }
             }
             Effect::LaunchMergeTool { change_id: _, path } => {
+                let _ =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
                 ratatui::restore();
                 let status = std::process::Command::new("jj")
                     .args(["resolve", &path, "-r", "@"])
                     .current_dir(executor.backend.workspace_root())
                     .status();
                 *terminal = ratatui::init();
+                let _ =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
                 match status {
                     Ok(s) if s.success() => {
                         let generation =
@@ -498,12 +506,20 @@ fn execute_effects(
                     }
                     _ => {
                         // No PR or gh failed — suspend and create
+                        let _ = crossterm::execute!(
+                            std::io::stdout(),
+                            crossterm::event::DisableMouseCapture
+                        );
                         ratatui::restore();
                         let status = std::process::Command::new("gh")
                             .args(["pr", "create", "--head", &bookmark])
                             .current_dir(ws)
                             .status();
                         *terminal = ratatui::init();
+                        let _ = crossterm::execute!(
+                            std::io::stdout(),
+                            crossterm::event::EnableMouseCapture
+                        );
                         match status {
                             Ok(s) if s.success() => {
                                 let effects = dispatch(state, Action::PrCreateComplete);
@@ -621,12 +637,15 @@ fn main() -> Result<()> {
 
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
         let _ = ratatui::try_restore();
         original_hook(info);
     }));
 
     let mut terminal = ratatui::init();
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
     let result = run_loop(&mut terminal, &mut state, &executor, &rx);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -652,50 +671,63 @@ fn run_loop(
             cv.viewport_height = term_height.saturating_sub(4);
         }
 
-        if crossterm::event::poll(Duration::from_millis(50))?
-            && let Event::Key(key_event) = event::read()?
-        {
-            if key_event.kind != KeyEventKind::Press {
-                continue;
-            }
-            state.status_message = None;
+        if crossterm::event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                    state.status_message = None;
 
-            // Picking mode intercepts all keys before modal/normal routing.
-            if state.target_pick.is_some() {
-                let picking = state.target_pick.as_ref().unwrap().picking.clone();
-                if let Some(action) = map_picking_event(key_event, &picking) {
-                    let effects = dispatch(state, action);
-                    executor
-                        .active_revset
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .clone_from(&state.active_revset);
-                    execute_effects(terminal, state, executor, effects);
+                    // Picking mode intercepts all keys before modal/normal routing.
+                    if state.target_pick.is_some() {
+                        let picking = state.target_pick.as_ref().unwrap().picking.clone();
+                        if let Some(action) = map_picking_event(key_event, &picking) {
+                            let effects = dispatch(state, action);
+                            executor
+                                .active_revset
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .clone_from(&state.active_revset);
+                            execute_effects(terminal, state, executor, effects);
+                        }
+                        continue; // swallow unhandled keys during picking
+                    }
+
+                    let action = if let Some(ref modal) = state.modal {
+                        map_modal_event(key_event, modal)
+                    } else {
+                        map_event(key_event, state.focus, state.detail_mode)
+                    };
+                    if let Some(action) = action {
+                        let effects = dispatch(state, action);
+                        executor
+                            .active_revset
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone_from(&state.active_revset);
+                        execute_effects(terminal, state, executor, effects);
+                    } else if let Some(lajjzy_tui::modal::Modal::Describe {
+                        ref mut editor, ..
+                    }) = state.modal
+                    {
+                        // Unhandled key in describe modal — forward to tui-textarea.
+                        // Convert crossterm 0.29 KeyEvent to tui-textarea's Input manually
+                        // since tui-textarea 0.7 uses crossterm 0.28.
+                        let input = key_event_to_textarea_input(key_event);
+                        editor.input(input);
+                    }
                 }
-                continue; // swallow unhandled keys during picking
-            }
-
-            let action = if let Some(ref modal) = state.modal {
-                map_modal_event(key_event, modal)
-            } else {
-                map_event(key_event, state.focus, state.detail_mode)
-            };
-            if let Some(action) = action {
-                let effects = dispatch(state, action);
-                executor
-                    .active_revset
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone_from(&state.active_revset);
-                execute_effects(terminal, state, executor, effects);
-            } else if let Some(lajjzy_tui::modal::Modal::Describe { ref mut editor, .. }) =
-                state.modal
-            {
-                // Unhandled key in describe modal — forward to tui-textarea.
-                // Convert crossterm 0.29 KeyEvent to tui-textarea's Input manually
-                // since tui-textarea 0.7 uses crossterm 0.28.
-                let input = key_event_to_textarea_input(key_event);
-                editor.input(input);
+                Event::Mouse(mouse_event) => {
+                    state.status_message = None;
+                    if let Some(action) = lajjzy_tui::mouse::map_mouse_event(mouse_event, state) {
+                        let effects = dispatch(state, action);
+                        executor
+                            .active_revset
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone_from(&state.active_revset);
+                        execute_effects(terminal, state, executor, effects);
+                    }
+                }
+                _ => {}
             }
         }
 
