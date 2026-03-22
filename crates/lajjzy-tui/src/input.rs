@@ -407,6 +407,8 @@ mod tests {
             query: String::new(),
             matches: vec![],
             cursor: 0,
+            completions: vec![],
+            completion_cursor: 0,
         };
         assert_eq!(
             map_modal_event(key(KeyCode::Char('q')), &modal),
@@ -437,6 +439,8 @@ mod tests {
             query: String::new(),
             matches: vec![],
             cursor: 0,
+            completions: vec![],
+            completion_cursor: 0,
         };
         assert_eq!(
             map_modal_event(key_mod(KeyCode::Char('n'), KeyModifiers::CONTROL), &modal),
@@ -454,6 +458,8 @@ mod tests {
             query: String::new(),
             matches: vec![],
             cursor: 0,
+            completions: vec![],
+            completion_cursor: 0,
         };
         assert_eq!(
             map_modal_event(key(KeyCode::Backspace), &modal),

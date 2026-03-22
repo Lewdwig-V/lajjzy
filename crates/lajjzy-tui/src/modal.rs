@@ -1,3 +1,4 @@
+use crate::action::CompletionItem;
 use lajjzy_core::types::OpLogEntry;
 use tui_textarea::TextArea;
 
@@ -16,6 +17,8 @@ pub enum Modal {
         query: String,
         matches: Vec<usize>, // graph line indices from node_indices
         cursor: usize,
+        completions: Vec<CompletionItem>,
+        completion_cursor: usize,
     },
     Help {
         context: HelpContext,

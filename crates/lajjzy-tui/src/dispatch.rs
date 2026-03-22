@@ -523,6 +523,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 query,
                 matches,
                 cursor: 0,
+                completions: vec![],
+                completion_cursor: 0,
             });
         }
         Action::OpenHelp => {
@@ -624,6 +626,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                     query,
                     matches,
                     cursor,
+                    completions: _,
+                    completion_cursor: _,
                 }) => {
                     if query.is_empty() {
                         if state.active_revset.is_some() {
@@ -648,6 +652,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 query,
                 matches,
                 cursor,
+                ..
             }) = &mut state.modal
             {
                 query.push(c);
@@ -660,12 +665,16 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 query,
                 matches,
                 cursor,
+                ..
             }) = &mut state.modal
             {
                 query.pop();
                 *matches = fuzzy_match(query, &state.graph);
                 *cursor = 0;
             }
+        }
+        Action::OmnibarAcceptCompletion => {
+            // TODO: implement in Task 3
         }
         Action::Abandon => {
             if state.pending_mutation.is_some() {
@@ -2753,6 +2762,8 @@ mod tests {
             query: String::new(),
             matches: vec![],
             cursor: 0,
+            completions: vec![],
+            completion_cursor: 0,
         });
         let effects = dispatch(&mut state, Action::ModalEnter);
         assert_eq!(effects, vec![Effect::LoadGraph { revset: None }]);
@@ -2766,6 +2777,8 @@ mod tests {
             query: String::new(),
             matches: vec![],
             cursor: 0,
+            completions: vec![],
+            completion_cursor: 0,
         });
         let effects = dispatch(&mut state, Action::ModalEnter);
         assert!(effects.is_empty());
@@ -2780,6 +2793,8 @@ mod tests {
             query: "mine()".into(),
             matches: vec![node_idx],
             cursor: 0,
+            completions: vec![],
+            completion_cursor: 0,
         });
         let effects = dispatch(&mut state, Action::ModalEnter);
         assert_eq!(
@@ -3349,6 +3364,8 @@ mod tests {
             query: String::new(),
             matches: vec![],
             cursor: 0,
+            completions: vec![],
+            completion_cursor: 0,
         });
         dispatch(&mut state, Action::ModalDismiss);
         assert!(state.target_pick.is_none());

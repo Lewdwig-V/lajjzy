@@ -85,6 +85,7 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
             query,
             matches,
             cursor,
+            ..
         } => {
             let modal_area = centered_rect(60, 80, area);
             frame.render_widget(Clear, modal_area);
