@@ -1,5 +1,6 @@
 pub mod bookmark_input;
 pub mod bookmark_picker;
+pub mod conflict_view;
 pub mod describe;
 pub mod diff_view;
 pub mod file_list;

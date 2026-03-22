@@ -4,6 +4,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 
 use crate::app::{AppState, DetailMode, PanelFocus};
+use crate::widgets::conflict_view::ConflictViewWidget;
 use crate::widgets::diff_view::DiffViewWidget;
 use crate::widgets::file_list::FileListWidget;
 use crate::widgets::hunk_picker::HunkPickerWidget;
@@ -95,7 +96,10 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
             }
         }
         DetailMode::ConflictView => {
-            // Widget rendering added in Task 7
+            if let Some(cv) = state.conflict_view.as_ref() {
+                let widget = ConflictViewWidget::new(cv);
+                frame.render_widget(widget, inner);
+            }
         }
     }
 }
