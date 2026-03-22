@@ -4,6 +4,7 @@ pub mod dispatch;
 pub mod effect;
 pub mod input;
 pub mod modal;
+pub mod mouse;
 pub mod panels;
 pub mod render;
 pub mod widgets;

@@ -139,6 +139,42 @@ fn picking_valid_nodes(state: &AppState) -> Vec<usize> {
         .collect()
 }
 
+/// Move cursor to the next valid node. Returns true if cursor moved.
+fn move_cursor_down(state: &mut AppState) -> bool {
+    let valid = picking_valid_nodes(state);
+    if let Some(next) = valid.iter().find(|&&i| i > state.cursor) {
+        state.cursor = *next;
+        true
+    } else {
+        false
+    }
+}
+
+/// Move cursor to the previous valid node. Returns true if cursor moved.
+fn move_cursor_up(state: &mut AppState) -> bool {
+    let valid = picking_valid_nodes(state);
+    if let Some(prev) = valid.iter().rev().find(|&&i| i < state.cursor) {
+        state.cursor = *prev;
+        true
+    } else {
+        false
+    }
+}
+
+/// Find the nearest node index at or above the given line index.
+fn snap_to_node(graph: &GraphData, line_index: usize) -> Option<usize> {
+    if graph.lines.is_empty() {
+        return None;
+    }
+    let clamped = line_index.min(graph.lines.len() - 1);
+    for i in (0..=clamped).rev() {
+        if graph.lines[i].change_id.is_some() {
+            return Some(i);
+        }
+    }
+    ((clamped + 1)..graph.lines.len()).find(|&i| graph.lines[i].change_id.is_some())
+}
+
 /// Check if a change matches a filter query (case-insensitive substring match
 /// against change ID, author, and description).
 fn change_matches_filter(cid: &str, graph: &GraphData, query: &str) -> bool {
@@ -301,17 +337,11 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
 
     match action {
         Action::MoveDown => {
-            let valid = picking_valid_nodes(state);
-            if let Some(next) = valid.iter().find(|&&i| i > state.cursor) {
-                state.cursor = *next;
-            }
+            move_cursor_down(state);
             state.reset_detail();
         }
         Action::MoveUp => {
-            let valid = picking_valid_nodes(state);
-            if let Some(prev) = valid.iter().rev().find(|&&i| i < state.cursor) {
-                state.cursor = *prev;
-            }
+            move_cursor_up(state);
             state.reset_detail();
         }
         Action::JumpToTop => {
@@ -1685,6 +1715,76 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 jump_to_first_matching(state);
             }
         }
+
+        // Mouse actions
+        Action::ClickGraphNode { line_index } => {
+            state.focus = PanelFocus::Graph;
+            if let Some(target) = snap_to_node(&state.graph, line_index) {
+                state.cursor = target;
+                state.reset_detail();
+            }
+        }
+        Action::ClickDetailItem { index } => {
+            state.focus = PanelFocus::Detail;
+            if let Some(detail) = state.selected_detail()
+                && !detail.files.is_empty()
+            {
+                let max = detail.files.len() - 1;
+                state.detail_cursor = index.min(max);
+            }
+        }
+        Action::ClickFocusGraph => {
+            state.focus = PanelFocus::Graph;
+        }
+        Action::ClickFocusDetail => {
+            state.focus = PanelFocus::Detail;
+        }
+        Action::ScrollUp { count, panel } => match panel {
+            PanelFocus::Graph => {
+                for _ in 0..count {
+                    if !move_cursor_up(state) {
+                        break;
+                    }
+                }
+                state.reset_detail();
+            }
+            PanelFocus::Detail => match state.detail_mode {
+                DetailMode::FileList => {
+                    state.detail_cursor = state.detail_cursor.saturating_sub(count);
+                }
+                DetailMode::DiffView => {
+                    state.diff_scroll = state.diff_scroll.saturating_sub(count);
+                }
+                _ => {}
+            },
+        },
+        Action::ScrollDown { count, panel } => match panel {
+            PanelFocus::Graph => {
+                for _ in 0..count {
+                    if !move_cursor_down(state) {
+                        break;
+                    }
+                }
+                state.reset_detail();
+            }
+            PanelFocus::Detail => match state.detail_mode {
+                DetailMode::FileList => {
+                    if let Some(detail) = state.selected_detail()
+                        && !detail.files.is_empty()
+                    {
+                        let max = detail.files.len() - 1;
+                        state.detail_cursor = (state.detail_cursor + count).min(max);
+                    }
+                }
+                DetailMode::DiffView => {
+                    let total_lines: usize =
+                        state.diff_data.iter().map(|h| 1 + h.lines.len()).sum();
+                    let max = total_lines.saturating_sub(1);
+                    state.diff_scroll = (state.diff_scroll + count).min(max);
+                }
+                _ => {}
+            },
+        },
     }
 
     // Release-mode invariant check: cursor must point to a node line
@@ -1842,7 +1942,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use lajjzy_core::types::{ChangeDetail, GraphData, GraphLine};
+    use lajjzy_core::types::{ChangeDetail, DiffHunk, DiffLine, GraphData, GraphLine};
 
     fn sample_graph() -> GraphData {
         GraphData::new(
@@ -5573,5 +5673,175 @@ mod tests {
             state.status_message,
             Some("https://github.com/org/repo/pull/1".into())
         );
+    }
+
+    #[test]
+    fn click_graph_node_sets_cursor() {
+        let mut state = AppState::new(sample_graph(), None);
+        dispatch(&mut state, Action::ClickGraphNode { line_index: 2 });
+        assert_eq!(state.cursor(), 2);
+    }
+
+    #[test]
+    fn click_graph_node_snaps_connector_to_nearest_node_above() {
+        let mut state = AppState::new(sample_graph(), None);
+        dispatch(&mut state, Action::ClickGraphNode { line_index: 1 });
+        assert_eq!(state.cursor(), 0); // snaps to node above
+    }
+
+    #[test]
+    fn click_graph_node_out_of_bounds_clamps() {
+        let mut state = AppState::new(sample_graph(), None);
+        dispatch(&mut state, Action::ClickGraphNode { line_index: 100 });
+        assert_eq!(state.cursor(), 4); // last node
+    }
+
+    #[test]
+    fn click_focus_graph_switches_focus() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.focus = PanelFocus::Detail;
+        dispatch(&mut state, Action::ClickFocusGraph);
+        assert_eq!(state.focus, PanelFocus::Graph);
+    }
+
+    #[test]
+    fn click_focus_detail_switches_focus() {
+        let mut state = AppState::new(sample_graph(), None);
+        dispatch(&mut state, Action::ClickFocusDetail);
+        assert_eq!(state.focus, PanelFocus::Detail);
+    }
+
+    #[test]
+    fn scroll_down_moves_graph_cursor_to_end() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.focus = PanelFocus::Graph;
+        // sample_graph has nodes at 0, 2, 4. ScrollDown count=3 moves 0→2→4→(break)
+        dispatch(
+            &mut state,
+            Action::ScrollDown {
+                count: 3,
+                panel: PanelFocus::Graph,
+            },
+        );
+        assert_eq!(state.cursor(), 4);
+    }
+
+    #[test]
+    fn scroll_up_at_top_stays() {
+        let mut state = AppState::new(sample_graph(), None);
+        dispatch(
+            &mut state,
+            Action::ScrollUp {
+                count: 3,
+                panel: PanelFocus::Graph,
+            },
+        );
+        assert_eq!(state.cursor(), 0);
+    }
+
+    #[test]
+    fn scroll_down_in_diff_view() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.detail_mode = DetailMode::DiffView;
+        state.diff_scroll = 0;
+        // Populate diff_data so scroll has room (10 lines = 1 header + 9 content)
+        state.diff_data = vec![DiffHunk {
+            header: "@@ -1,5 +1,5 @@".into(),
+            lines: (0..9)
+                .map(|i| DiffLine {
+                    kind: lajjzy_core::types::DiffLineKind::Context,
+                    content: format!("line {i}"),
+                })
+                .collect(),
+        }];
+        dispatch(
+            &mut state,
+            Action::ScrollDown {
+                count: 3,
+                panel: PanelFocus::Detail,
+            },
+        );
+        assert_eq!(state.diff_scroll, 3);
+    }
+
+    #[test]
+    fn scroll_up_in_diff_view() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.detail_mode = DetailMode::DiffView;
+        state.diff_scroll = 5;
+        dispatch(
+            &mut state,
+            Action::ScrollUp {
+                count: 3,
+                panel: PanelFocus::Detail,
+            },
+        );
+        assert_eq!(state.diff_scroll, 2);
+    }
+
+    #[test]
+    fn click_detail_item_sets_cursor() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.focus = PanelFocus::Detail;
+        // sample_graph's "abc" has files — check existing detail
+        dispatch(&mut state, Action::ClickDetailItem { index: 0 });
+        assert_eq!(state.detail_cursor(), 0);
+    }
+
+    #[test]
+    fn click_detail_item_clamps_to_file_count() {
+        let mut state = AppState::new(sample_graph(), None);
+        state.focus = PanelFocus::Detail;
+        dispatch(&mut state, Action::ClickDetailItem { index: 999 });
+        // With empty files, detail_cursor stays 0
+        assert_eq!(state.detail_cursor(), 0);
+    }
+
+    #[test]
+    fn click_graph_node_empty_graph_is_noop() {
+        let graph = GraphData::new(vec![], HashMap::new(), None, String::new());
+        let mut state = AppState::new(graph, None);
+        dispatch(&mut state, Action::ClickGraphNode { line_index: 0 });
+        assert_eq!(state.cursor(), 0);
+    }
+
+    #[test]
+    fn snap_to_node_finds_node_below_when_none_above() {
+        // Graph where first line is a connector, node at index 1
+        let graph = GraphData::new(
+            vec![
+                GraphLine {
+                    raw: "│".into(),
+                    change_id: None,
+                    glyph_prefix: "│".into(),
+                },
+                GraphLine {
+                    raw: "◉  abc".into(),
+                    change_id: Some("abc".into()),
+                    glyph_prefix: "◉  ".into(),
+                },
+            ],
+            HashMap::from([(
+                "abc".into(),
+                ChangeDetail {
+                    commit_id: "aaa".into(),
+                    author: "a".into(),
+                    email: String::new(),
+                    timestamp: "1m".into(),
+                    description: "test".into(),
+                    bookmarks: vec![],
+                    is_empty: false,
+                    conflict_count: 0,
+                    files: vec![],
+                    parents: vec![],
+                },
+            )]),
+            Some(1),
+            String::new(),
+        );
+        let mut state = AppState::new(graph, None);
+        // Click on connector at index 0 — should snap forward to node at index 1
+        dispatch(&mut state, Action::ClickGraphNode { line_index: 0 });
+        assert_eq!(state.cursor(), 1);
     }
 }

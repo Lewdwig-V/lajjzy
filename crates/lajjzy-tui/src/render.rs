@@ -9,12 +9,14 @@ use crate::widgets::status_bar::StatusBarWidget;
 
 const STATUS_BAR_HEIGHT: u16 = 2;
 
-pub fn render(frame: &mut Frame, state: &AppState) {
+pub fn render(frame: &mut Frame, state: &mut AppState) {
     let outer = Layout::vertical([Constraint::Min(1), Constraint::Length(STATUS_BAR_HEIGHT)])
         .split(frame.area());
 
     let main =
         Layout::horizontal([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)]).split(outer[0]);
+
+    state.layout = crate::app::LayoutRects::from_outer_rects(main[0], main[1]);
 
     panels::graph::render(frame, state, main[0]);
     panels::detail::render(frame, state, main[1]);
@@ -56,6 +58,25 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             render_modal(frame, state, area);
         }
     }
+
+    // Cache modal area for hit-testing
+    state.layout.modal_area = match &state.modal {
+        Some(Modal::Describe { .. }) => Some(main[1]),
+        Some(Modal::BookmarkInput { .. }) => {
+            let bar_height: u16 = 4;
+            let bar_y = frame.area().y + frame.area().height.saturating_sub(bar_height);
+            Some(Rect::new(
+                frame.area().x,
+                bar_y,
+                frame.area().width,
+                bar_height.min(frame.area().height),
+            ))
+        }
+        Some(Modal::Help { .. }) => Some(centered_rect(50, 60, outer[0])),
+        Some(Modal::OpLog { .. }) => Some(outer[0]),
+        Some(_) => Some(centered_rect(60, 80, outer[0])),
+        None => None,
+    };
 }
 
 fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {

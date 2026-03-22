@@ -46,7 +46,7 @@ impl<'a> GraphWidget<'a> {
             .map_or(self.graph.lines.len() - 1, |p| self.cursor + p)
     }
 
-    fn scroll_offset(&self, height: usize) -> usize {
+    pub(crate) fn scroll_offset(&self, height: usize) -> usize {
         if self.graph.lines.is_empty() || height == 0 {
             return 0;
         }

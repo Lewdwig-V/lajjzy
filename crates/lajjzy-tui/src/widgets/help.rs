@@ -47,6 +47,10 @@ impl HelpWidget {
                 ("x", "Revert (apply reverse after @)"),
                 ("F", "Fetch PR status (GitHub)"),
                 ("W", "Open/create PR in browser"),
+                ("", ""),
+                ("", "Mouse:"),
+                ("", "  Click       Select change / Switch panel"),
+                ("", "  Scroll      Navigate up/down"),
             ],
             HelpContext::DetailFileList => vec![
                 ("j/k", "Move between files"),

@@ -188,6 +188,18 @@ Selected hunks are tinted cyan. File headers show selection counts (e.g., `[2/5]
 | `O` | Operation log — browse jj's operation history, Enter to restore |
 | `?` | Context-sensitive help |
 
+### Mouse Support
+
+Basic mouse support follows lazygit conventions:
+
+| Action | Effect |
+|--------|--------|
+| Left click on graph node | Select that change |
+| Left click on file in detail pane | Select that file |
+| Left click on other panel | Switch focus to that panel |
+| Scroll wheel | Navigate up/down (3 lines per tick) |
+| Click outside modal | Dismiss the modal |
+
 ### Bookmark Management
 
 | Key | Action |
@@ -255,7 +267,6 @@ See `CLAUDE.md` for architectural constraints and crate structure.
   - **M8g**: `git_push` / `git_fetch` — may stay CLI-backed long-term
 - **M9a — Polish**: configurable keymaps
 - **M9b — Polish**: theming support, colour sets, nerd font support, noto emoji, statusline fonts
-- **M9c — Polish**: basic mouse support
 - **M9d — Polish**: collapsible command log pane showing jj commands run on your behalf
 - **M9e — Polish**: `jj move` hunks in hunk picker, advanced rebasing workflows
 - **M9f — Polish**: context-aware revset completions (e.g., only authors inside `author()`)
