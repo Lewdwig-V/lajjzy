@@ -63,13 +63,33 @@ impl JjCliBackend {
         Ok(if stderr.is_empty() { stdout } else { stderr })
     }
 
-    /// Open a jj-lib repo handle for read-only conflict data extraction.
-    ///
-    /// Reopened each call so it picks up mutations made by CLI commands.
-    fn open_jj_repo(&self) -> Result<Arc<jj_lib::repo::ReadonlyRepo>> {
+    /// Open a jj-lib workspace and repo at head. Reopened per-call to pick up
+    /// CLI mutation effects. Returns `(workspace_name, repo)`.
+    fn open_jj_workspace(
+        &self,
+    ) -> Result<(
+        jj_lib::ref_name::WorkspaceNameBuf,
+        Arc<jj_lib::repo::ReadonlyRepo>,
+    )> {
         use pollster::FutureExt as _;
 
-        let config = jj_lib::config::StackedConfig::with_defaults();
+        let mut config = jj_lib::config::StackedConfig::with_defaults();
+
+        // Load user config (~/.config/jj/config.toml) so commits get correct
+        // author identity, signing config, etc. Without this, jj-lib operations
+        // would create commits with placeholder metadata.
+        if let Some(config_dir) = dirs::config_dir() {
+            let user_config = config_dir.join("jj").join("config.toml");
+            if user_config.exists()
+                && let Ok(layer) = jj_lib::config::ConfigLayer::load_from_file(
+                    jj_lib::config::ConfigSource::User,
+                    user_config,
+                )
+            {
+                config.add_layer(layer);
+            }
+        }
+
         let settings = jj_lib::settings::UserSettings::from_config(config)
             .map_err(|e| anyhow::anyhow!("Failed to create UserSettings: {e}"))?;
         let store_factories = jj_lib::repo::StoreFactories::default();
@@ -83,13 +103,19 @@ impl JjCliBackend {
         )
         .map_err(|e| anyhow::anyhow!("Failed to load jj workspace: {e}"))?;
 
+        let ws_name = workspace.workspace_name().to_owned();
         let repo = workspace
             .repo_loader()
             .load_at_head()
             .block_on()
             .map_err(|e| anyhow::anyhow!("Failed to load repo at head: {e}"))?;
 
-        Ok(repo)
+        Ok((ws_name, repo))
+    }
+
+    /// Open a jj-lib repo at head (convenience wrapper when workspace name isn't needed).
+    fn open_jj_repo(&self) -> Result<Arc<jj_lib::repo::ReadonlyRepo>> {
+        self.open_jj_workspace().map(|(_, repo)| repo)
     }
 
     /// Resolve a short change id (reverse-hex) to a single non-divergent
@@ -821,7 +847,7 @@ impl RepoBackend for JjCliBackend {
         use jj_lib::repo::Repo as _;
         use pollster::FutureExt as _;
 
-        let repo = self.open_jj_repo()?;
+        let (ws_name, repo) = self.open_jj_workspace()?;
 
         let commit_id = Self::resolve_change(repo.as_ref(), change_id)?;
         let commit = repo
@@ -839,7 +865,7 @@ impl RepoBackend for JjCliBackend {
         // Get working copy commit
         let wc_commit_id = repo
             .view()
-            .get_wc_commit_id(jj_lib::ref_name::WorkspaceName::DEFAULT)
+            .get_wc_commit_id(&ws_name)
             .ok_or_else(|| anyhow::anyhow!("No working copy commit found"))?
             .clone();
         let wc_commit = repo
