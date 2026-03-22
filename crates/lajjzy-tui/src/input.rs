@@ -85,6 +85,9 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
             (KeyCode::Char('B'), _) => Some(Action::OpenBookmarkSet),
             (KeyCode::Char('P'), _) => Some(Action::GitPush),
             (KeyCode::Char('f'), KeyModifiers::NONE) => Some(Action::GitFetch),
+            (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::Absorb),
+            (KeyCode::Char('D'), _) => Some(Action::DuplicateChange),
+            (KeyCode::Char('x'), KeyModifiers::NONE) => Some(Action::Revert),
             _ => None,
         },
         PanelFocus::Detail => match detail_mode {
@@ -397,9 +400,9 @@ mod tests {
 
     #[test]
     fn unmapped_key_returns_none() {
-        assert_eq!(map_graph(key(KeyCode::Char('x'))), None);
-        assert_eq!(map_file_list(key(KeyCode::Char('x'))), None);
-        assert_eq!(map_diff_view(key(KeyCode::Char('x'))), None);
+        assert_eq!(map_graph(key(KeyCode::Char('z'))), None);
+        assert_eq!(map_file_list(key(KeyCode::Char('z'))), None);
+        assert_eq!(map_diff_view(key(KeyCode::Char('z'))), None);
     }
 
     // --- Modal input tests ---
@@ -958,5 +961,21 @@ mod tests {
             map_file_list(key_mod(KeyCode::Char('S'), KeyModifiers::SHIFT)),
             None
         );
+    }
+
+    #[test]
+    fn m7_graph_mutation_keys() {
+        assert_eq!(map_graph(key(KeyCode::Char('a'))), Some(Action::Absorb));
+        assert_eq!(
+            map_graph(key_mod(KeyCode::Char('D'), KeyModifiers::SHIFT)),
+            Some(Action::DuplicateChange)
+        );
+        assert_eq!(map_graph(key(KeyCode::Char('x'))), Some(Action::Revert));
+    }
+
+    #[test]
+    fn m7_keys_not_active_in_detail() {
+        assert_eq!(map_file_list(key(KeyCode::Char('a'))), None);
+        assert_eq!(map_file_list(key(KeyCode::Char('x'))), None);
     }
 }

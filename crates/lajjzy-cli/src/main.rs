@@ -238,9 +238,36 @@ impl EffectExecutor {
                 );
             }
 
-            // M7 mutations — stubs until Task 4
-            Effect::Absorb { .. } | Effect::Duplicate { .. } | Effect::Revert { .. } => {
-                // TODO: Task 4 — wire up via run_mutation
+            // M7 mutations
+            Effect::Absorb { change_id } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Absorb,
+                    generation,
+                    &active_revset,
+                    || backend.absorb(&change_id),
+                );
+            }
+            Effect::Duplicate { change_id } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Duplicate,
+                    generation,
+                    &active_revset,
+                    || backend.duplicate(&change_id),
+                );
+            }
+            Effect::Revert { change_id } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Revert,
+                    generation,
+                    &active_revset,
+                    || backend.revert(&change_id),
+                );
             }
 
             // Conflict handling
