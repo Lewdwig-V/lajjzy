@@ -1192,8 +1192,36 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
 
-        // M7 mutation stubs (implementations in Task 3)
-        Action::Absorb | Action::DuplicateChange | Action::Revert => {}
+        Action::Absorb => {
+            if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                state.pending_mutation = Some(MutationKind::Absorb);
+                return vec![Effect::Absorb { change_id: cid }];
+            }
+        }
+        Action::DuplicateChange => {
+            if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                state.pending_mutation = Some(MutationKind::Duplicate);
+                return vec![Effect::Duplicate { change_id: cid }];
+            }
+        }
+        Action::Revert => {
+            if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                state.pending_mutation = Some(MutationKind::Revert);
+                return vec![Effect::Revert { change_id: cid }];
+            }
+        }
 
         Action::NewChange => {
             if state.pending_mutation.is_some() {
@@ -5208,5 +5236,58 @@ mod tests {
         );
         assert!(state.conflict_view.is_some());
         assert_eq!(state.detail_mode, DetailMode::ConflictView);
+    }
+
+    // --- M7 dispatch tests ---
+
+    #[test]
+    fn absorb_emits_effect() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::Absorb);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], Effect::Absorb { .. }));
+        assert_eq!(state.pending_mutation, Some(MutationKind::Absorb));
+    }
+
+    #[test]
+    fn absorb_blocked_when_mutation_pending() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Describe);
+        let effects = dispatch(&mut state, Action::Absorb);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn duplicate_emits_effect() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::DuplicateChange);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], Effect::Duplicate { .. }));
+        assert_eq!(state.pending_mutation, Some(MutationKind::Duplicate));
+    }
+
+    #[test]
+    fn duplicate_blocked_when_mutation_pending() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Absorb);
+        let effects = dispatch(&mut state, Action::DuplicateChange);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn revert_emits_effect() {
+        let mut state = AppState::new(sample_graph());
+        let effects = dispatch(&mut state, Action::Revert);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], Effect::Revert { .. }));
+        assert_eq!(state.pending_mutation, Some(MutationKind::Revert));
+    }
+
+    #[test]
+    fn revert_blocked_when_mutation_pending() {
+        let mut state = AppState::new(sample_graph());
+        state.pending_mutation = Some(MutationKind::Revert);
+        let effects = dispatch(&mut state, Action::Revert);
+        assert!(effects.is_empty());
     }
 }
