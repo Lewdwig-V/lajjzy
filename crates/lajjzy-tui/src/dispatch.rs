@@ -520,11 +520,12 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             } else {
                 fuzzy_match(&query, &state.graph)
             };
+            let completions = compute_completions(&query, &state.graph);
             state.modal = Some(Modal::Omnibar {
                 query,
                 matches,
                 cursor: 0,
-                completions: vec![],
+                completions,
                 completion_cursor: 0,
             });
         }
@@ -578,9 +579,15 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                         }
                     }
                     Modal::Omnibar {
-                        matches, cursor, ..
+                        completions,
+                        completion_cursor,
+                        matches,
+                        cursor,
+                        ..
                     } => {
-                        if *cursor + 1 < matches.len() {
+                        if !completions.is_empty() && *completion_cursor + 1 < completions.len() {
+                            *completion_cursor += 1;
+                        } else if completions.is_empty() && *cursor + 1 < matches.len() {
                             *cursor += 1;
                         }
                     }
@@ -596,10 +603,20 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::ModalMoveUp => {
             if let Some(ref mut modal) = state.modal {
                 match modal {
-                    Modal::OpLog { cursor, .. }
-                    | Modal::BookmarkPicker { cursor, .. }
-                    | Modal::Omnibar { cursor, .. } => {
+                    Modal::OpLog { cursor, .. } | Modal::BookmarkPicker { cursor, .. } => {
                         *cursor = cursor.saturating_sub(1);
+                    }
+                    Modal::Omnibar {
+                        completions,
+                        completion_cursor,
+                        cursor,
+                        ..
+                    } => {
+                        if completions.is_empty() {
+                            *cursor = cursor.saturating_sub(1);
+                        } else {
+                            *completion_cursor = completion_cursor.saturating_sub(1);
+                        }
                     }
                     Modal::Help { scroll, .. } => {
                         *scroll = scroll.saturating_sub(1);
@@ -653,12 +670,15 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 query,
                 matches,
                 cursor,
-                ..
+                completions,
+                completion_cursor,
             }) = &mut state.modal
             {
                 query.push(c);
                 *matches = fuzzy_match(query, &state.graph);
                 *cursor = 0;
+                *completions = compute_completions(query, &state.graph);
+                *completion_cursor = 0;
             }
         }
         Action::OmnibarBackspace => {
@@ -666,16 +686,35 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 query,
                 matches,
                 cursor,
-                ..
+                completions,
+                completion_cursor,
             }) = &mut state.modal
             {
                 query.pop();
                 *matches = fuzzy_match(query, &state.graph);
                 *cursor = 0;
+                *completions = compute_completions(query, &state.graph);
+                *completion_cursor = 0;
             }
         }
         Action::OmnibarAcceptCompletion => {
-            // TODO: implement in Task 3
+            if let Some(Modal::Omnibar {
+                query,
+                completions,
+                completion_cursor,
+                matches,
+                cursor,
+            }) = &mut state.modal
+                && let Some(item) = completions.get(*completion_cursor).cloned()
+            {
+                let (word_start, _) = extract_current_word(query);
+                query.truncate(word_start);
+                query.push_str(&item.insert_text);
+                *completions = compute_completions(query, &state.graph);
+                *completion_cursor = 0;
+                *matches = fuzzy_match(query, &state.graph);
+                *cursor = 0;
+            }
         }
         Action::Abandon => {
             if state.pending_mutation.is_some() {
@@ -1354,8 +1393,6 @@ pub(crate) fn extract_current_word(query: &str) -> (usize, &str) {
     }
 }
 
-// TODO(Task 3): remove allow once wired into dispatch
-#[allow(dead_code)]
 pub(crate) fn compute_completions(query: &str, graph: &GraphData) -> Vec<CompletionItem> {
     let (_, current_word) = extract_current_word(query);
     if current_word.is_empty() {
@@ -4075,5 +4112,205 @@ mod tests {
         let c = compute_completions("de", &graph);
         assert!(!c.is_empty());
         assert!(c[0].insert_text.ends_with('('));
+    }
+
+    // --- Omnibar completion dispatch tests ---
+
+    #[test]
+    fn omnibar_completions_appear_on_input() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenOmnibar);
+        for c in ['a', 'n', 'c'] {
+            dispatch(&mut state, Action::OmnibarInput(c));
+        }
+        match &state.modal {
+            Some(Modal::Omnibar { completions, .. }) => {
+                assert!(
+                    completions
+                        .iter()
+                        .any(|c| c.insert_text.starts_with("ancestors(")),
+                    "expected ancestors( in completions: {completions:?}"
+                );
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_completions_empty_for_non_matching() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenOmnibar);
+        for c in ['x', 'y', 'z'] {
+            dispatch(&mut state, Action::OmnibarInput(c));
+        }
+        match &state.modal {
+            Some(Modal::Omnibar { completions, .. }) => {
+                assert!(completions.is_empty());
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_accept_completion_inserts_text() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenOmnibar);
+        for c in ['m', 'i', 'n'] {
+            dispatch(&mut state, Action::OmnibarInput(c));
+        }
+        // "min" should match mine() (nullary)
+        dispatch(&mut state, Action::OmnibarAcceptCompletion);
+        match &state.modal {
+            Some(Modal::Omnibar { query, .. }) => {
+                assert_eq!(query, "mine()");
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_accept_completion_after_operator() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenOmnibar);
+        for c in ['~', 'm', 'i', 'n'] {
+            dispatch(&mut state, Action::OmnibarInput(c));
+        }
+        dispatch(&mut state, Action::OmnibarAcceptCompletion);
+        match &state.modal {
+            Some(Modal::Omnibar { query, .. }) => {
+                assert_eq!(query, "~mine()");
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_accept_completion_function_with_args() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenOmnibar);
+        for c in ['a', 'u', 't'] {
+            dispatch(&mut state, Action::OmnibarInput(c));
+        }
+        dispatch(&mut state, Action::OmnibarAcceptCompletion);
+        match &state.modal {
+            Some(Modal::Omnibar { query, .. }) => {
+                assert_eq!(query, "author(");
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_backspace_recomputes_completions() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenOmnibar);
+        // "minex" — no matching function
+        for c in ['m', 'i', 'n', 'e', 'x'] {
+            dispatch(&mut state, Action::OmnibarInput(c));
+        }
+        match &state.modal {
+            Some(Modal::Omnibar { completions, .. }) => {
+                assert!(completions.is_empty(), "minex should have no completions");
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+        // Backspace to "mine" — should match mine()
+        dispatch(&mut state, Action::OmnibarBackspace);
+        match &state.modal {
+            Some(Modal::Omnibar { completions, .. }) => {
+                assert!(
+                    completions.iter().any(|c| c.insert_text == "mine()"),
+                    "expected mine() after backspace: {completions:?}"
+                );
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_completion_cursor_moves_down() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenOmnibar);
+        // "a" should produce multiple completions (ancestors(, author(, etc.)
+        dispatch(&mut state, Action::OmnibarInput('a'));
+        dispatch(&mut state, Action::ModalMoveDown);
+        match &state.modal {
+            Some(Modal::Omnibar {
+                completions,
+                completion_cursor,
+                ..
+            }) => {
+                assert!(
+                    completions.len() > 1,
+                    "expected multiple completions for 'a'"
+                );
+                assert_eq!(*completion_cursor, 1);
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_completion_cursor_moves_up() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenOmnibar);
+        dispatch(&mut state, Action::OmnibarInput('a'));
+        dispatch(&mut state, Action::ModalMoveDown);
+        dispatch(&mut state, Action::ModalMoveUp);
+        match &state.modal {
+            Some(Modal::Omnibar {
+                completion_cursor, ..
+            }) => {
+                assert_eq!(*completion_cursor, 0);
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_accept_noop_when_empty() {
+        let mut state = AppState::new(sample_graph());
+        dispatch(&mut state, Action::OpenOmnibar);
+        // No input — completions are empty
+        dispatch(&mut state, Action::OmnibarAcceptCompletion);
+        match &state.modal {
+            Some(Modal::Omnibar { query, .. }) => {
+                assert!(query.is_empty(), "query should remain empty");
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+    }
+
+    #[test]
+    fn omnibar_open_with_prefilled_computes_completions() {
+        let mut state = AppState::new(sample_graph());
+        state.active_revset = Some("mine()".into());
+        dispatch(&mut state, Action::OpenOmnibar);
+        match &state.modal {
+            Some(Modal::Omnibar {
+                query, completions, ..
+            }) => {
+                assert_eq!(query, "mine()");
+                // After "mine()" the current word is "" (after paren), so completions empty
+                // But the completions were computed (not left as default vec![])
+                // This confirms compute_completions was called
+                assert!(completions.is_empty());
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
+
+        // Now test with a partial revset that should produce completions
+        state.modal = None;
+        state.active_revset = Some("min".into());
+        dispatch(&mut state, Action::OpenOmnibar);
+        match &state.modal {
+            Some(Modal::Omnibar { completions, .. }) => {
+                assert!(
+                    completions.iter().any(|c| c.insert_text == "mine()"),
+                    "expected mine() completion for prefilled 'min': {completions:?}"
+                );
+            }
+            _ => panic!("Expected Omnibar modal"),
+        }
     }
 }
