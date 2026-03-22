@@ -1,5 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use lajjzy_core::forge::{ForgeKind, PrInfo};
 use lajjzy_core::types::{
     ChangeDetail, ConflictData, ConflictRegion, DiffHunk, DiffLine, GraphData,
 };
@@ -119,10 +120,13 @@ pub struct AppState {
     pub target_pick: Option<TargetPick>,
     pub hunk_picker: Option<HunkPicker>,
     pub conflict_view: Option<ConflictView>,
+    pub forge: Option<ForgeKind>,
+    pub pr_status: HashMap<String, PrInfo>,
+    pub pending_forge_fetch: bool,
 }
 
 impl AppState {
-    pub fn new(graph: GraphData) -> Self {
+    pub fn new(graph: GraphData, forge: Option<ForgeKind>) -> Self {
         let cursor = graph
             .working_copy_index
             .unwrap_or_else(|| graph.node_indices().first().copied().unwrap_or(0));
@@ -147,6 +151,9 @@ impl AppState {
             target_pick: None,
             hunk_picker: None,
             conflict_view: None,
+            forge,
+            pr_status: HashMap::new(),
+            pending_forge_fetch: false,
         }
     }
 

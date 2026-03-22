@@ -95,6 +95,14 @@ pub enum Effect {
         path: String,
     },
 
+    // Forge
+    FetchForgeStatus,
+    /// Try to open the PR in a browser; if no PR exists, suspend and run `gh pr create`.
+    /// The executor handles the routing — dispatch doesn't need the PR cache to be warm.
+    OpenOrCreatePr {
+        bookmark: String,
+    },
+
     // Non-repo
     SuspendForEditor {
         change_id: String,

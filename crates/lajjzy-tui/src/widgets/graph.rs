@@ -4,24 +4,32 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use lajjzy_core::forge::{PrInfo, PrState, ReviewStatus};
 use lajjzy_core::types::GraphData;
 
 use crate::app::TargetPick;
+use std::collections::HashMap;
 
 pub struct GraphWidget<'a> {
     graph: &'a GraphData,
     cursor: usize,
     scrolloff: usize,
     target_pick: Option<&'a TargetPick>,
+    pr_status: &'a HashMap<String, PrInfo>,
 }
 
 impl<'a> GraphWidget<'a> {
-    pub fn new(graph: &'a GraphData, cursor: usize) -> Self {
+    pub fn new(
+        graph: &'a GraphData,
+        cursor: usize,
+        pr_status: &'a HashMap<String, PrInfo>,
+    ) -> Self {
         Self {
             graph,
             cursor,
             scrolloff: 3,
             target_pick: None,
+            pr_status,
         }
     }
 
@@ -125,6 +133,27 @@ impl<'a> GraphWidget<'a> {
                     format!("[{}]", detail.bookmarks.join(", ")),
                     Style::default().fg(Color::Magenta),
                 ));
+            }
+
+            // PR indicators after bookmarks
+            for bookmark in &detail.bookmarks {
+                if let Some(pr) = self.pr_status.get(bookmark) {
+                    let (symbol, color) = match pr.state {
+                        PrState::Merged => ("✓", Color::DarkGray),
+                        PrState::Closed => ("✗", Color::DarkGray),
+                        PrState::Open => match pr.review {
+                            ReviewStatus::Approved => ("✓", Color::Green),
+                            ReviewStatus::ChangesRequested => ("✗", Color::Red),
+                            ReviewStatus::ReviewRequired | ReviewStatus::Unknown => {
+                                ("●", Color::Yellow)
+                            }
+                        },
+                    };
+                    spans.push(Span::styled(
+                        format!(" #{} {symbol}", pr.number),
+                        Style::default().fg(color),
+                    ));
+                }
             }
 
             // Conflict indicator in yellow
@@ -277,7 +306,8 @@ mod tests {
     #[test]
     fn renders_lines_in_buffer() {
         let graph = simple_graph();
-        let widget = GraphWidget::new(&graph, 0);
+        let pr_status = HashMap::new();
+        let widget = GraphWidget::new(&graph, 0, &pr_status);
         let area = Rect::new(0, 0, 60, 4);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -299,7 +329,8 @@ mod tests {
     #[test]
     fn highlighted_lines_have_reversed_style() {
         let graph = simple_graph();
-        let widget = GraphWidget::new(&graph, 0);
+        let pr_status = HashMap::new();
+        let widget = GraphWidget::new(&graph, 0, &pr_status);
         let area = Rect::new(0, 0, 30, 4);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -327,7 +358,8 @@ mod tests {
     #[test]
     fn working_copy_glyph_is_green_bold() {
         let graph = simple_graph(); // working_copy_index = Some(0)
-        let widget = GraphWidget::new(&graph, 0);
+        let pr_status = HashMap::new();
+        let widget = GraphWidget::new(&graph, 0, &pr_status);
         let area = Rect::new(0, 0, 60, 4);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -346,7 +378,8 @@ mod tests {
     #[test]
     fn connector_line_renders_raw_text() {
         let graph = simple_graph();
-        let widget = GraphWidget::new(&graph, 0);
+        let pr_status = HashMap::new();
+        let widget = GraphWidget::new(&graph, 0, &pr_status);
         let area = Rect::new(0, 0, 40, 4);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -375,7 +408,8 @@ mod tests {
         };
 
         // Cursor on "def" (row 2); "abc" (row 0) should be dimmed.
-        let widget = GraphWidget::new(&graph, 2).with_target_pick(Some(&pick));
+        let pr_status = HashMap::new();
+        let widget = GraphWidget::new(&graph, 2, &pr_status).with_target_pick(Some(&pick));
         let area = Rect::new(0, 0, 60, 4);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -426,7 +460,8 @@ mod tests {
             String::new(),
         );
 
-        let widget = GraphWidget::new(&graph, 0);
+        let pr_status = HashMap::new();
+        let widget = GraphWidget::new(&graph, 0, &pr_status);
         let area = Rect::new(0, 0, 80, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -448,7 +483,8 @@ mod tests {
     fn graph_no_dimming_outside_picking_mode() {
         let graph = simple_graph();
         // No target_pick — normal rendering, "abc" should not be DarkGray at node level.
-        let widget = GraphWidget::new(&graph, 2);
+        let pr_status = HashMap::new();
+        let widget = GraphWidget::new(&graph, 2, &pr_status);
         let area = Rect::new(0, 0, 60, 4);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -464,6 +500,36 @@ mod tests {
         assert!(
             line0.contains("abc"),
             "Without picking mode, 'abc' should still render: {line0:?}"
+        );
+    }
+
+    #[test]
+    fn graph_renders_pr_indicator() {
+        let graph = simple_graph(); // "def" has bookmark "main"
+        let mut pr_status = HashMap::new();
+        pr_status.insert(
+            "main".into(),
+            PrInfo {
+                number: 42,
+                title: "Fix bug".into(),
+                state: PrState::Open,
+                review: ReviewStatus::Approved,
+                head_ref: "main".into(),
+                url: "https://github.com/org/repo/pull/42".into(),
+            },
+        );
+        // Cursor on "def" (row 2) which has bookmark "main" with a PR
+        let widget = GraphWidget::new(&graph, 2, &pr_status);
+        let area = Rect::new(0, 0, 80, 4);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line2: String = (0..80)
+            .map(|x| buf[(x, 2)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line2.contains("#42"),
+            "Expected PR number '#42' in: {line2:?}"
         );
     }
 }

@@ -11,6 +11,8 @@ use crossterm::event::{self, Event, KeyEventKind};
 
 use lajjzy_core::backend::RepoBackend;
 use lajjzy_core::cli::JjCliBackend;
+use lajjzy_core::forge::ForgeBackend;
+use lajjzy_core::gh::GhCliForge;
 use lajjzy_tui::action::{Action, MutationKind};
 use lajjzy_tui::app::AppState;
 use lajjzy_tui::dispatch::dispatch;
@@ -20,6 +22,7 @@ use lajjzy_tui::render::render;
 
 struct EffectExecutor {
     backend: Arc<JjCliBackend>,
+    forge: Arc<GhCliForge>,
     tx: mpsc::Sender<Action>,
     /// Monotonic counter for graph snapshot versioning.
     /// Incremented before each `load_graph()` call so later loads get higher generations.
@@ -39,6 +42,7 @@ impl EffectExecutor {
     #[expect(clippy::too_many_lines)]
     fn execute(&self, effect: Effect) {
         let backend = Arc::clone(&self.backend);
+        let forge = Arc::clone(&self.forge);
         let tx = self.tx.clone();
         // Assign generation BEFORE spawning thread — ordering reflects intent, not completion.
         let generation = self.next_graph_generation(&effect);
@@ -238,6 +242,16 @@ impl EffectExecutor {
                 );
             }
 
+            // Forge effects
+            Effect::FetchForgeStatus => {
+                let result = forge.fetch_status().map_err(|e| e.to_string());
+                let _ = tx.send(Action::ForgeStatusLoaded(result));
+            }
+            // OpenOrCreatePr is intercepted in execute_effects (may need terminal suspend)
+            Effect::OpenOrCreatePr { .. } => {
+                unreachable!("OpenOrCreatePr must be intercepted by execute_effects")
+            }
+
             // M7 mutations
             Effect::Absorb { change_id } => {
                 run_mutation(
@@ -340,6 +354,8 @@ impl EffectExecutor {
             | Effect::LoadChangeDiff { .. }
             | Effect::LoadConflictData { .. }
             | Effect::LaunchMergeTool { .. }
+            | Effect::FetchForgeStatus
+            | Effect::OpenOrCreatePr { .. }
             | Effect::SuspendForEditor { .. } => 0,
         }
     }
@@ -379,6 +395,7 @@ fn run_mutation(
     }
 }
 
+#[expect(clippy::too_many_lines)]
 fn execute_effects(
     terminal: &mut ratatui::DefaultTerminal,
     state: &mut AppState,
@@ -454,6 +471,60 @@ fn execute_effects(
                             },
                         );
                         execute_effects(terminal, state, executor, new_effects);
+                    }
+                }
+            }
+            Effect::OpenOrCreatePr { bookmark } => {
+                let ws = executor.backend.workspace_root();
+                // Try opening existing PR in browser first
+                let view_result = std::process::Command::new("gh")
+                    .args(["pr", "view", &bookmark, "--web"])
+                    .current_dir(ws)
+                    .output();
+                match view_result {
+                    Ok(o) if o.status.success() => {
+                        // PR exists and browser opened. Also extract URL for status bar.
+                        let url_output = std::process::Command::new("gh")
+                            .args(["pr", "view", &bookmark, "--json", "url", "-q", ".url"])
+                            .current_dir(ws)
+                            .output();
+                        let url = url_output
+                            .ok()
+                            .and_then(|o| String::from_utf8(o.stdout).ok())
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
+                        let effects = dispatch(state, Action::PrViewUrl { url });
+                        execute_effects(terminal, state, executor, effects);
+                    }
+                    _ => {
+                        // No PR or gh failed — suspend and create
+                        ratatui::restore();
+                        let status = std::process::Command::new("gh")
+                            .args(["pr", "create", "--head", &bookmark])
+                            .current_dir(ws)
+                            .status();
+                        *terminal = ratatui::init();
+                        match status {
+                            Ok(s) if s.success() => {
+                                let effects = dispatch(state, Action::PrCreateComplete);
+                                execute_effects(terminal, state, executor, effects);
+                            }
+                            Ok(s) => {
+                                let effects = dispatch(
+                                    state,
+                                    Action::PrCreateFailed {
+                                        error: format!(
+                                            "gh pr create exited with {}",
+                                            s.code().unwrap_or(-1)
+                                        ),
+                                    },
+                                );
+                                execute_effects(terminal, state, executor, effects);
+                            }
+                            Err(e) => {
+                                state.error = Some(format!("Failed to launch gh: {e}"));
+                            }
+                        }
                     }
                 }
             }
@@ -533,13 +604,16 @@ fn main() -> Result<()> {
 
     let cwd = env::current_dir().context("Failed to get current directory")?;
     let backend = Arc::new(JjCliBackend::new(&cwd).context("Failed to open jj workspace")?);
+    let forge = Arc::new(GhCliForge::new(&cwd));
+    let forge_kind = forge.forge_kind();
 
     let graph = backend.load_graph(None).context("Failed to load graph")?;
-    let mut state = AppState::new(graph);
+    let mut state = AppState::new(graph, forge_kind);
 
     let (tx, rx) = mpsc::channel();
     let executor = EffectExecutor {
         backend,
+        forge,
         tx,
         graph_generation: AtomicU64::new(0),
         active_revset: Arc::new(Mutex::new(None)),
