@@ -479,9 +479,9 @@ mod tests {
     fn empty_side_renders_file_deleted() {
         let view = make_view(
             vec![ConflictRegion::Conflict {
-                base: "".into(),
+                base: String::new(),
                 left: "left content".into(),
-                right: "".into(),
+                right: String::new(),
             }],
             vec![HunkResolution::Unresolved],
         );

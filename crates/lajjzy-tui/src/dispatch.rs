@@ -5139,10 +5139,9 @@ mod tests {
 
     #[test]
     fn graph_loaded_exits_conflict_view_when_file_no_longer_conflicted() {
-        let mut state = make_test_state_with_conflict_view();
-
-        // Build a new graph where the file is no longer conflicted
         use lajjzy_core::types::FileChange;
+
+        let mut state = make_test_state_with_conflict_view();
         let new_graph = GraphData::new(
             vec![GraphLine {
                 raw: "◉  abc".into(),
