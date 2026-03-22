@@ -5826,7 +5826,7 @@ mod tests {
                 ChangeDetail {
                     commit_id: "aaa".into(),
                     author: "a".into(),
-                    email: "".into(),
+                    email: String::new(),
                     timestamp: "1m".into(),
                     description: "test".into(),
                     bookmarks: vec![],

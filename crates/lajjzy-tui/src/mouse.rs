@@ -416,11 +416,11 @@ mod tests {
 
     #[test]
     fn click_outside_describe_modal_ignored() {
+        use tui_textarea::TextArea;
         let mut layout = default_layout();
         layout.modal_area = Some(Rect::new(10, 5, 20, 10));
         let mut state = make_state_with_layout(layout);
         // Describe modal is not click-dismissable
-        use tui_textarea::TextArea;
         state.modal = Some(Modal::Describe {
             change_id: "abc".into(),
             editor: Box::new(TextArea::default()),
