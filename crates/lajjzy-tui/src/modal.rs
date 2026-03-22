@@ -41,6 +41,7 @@ pub enum HelpContext {
     Graph,
     DetailFileList,
     DetailDiffView,
+    ConflictView,
 }
 
 impl HelpContext {
@@ -49,6 +50,7 @@ impl HelpContext {
             Self::Graph => 23,
             Self::DetailFileList => 4,
             Self::DetailDiffView => 3,
+            Self::ConflictView => 7,
         }
     }
 }

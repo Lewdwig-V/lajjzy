@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use lajjzy_core::types::{FileHunkSelection, GraphData};
+use lajjzy_core::types::{ConflictData, ConflictRegion, FileHunkSelection, FileStatus, GraphData};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
@@ -8,7 +8,10 @@ use crate::action::{
     Action, Arity, BackgroundKind, CompletionItem, DetailMode, HunkPickerOp, MutationKind,
     PanelFocus, RebaseMode,
 };
-use crate::app::{AppState, HunkPicker, PickerFile, PickerHunk, PickingMode, TargetPick};
+use crate::app::{
+    AppState, ConflictView, HunkPicker, HunkResolution, PickerFile, PickerHunk, PickingMode,
+    TargetPick,
+};
 use crate::effect::Effect;
 use crate::modal::{HelpContext, Modal};
 
@@ -33,7 +36,8 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
         | MutationKind::BookmarkSet
         | MutationKind::BookmarkDelete
         | MutationKind::RebaseSingle
-        | MutationKind::RebaseWithDescendants => {
+        | MutationKind::RebaseWithDescendants
+        | MutationKind::ResolveConflict => {
             state.pending_mutation = None;
         }
     }
@@ -64,6 +68,47 @@ fn compute_descendants(source: &str, graph: &GraphData) -> HashSet<String> {
         }
     }
     descendants
+}
+
+/// Build resolved file content from conflict data and per-hunk resolutions.
+/// Returns `Err` if any hunk is still `Unresolved` or if there is an index mismatch.
+fn build_resolved_content(
+    data: &ConflictData,
+    resolutions: &[HunkResolution],
+) -> Result<Vec<u8>, &'static str> {
+    let mut output = Vec::new();
+    let mut conflict_idx = 0;
+    for region in &data.regions {
+        match region {
+            ConflictRegion::Resolved(text) => {
+                output.extend_from_slice(text.as_bytes());
+            }
+            ConflictRegion::Conflict { left, right, .. } => {
+                let res = resolutions
+                    .get(conflict_idx)
+                    .ok_or("resolution index out of bounds")?;
+                match res {
+                    HunkResolution::Unresolved => {
+                        return Err("not all hunks resolved");
+                    }
+                    HunkResolution::AcceptLeft => {
+                        output.extend_from_slice(left.as_bytes());
+                    }
+                    HunkResolution::AcceptRight => {
+                        output.extend_from_slice(right.as_bytes());
+                    }
+                }
+                conflict_idx += 1;
+            }
+        }
+    }
+    Ok(output)
+}
+
+/// Exit the conflict view and return to file list.
+fn exit_conflict_view(state: &mut AppState) {
+    state.conflict_view = None;
+    state.detail_mode = DetailMode::FileList;
 }
 
 /// Returns the valid node indices for navigation. When in picking mode,
@@ -358,6 +403,23 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                     pick.excluded = excluded;
                 }
             }
+
+            // Check if conflict view file is no longer conflicted after graph refresh
+            if let Some(ref cv) = state.conflict_view {
+                let still_conflicted = state.graph.details.get(&cv.change_id).is_some_and(|d| {
+                    d.files
+                        .iter()
+                        .any(|f| f.path == cv.path && f.status == FileStatus::Conflicted)
+                });
+                if still_conflicted {
+                    // reset_detail() cleared detail_mode — restore it
+                    state.detail_mode = DetailMode::ConflictView;
+                } else {
+                    exit_conflict_view(state);
+                    state.status_message =
+                        Some("Conflict resolved externally — exiting conflict view".into());
+                }
+            }
         }
         Action::TabFocus | Action::BackTabFocus => {
             state.focus = match state.focus {
@@ -399,8 +461,23 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             let change_id = state.selected_change_id().map(String::from);
 
             if let (Some(cid), Some((raw_path, status))) = (change_id, file_info) {
+                // Conflicted files open the conflict view instead of the diff view
+                if status == FileStatus::Conflicted {
+                    // Working-copy gate: must be @
+                    if state.graph.working_copy_index != Some(state.cursor) {
+                        state.error = Some(
+                            "Press Ctrl-E to edit this change before resolving conflicts".into(),
+                        );
+                        return vec![];
+                    }
+                    return vec![Effect::LoadConflictData {
+                        change_id: cid,
+                        path: raw_path,
+                    }];
+                }
+
                 // For renames, extract the destination path (after "=> ")
-                let diff_path = if status == lajjzy_core::types::FileStatus::Renamed {
+                let diff_path = if status == FileStatus::Renamed {
                     raw_path
                         .split("=> ")
                         .nth(1)
@@ -439,6 +516,10 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             // HunkPicker back handled by HunkCancel in Task 4
             DetailMode::HunkPicker => {}
+            DetailMode::ConflictView => {
+                state.conflict_view = None;
+                state.detail_mode = DetailMode::FileList;
+            }
         },
         Action::DiffScrollDown => {
             let total_lines: usize = state
@@ -535,8 +616,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 PanelFocus::Detail => match state.detail_mode {
                     DetailMode::FileList => HelpContext::DetailFileList,
                     DetailMode::DiffView => HelpContext::DetailDiffView,
-                    // Use Graph context for HunkPicker until dedicated help is added
                     DetailMode::HunkPicker => HelpContext::Graph,
+                    DetailMode::ConflictView => HelpContext::ConflictView,
                 },
             };
             state.modal = Some(Modal::Help { context, scroll: 0 });
@@ -914,6 +995,200 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.hunk_picker = None;
             state.detail_mode = DetailMode::FileList;
         }
+
+        // --- Conflict view ---
+        Action::ConflictDataLoaded {
+            change_id,
+            path,
+            result,
+        } => match result {
+            Ok(data) => {
+                let cv = ConflictView::new(change_id, path, data);
+                if cv.resolutions.is_empty() {
+                    state.error = Some("File has no conflict hunks — nothing to resolve".into());
+                } else {
+                    state.conflict_view = Some(cv);
+                    state.detail_mode = DetailMode::ConflictView;
+                }
+            }
+            Err(e) => {
+                state.error = Some(format!("Failed to load conflict data: {e}"));
+            }
+        },
+        Action::ConflictAcceptLeft => {
+            if let Some(ref mut cv) = state.conflict_view {
+                if let Some(res) = cv.resolutions.get_mut(cv.cursor) {
+                    *res = HunkResolution::AcceptLeft;
+                } else {
+                    debug_assert!(
+                        false,
+                        "cursor {} OOB for resolutions len {}",
+                        cv.cursor,
+                        cv.resolutions.len()
+                    );
+                }
+            }
+        }
+        Action::ConflictAcceptRight => {
+            if let Some(ref mut cv) = state.conflict_view {
+                if let Some(res) = cv.resolutions.get_mut(cv.cursor) {
+                    *res = HunkResolution::AcceptRight;
+                } else {
+                    debug_assert!(
+                        false,
+                        "cursor {} OOB for resolutions len {}",
+                        cv.cursor,
+                        cv.resolutions.len()
+                    );
+                }
+            }
+        }
+        Action::ConflictNextHunk => {
+            if let Some(ref mut cv) = state.conflict_view {
+                let max = cv.resolutions.len().saturating_sub(1);
+                if cv.cursor < max {
+                    cv.cursor += 1;
+                }
+            }
+        }
+        Action::ConflictPrevHunk => {
+            if let Some(ref mut cv) = state.conflict_view {
+                cv.cursor = cv.cursor.saturating_sub(1);
+            }
+        }
+        Action::ConflictScrollDown => {
+            if let Some(ref mut cv) = state.conflict_view {
+                cv.scroll = cv.scroll.saturating_add(1);
+            }
+        }
+        Action::ConflictScrollUp => {
+            if let Some(ref mut cv) = state.conflict_view {
+                cv.scroll = cv.scroll.saturating_sub(1);
+            }
+        }
+        Action::ConflictConfirm => {
+            if let Some(ref cv) = state.conflict_view {
+                // Working-copy gate
+                if state.graph.working_copy_index != Some(state.cursor) {
+                    state.error =
+                        Some("Press Ctrl-E to edit this change before resolving conflicts".into());
+                    return vec![];
+                }
+                // Mutation gate
+                if state.pending_mutation.is_some() {
+                    state.status_message = Some("Operation in progress\u{2026}".into());
+                    return vec![];
+                }
+                // Build resolved content
+                match build_resolved_content(&cv.data, &cv.resolutions) {
+                    Ok(content) => {
+                        let change_id = cv.change_id.clone();
+                        let path = cv.path.clone();
+                        state.pending_mutation = Some(MutationKind::ResolveConflict);
+                        return vec![Effect::ResolveFile {
+                            change_id,
+                            path,
+                            content,
+                        }];
+                    }
+                    Err(msg) => {
+                        state.error = Some(msg.to_string());
+                    }
+                }
+            }
+        }
+        Action::ConflictLaunchMerge => {
+            // Determine change_id and path — either from conflict view or file list.
+            let target = if let Some(ref cv) = state.conflict_view {
+                Some((cv.change_id.clone(), cv.path.clone()))
+            } else if let Some(detail) = state.selected_detail()
+                && let Some(file) = detail.files.get(state.detail_cursor)
+            {
+                if file.status == FileStatus::Conflicted {
+                    state
+                        .selected_change_id()
+                        .map(|cid| (cid.to_string(), file.path.clone()))
+                } else {
+                    state.error = Some("File is not conflicted".into());
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some((change_id, path)) = target {
+                // Working-copy gate
+                if state.graph.working_copy_index != Some(state.cursor) {
+                    state.error =
+                        Some("Press Ctrl-E to edit this change before resolving conflicts".into());
+                    return vec![];
+                }
+                // Mutation gate
+                if state.pending_mutation.is_some() {
+                    state.status_message = Some("Operation in progress\u{2026}".into());
+                    return vec![];
+                }
+                state.pending_mutation = Some(MutationKind::ResolveConflict);
+                return vec![Effect::LaunchMergeTool { change_id, path }];
+            }
+        }
+        Action::MergeToolComplete { path: _, graph } => {
+            clear_op_gate(state, MutationKind::ResolveConflict);
+            if let Some((generation, graph_result)) = graph {
+                state.graph_generation = generation;
+                let nested = dispatch(
+                    state,
+                    Action::GraphLoaded {
+                        generation,
+                        result: graph_result,
+                    },
+                );
+                debug_assert!(nested.is_empty(), "GraphLoaded should not produce effects");
+            }
+            exit_conflict_view(state);
+            state.status_message = Some("Merge tool complete".into());
+        }
+        Action::MergeToolFailed { path: _, error } => {
+            clear_op_gate(state, MutationKind::ResolveConflict);
+            state.error = Some(error);
+        }
+        Action::NextConflictFile => {
+            if let Some(detail) = state.selected_detail() {
+                let files = &detail.files;
+                let start = state.detail_cursor + 1;
+                if let Some(offset) = files[start..]
+                    .iter()
+                    .position(|f| f.status == FileStatus::Conflicted)
+                {
+                    state.detail_cursor = start + offset;
+                } else if let Some(idx) = files
+                    .iter()
+                    .position(|f| f.status == FileStatus::Conflicted)
+                {
+                    // Wrap around
+                    state.detail_cursor = idx;
+                }
+            }
+        }
+        Action::PrevConflictFile => {
+            if let Some(detail) = state.selected_detail() {
+                let files = &detail.files;
+                let before = state.detail_cursor;
+                if let Some(idx) = files[..before]
+                    .iter()
+                    .rposition(|f| f.status == FileStatus::Conflicted)
+                {
+                    state.detail_cursor = idx;
+                } else if let Some(idx) = files
+                    .iter()
+                    .rposition(|f| f.status == FileStatus::Conflicted)
+                {
+                    // Wrap around
+                    state.detail_cursor = idx;
+                }
+            }
+        }
+
         Action::NewChange => {
             if state.pending_mutation.is_some() {
                 state.status_message = Some("Operation in progress\u{2026}".into());
@@ -971,6 +1246,9 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 debug_assert!(nested.is_empty(), "GraphLoaded should not produce effects");
             }
             clear_op_gate(state, op);
+            if op == MutationKind::ResolveConflict {
+                exit_conflict_view(state);
+            }
             // Only show success if graph load didn't set an error
             if state.error.is_none() {
                 state.status_message = Some(message);
@@ -1503,7 +1781,7 @@ mod tests {
                         description: "desc1".into(),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -1518,7 +1796,7 @@ mod tests {
                         description: "desc2".into(),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -1533,7 +1811,7 @@ mod tests {
                         description: "desc3".into(),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -1570,7 +1848,7 @@ mod tests {
                         description: "desc1".into(),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![
                             FileChange {
                                 path: "src/main.rs".into(),
@@ -1594,7 +1872,7 @@ mod tests {
                         description: "desc2".into(),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -1635,7 +1913,7 @@ mod tests {
                         description: "desc1".into(),
                         bookmarks: vec!["main".into()],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -1650,7 +1928,7 @@ mod tests {
                         description: "desc2".into(),
                         bookmarks: vec!["feature".into()],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -1683,7 +1961,7 @@ mod tests {
                         description: format!("desc for {id}"),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -2539,7 +2817,7 @@ mod tests {
                     description: "feat: add thing".into(),
                     bookmarks: vec!["main".into()],
                     is_empty: false,
-                    has_conflict: false,
+                    conflict_count: 0,
                     files: vec![],
                     parents: vec![],
                 },
@@ -2671,7 +2949,7 @@ mod tests {
                     description: String::new(),
                     bookmarks: vec![],
                     is_empty: true,
-                    has_conflict: false,
+                    conflict_count: 0,
                     files: vec![],
                     parents: vec![],
                 },
@@ -3084,7 +3362,7 @@ mod tests {
                         description: "first change".into(),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec!["def".into()],
                     },
@@ -3099,7 +3377,7 @@ mod tests {
                         description: "second change".into(),
                         bookmarks: vec!["main".into()],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec!["ghi".into()],
                     },
@@ -3114,7 +3392,7 @@ mod tests {
                         description: "root change".into(),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -4295,5 +4573,634 @@ mod tests {
             }
             _ => panic!("Expected Omnibar modal"),
         }
+    }
+
+    // --- Conflict view tests ---
+
+    fn sample_conflict_data() -> ConflictData {
+        ConflictData {
+            regions: vec![
+                ConflictRegion::Resolved("// header\n".into()),
+                ConflictRegion::Conflict {
+                    base: "base1\n".into(),
+                    left: "left1\n".into(),
+                    right: "right1\n".into(),
+                },
+                ConflictRegion::Resolved("// middle\n".into()),
+                ConflictRegion::Conflict {
+                    base: "base2\n".into(),
+                    left: "left2\n".into(),
+                    right: "right2\n".into(),
+                },
+                ConflictRegion::Resolved("// footer\n".into()),
+            ],
+        }
+    }
+
+    fn sample_graph_with_conflicted_file() -> GraphData {
+        use lajjzy_core::types::{FileChange, FileStatus};
+        GraphData::new(
+            vec![GraphLine {
+                raw: "◉  abc".into(),
+                change_id: Some("abc".into()),
+                glyph_prefix: String::new(),
+            }],
+            HashMap::from([(
+                "abc".into(),
+                ChangeDetail {
+                    commit_id: "a1".into(),
+                    author: "a".into(),
+                    email: "a@b".into(),
+                    timestamp: "1m".into(),
+                    description: "conflicted".into(),
+                    bookmarks: vec![],
+                    is_empty: false,
+                    conflict_count: 1,
+                    files: vec![
+                        FileChange {
+                            path: "src/main.rs".into(),
+                            status: FileStatus::Conflicted,
+                        },
+                        FileChange {
+                            path: "src/lib.rs".into(),
+                            status: FileStatus::Modified,
+                        },
+                        FileChange {
+                            path: "src/util.rs".into(),
+                            status: FileStatus::Conflicted,
+                        },
+                    ],
+                    parents: vec![],
+                },
+            )]),
+            Some(0),
+            String::new(),
+        )
+    }
+
+    fn make_test_state_with_conflict_view() -> AppState {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        state.focus = PanelFocus::Detail;
+        state.conflict_view = Some(ConflictView::new(
+            "abc".into(),
+            "src/main.rs".into(),
+            sample_conflict_data(),
+        ));
+        state.detail_mode = DetailMode::ConflictView;
+        state
+    }
+
+    #[test]
+    fn build_resolved_content_all_left() {
+        let data = sample_conflict_data();
+        let resolutions = vec![HunkResolution::AcceptLeft, HunkResolution::AcceptLeft];
+        let content = build_resolved_content(&data, &resolutions).unwrap();
+        let text = String::from_utf8(content).unwrap();
+        assert_eq!(text, "// header\nleft1\n// middle\nleft2\n// footer\n");
+    }
+
+    #[test]
+    fn build_resolved_content_mixed() {
+        let data = sample_conflict_data();
+        let resolutions = vec![HunkResolution::AcceptLeft, HunkResolution::AcceptRight];
+        let content = build_resolved_content(&data, &resolutions).unwrap();
+        let text = String::from_utf8(content).unwrap();
+        assert_eq!(text, "// header\nleft1\n// middle\nright2\n// footer\n");
+    }
+
+    #[test]
+    fn build_resolved_content_unresolved_returns_error() {
+        let data = sample_conflict_data();
+        let resolutions = vec![HunkResolution::AcceptLeft, HunkResolution::Unresolved];
+        let err = build_resolved_content(&data, &resolutions).unwrap_err();
+        assert_eq!(err, "not all hunks resolved");
+    }
+
+    #[test]
+    fn build_resolved_content_index_out_of_bounds() {
+        let data = sample_conflict_data();
+        // Only one resolution for two conflict hunks
+        let resolutions = vec![HunkResolution::AcceptLeft];
+        let err = build_resolved_content(&data, &resolutions).unwrap_err();
+        assert_eq!(err, "resolution index out of bounds");
+    }
+
+    #[test]
+    fn detail_enter_conflicted_file_emits_load_conflict_data() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        state.focus = PanelFocus::Detail;
+        state.set_detail_cursor_for_test(0); // conflicted file
+        let effects = dispatch(&mut state, Action::DetailEnter);
+        assert_eq!(
+            effects,
+            vec![Effect::LoadConflictData {
+                change_id: "abc".into(),
+                path: "src/main.rs".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn detail_enter_conflicted_file_not_working_copy_sets_error() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        // Make working copy different from cursor
+        state.graph = GraphData::new(
+            state.graph.lines.clone(),
+            state.graph.details.clone(),
+            None, // no working copy
+            String::new(),
+        );
+        state.focus = PanelFocus::Detail;
+        state.set_detail_cursor_for_test(0);
+        let effects = dispatch(&mut state, Action::DetailEnter);
+        assert!(effects.is_empty());
+        assert!(state.error.is_some());
+        assert!(state.error.as_deref().unwrap().contains("Ctrl-E"));
+    }
+
+    #[test]
+    fn detail_enter_non_conflicted_file_loads_diff() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        state.focus = PanelFocus::Detail;
+        state.set_detail_cursor_for_test(1); // Modified file, not conflicted
+        let effects = dispatch(&mut state, Action::DetailEnter);
+        assert_eq!(
+            effects,
+            vec![Effect::LoadFileDiff {
+                change_id: "abc".into(),
+                path: "src/lib.rs".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn conflict_data_loaded_ok_populates_view() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let data = sample_conflict_data();
+        let effects = dispatch(
+            &mut state,
+            Action::ConflictDataLoaded {
+                change_id: "abc".into(),
+                path: "src/main.rs".into(),
+                result: Ok(data),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.detail_mode, DetailMode::ConflictView);
+        let cv = state.conflict_view.as_ref().unwrap();
+        assert_eq!(cv.change_id, "abc");
+        assert_eq!(cv.path, "src/main.rs");
+        assert_eq!(cv.resolutions.len(), 2);
+        assert!(
+            cv.resolutions
+                .iter()
+                .all(|r| *r == HunkResolution::Unresolved)
+        );
+        assert_eq!(cv.cursor, 0);
+    }
+
+    #[test]
+    fn conflict_data_loaded_err_sets_error() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let effects = dispatch(
+            &mut state,
+            Action::ConflictDataLoaded {
+                change_id: "abc".into(),
+                path: "src/main.rs".into(),
+                result: Err("parse failed".into()),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("parse failed"));
+        assert!(state.conflict_view.is_none());
+    }
+
+    #[test]
+    fn conflict_accept_left_sets_resolution() {
+        let mut state = make_test_state_with_conflict_view();
+        dispatch(&mut state, Action::ConflictAcceptLeft);
+        let cv = state.conflict_view.as_ref().unwrap();
+        assert_eq!(cv.resolutions[0], HunkResolution::AcceptLeft);
+        assert_eq!(cv.resolutions[1], HunkResolution::Unresolved);
+    }
+
+    #[test]
+    fn conflict_accept_right_sets_resolution() {
+        let mut state = make_test_state_with_conflict_view();
+        dispatch(&mut state, Action::ConflictAcceptRight);
+        let cv = state.conflict_view.as_ref().unwrap();
+        assert_eq!(cv.resolutions[0], HunkResolution::AcceptRight);
+    }
+
+    #[test]
+    fn conflict_next_prev_hunk_navigation() {
+        let mut state = make_test_state_with_conflict_view();
+        assert_eq!(state.conflict_view.as_ref().unwrap().cursor, 0);
+
+        dispatch(&mut state, Action::ConflictNextHunk);
+        assert_eq!(state.conflict_view.as_ref().unwrap().cursor, 1);
+
+        // At max — stays
+        dispatch(&mut state, Action::ConflictNextHunk);
+        assert_eq!(state.conflict_view.as_ref().unwrap().cursor, 1);
+
+        dispatch(&mut state, Action::ConflictPrevHunk);
+        assert_eq!(state.conflict_view.as_ref().unwrap().cursor, 0);
+
+        // At min — stays
+        dispatch(&mut state, Action::ConflictPrevHunk);
+        assert_eq!(state.conflict_view.as_ref().unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn conflict_scroll_up_down() {
+        let mut state = make_test_state_with_conflict_view();
+        assert_eq!(state.conflict_view.as_ref().unwrap().scroll, 0);
+
+        dispatch(&mut state, Action::ConflictScrollDown);
+        assert_eq!(state.conflict_view.as_ref().unwrap().scroll, 1);
+
+        dispatch(&mut state, Action::ConflictScrollDown);
+        assert_eq!(state.conflict_view.as_ref().unwrap().scroll, 2);
+
+        dispatch(&mut state, Action::ConflictScrollUp);
+        assert_eq!(state.conflict_view.as_ref().unwrap().scroll, 1);
+
+        dispatch(&mut state, Action::ConflictScrollUp);
+        assert_eq!(state.conflict_view.as_ref().unwrap().scroll, 0);
+
+        // At zero — stays
+        dispatch(&mut state, Action::ConflictScrollUp);
+        assert_eq!(state.conflict_view.as_ref().unwrap().scroll, 0);
+    }
+
+    #[test]
+    fn conflict_confirm_all_resolved_emits_resolve_file() {
+        let mut state = make_test_state_with_conflict_view();
+        // Resolve both hunks
+        dispatch(&mut state, Action::ConflictAcceptLeft);
+        dispatch(&mut state, Action::ConflictNextHunk);
+        dispatch(&mut state, Action::ConflictAcceptRight);
+
+        let effects = dispatch(&mut state, Action::ConflictConfirm);
+        assert_eq!(effects.len(), 1);
+        match &effects[0] {
+            Effect::ResolveFile {
+                change_id,
+                path,
+                content,
+            } => {
+                assert_eq!(change_id, "abc");
+                assert_eq!(path, "src/main.rs");
+                let text = String::from_utf8(content.clone()).unwrap();
+                assert_eq!(text, "// header\nleft1\n// middle\nright2\n// footer\n");
+            }
+            other => panic!("Expected ResolveFile, got {other:?}"),
+        }
+        assert_eq!(state.pending_mutation, Some(MutationKind::ResolveConflict));
+    }
+
+    #[test]
+    fn conflict_confirm_unresolved_sets_error() {
+        let mut state = make_test_state_with_conflict_view();
+        // Only resolve first hunk
+        dispatch(&mut state, Action::ConflictAcceptLeft);
+
+        let effects = dispatch(&mut state, Action::ConflictConfirm);
+        assert!(effects.is_empty());
+        assert!(
+            state
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("not all hunks resolved")
+        );
+    }
+
+    #[test]
+    fn conflict_confirm_mutation_gate() {
+        let mut state = make_test_state_with_conflict_view();
+        state.pending_mutation = Some(MutationKind::Describe);
+        // Resolve all
+        dispatch(&mut state, Action::ConflictAcceptLeft);
+        dispatch(&mut state, Action::ConflictNextHunk);
+        dispatch(&mut state, Action::ConflictAcceptLeft);
+
+        let effects = dispatch(&mut state, Action::ConflictConfirm);
+        assert!(effects.is_empty());
+        assert!(
+            state
+                .status_message
+                .as_deref()
+                .unwrap()
+                .contains("Operation in progress")
+        );
+    }
+
+    #[test]
+    fn conflict_confirm_working_copy_gate() {
+        let mut state = make_test_state_with_conflict_view();
+        // Move working copy away from cursor
+        state.graph = GraphData::new(
+            state.graph.lines.clone(),
+            state.graph.details.clone(),
+            None,
+            String::new(),
+        );
+        dispatch(&mut state, Action::ConflictAcceptLeft);
+        dispatch(&mut state, Action::ConflictNextHunk);
+        dispatch(&mut state, Action::ConflictAcceptLeft);
+
+        let effects = dispatch(&mut state, Action::ConflictConfirm);
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("Ctrl-E"));
+    }
+
+    #[test]
+    fn conflict_launch_merge_emits_effect() {
+        let mut state = make_test_state_with_conflict_view();
+        let effects = dispatch(&mut state, Action::ConflictLaunchMerge);
+        assert_eq!(
+            effects,
+            vec![Effect::LaunchMergeTool {
+                change_id: "abc".into(),
+                path: "src/main.rs".into(),
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::ResolveConflict));
+    }
+
+    #[test]
+    fn conflict_launch_merge_mutation_gate() {
+        let mut state = make_test_state_with_conflict_view();
+        state.pending_mutation = Some(MutationKind::Describe);
+        let effects = dispatch(&mut state, Action::ConflictLaunchMerge);
+        assert!(effects.is_empty());
+        assert!(
+            state
+                .status_message
+                .as_deref()
+                .unwrap()
+                .contains("Operation in progress")
+        );
+    }
+
+    #[test]
+    fn conflict_launch_merge_working_copy_gate() {
+        let mut state = make_test_state_with_conflict_view();
+        state.graph = GraphData::new(
+            state.graph.lines.clone(),
+            state.graph.details.clone(),
+            None,
+            String::new(),
+        );
+        let effects = dispatch(&mut state, Action::ConflictLaunchMerge);
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("Ctrl-E"));
+    }
+
+    #[test]
+    fn conflict_launch_merge_from_file_list_conflicted() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        state.focus = PanelFocus::Detail;
+        state.set_detail_cursor_for_test(0); // src/main.rs is Conflicted
+        let effects = dispatch(&mut state, Action::ConflictLaunchMerge);
+        assert_eq!(
+            effects,
+            vec![Effect::LaunchMergeTool {
+                change_id: "abc".into(),
+                path: "src/main.rs".into(),
+            }]
+        );
+        assert_eq!(state.pending_mutation, Some(MutationKind::ResolveConflict));
+    }
+
+    #[test]
+    fn conflict_launch_merge_from_file_list_not_conflicted() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        state.focus = PanelFocus::Detail;
+        state.set_detail_cursor_for_test(1); // src/lib.rs is Modified, not conflicted
+        let effects = dispatch(&mut state, Action::ConflictLaunchMerge);
+        assert!(effects.is_empty());
+        assert_eq!(state.error.as_deref(), Some("File is not conflicted"));
+    }
+
+    #[test]
+    fn conflict_data_loaded_zero_conflicts_sets_error() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        let data = ConflictData {
+            regions: vec![ConflictRegion::Resolved("all resolved\n".into())],
+        };
+        let effects = dispatch(
+            &mut state,
+            Action::ConflictDataLoaded {
+                change_id: "abc".into(),
+                path: "src/main.rs".into(),
+                result: Ok(data),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.conflict_view.is_none());
+        assert!(
+            state
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("no conflict hunks")
+        );
+    }
+
+    #[test]
+    fn merge_tool_complete_clears_gate_and_exits_view() {
+        let mut state = make_test_state_with_conflict_view();
+        state.pending_mutation = Some(MutationKind::ResolveConflict);
+        let effects = dispatch(
+            &mut state,
+            Action::MergeToolComplete {
+                path: "src/main.rs".into(),
+                graph: None,
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.pending_mutation.is_none());
+        assert!(state.conflict_view.is_none());
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert!(
+            state
+                .status_message
+                .as_deref()
+                .unwrap()
+                .contains("Merge tool complete")
+        );
+    }
+
+    #[test]
+    fn merge_tool_complete_with_graph_installs_graph() {
+        let mut state = make_test_state_with_conflict_view();
+        state.pending_mutation = Some(MutationKind::ResolveConflict);
+        let new_graph = test_graph_with_changes(&["xxx"]);
+        dispatch(
+            &mut state,
+            Action::MergeToolComplete {
+                path: "src/main.rs".into(),
+                graph: Some((5, Ok(new_graph))),
+            },
+        );
+        assert_eq!(state.graph.lines.len(), 1);
+        assert_eq!(state.selected_change_id(), Some("xxx"));
+        assert!(state.conflict_view.is_none());
+    }
+
+    #[test]
+    fn merge_tool_failed_clears_gate_sets_error() {
+        let mut state = make_test_state_with_conflict_view();
+        state.pending_mutation = Some(MutationKind::ResolveConflict);
+        let effects = dispatch(
+            &mut state,
+            Action::MergeToolFailed {
+                path: "src/main.rs".into(),
+                error: "tool crashed".into(),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.pending_mutation.is_none());
+        assert!(state.error.as_deref().unwrap().contains("tool crashed"));
+        // Conflict view stays open on failure
+        assert!(state.conflict_view.is_some());
+    }
+
+    #[test]
+    fn next_conflict_file_jumps_to_next_conflicted() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        state.focus = PanelFocus::Detail;
+        state.set_detail_cursor_for_test(0); // first conflicted file
+        dispatch(&mut state, Action::NextConflictFile);
+        assert_eq!(state.detail_cursor(), 2); // second conflicted file
+    }
+
+    #[test]
+    fn next_conflict_file_wraps_around() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        state.focus = PanelFocus::Detail;
+        state.set_detail_cursor_for_test(2); // last conflicted file
+        dispatch(&mut state, Action::NextConflictFile);
+        assert_eq!(state.detail_cursor(), 0); // wraps to first
+    }
+
+    #[test]
+    fn prev_conflict_file_jumps_to_prev_conflicted() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        state.focus = PanelFocus::Detail;
+        state.set_detail_cursor_for_test(2); // second conflicted file
+        dispatch(&mut state, Action::PrevConflictFile);
+        assert_eq!(state.detail_cursor(), 0); // first conflicted file
+    }
+
+    #[test]
+    fn prev_conflict_file_wraps_around() {
+        let mut state = AppState::new(sample_graph_with_conflicted_file());
+        state.focus = PanelFocus::Detail;
+        state.set_detail_cursor_for_test(0); // first conflicted file
+        dispatch(&mut state, Action::PrevConflictFile);
+        assert_eq!(state.detail_cursor(), 2); // wraps to last
+    }
+
+    #[test]
+    fn detail_back_from_conflict_view_exits() {
+        let mut state = make_test_state_with_conflict_view();
+        dispatch(&mut state, Action::DetailBack);
+        assert!(state.conflict_view.is_none());
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+    }
+
+    #[test]
+    fn repo_op_success_resolve_conflict_exits_view() {
+        let mut state = make_test_state_with_conflict_view();
+        state.pending_mutation = Some(MutationKind::ResolveConflict);
+        dispatch(
+            &mut state,
+            Action::RepoOpSuccess {
+                op: MutationKind::ResolveConflict,
+                message: "resolved".into(),
+                graph: None,
+            },
+        );
+        assert!(state.conflict_view.is_none());
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert!(state.pending_mutation.is_none());
+        assert!(
+            state
+                .status_message
+                .as_deref()
+                .unwrap()
+                .contains("resolved")
+        );
+    }
+
+    #[test]
+    fn graph_loaded_exits_conflict_view_when_file_no_longer_conflicted() {
+        use lajjzy_core::types::FileChange;
+
+        let mut state = make_test_state_with_conflict_view();
+        let new_graph = GraphData::new(
+            vec![GraphLine {
+                raw: "◉  abc".into(),
+                change_id: Some("abc".into()),
+                glyph_prefix: String::new(),
+            }],
+            HashMap::from([(
+                "abc".into(),
+                ChangeDetail {
+                    commit_id: "a1".into(),
+                    author: "a".into(),
+                    email: "a@b".into(),
+                    timestamp: "1m".into(),
+                    description: "no longer conflicted".into(),
+                    bookmarks: vec![],
+                    is_empty: false,
+                    conflict_count: 0,
+                    files: vec![FileChange {
+                        path: "src/main.rs".into(),
+                        status: FileStatus::Modified, // no longer conflicted
+                    }],
+                    parents: vec![],
+                },
+            )]),
+            Some(0),
+            String::new(),
+        );
+
+        dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(new_graph),
+            },
+        );
+        assert!(state.conflict_view.is_none());
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert!(
+            state
+                .status_message
+                .as_deref()
+                .unwrap()
+                .contains("resolved externally")
+        );
+    }
+
+    #[test]
+    fn graph_loaded_keeps_conflict_view_when_still_conflicted() {
+        let mut state = make_test_state_with_conflict_view();
+        let same_graph = sample_graph_with_conflicted_file();
+
+        dispatch(
+            &mut state,
+            Action::GraphLoaded {
+                generation: 1,
+                result: Ok(same_graph),
+            },
+        );
+        assert!(state.conflict_view.is_some());
+        assert_eq!(state.detail_mode, DetailMode::ConflictView);
     }
 }

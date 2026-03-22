@@ -27,6 +27,7 @@ impl<'a> FileListWidget<'a> {
             FileStatus::Modified => Color::Yellow,
             FileStatus::Deleted => Color::Red,
             FileStatus::Renamed => Color::Cyan,
+            FileStatus::Conflicted => Color::LightRed,
             FileStatus::Unknown(_) => Color::Magenta,
         }
     }
@@ -53,7 +54,11 @@ impl Widget for FileListWidget<'_> {
 
             #[expect(clippy::cast_possible_truncation)] // i bounded by area.height (u16)
             let y = area.y + i as u16;
-            let line_text = format!("  {} {}", file.status, file.path);
+            let status_char = match file.status {
+                FileStatus::Conflicted => "⚠".to_string(),
+                other => other.to_string(),
+            };
+            let line_text = format!("  {} {}", status_char, file.path);
             let color = Self::status_color(file.status);
 
             let style = if i == self.cursor {
@@ -98,6 +103,49 @@ mod tests {
             .collect();
         assert!(line0.contains('A'));
         assert!(line0.contains("bar.txt"));
+    }
+
+    #[test]
+    fn renders_conflicted_file_with_warning_symbol() {
+        let files = vec![
+            FileChange {
+                path: "conflict.txt".into(),
+                status: FileStatus::Conflicted,
+            },
+            FileChange {
+                path: "normal.txt".into(),
+                status: FileStatus::Modified,
+            },
+        ];
+        let widget = FileListWidget::new(&files, 0, false);
+        let area = Rect::new(0, 0, 40, 4);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..40)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains('⚠'),
+            "Expected '⚠' for Conflicted file in: {line0:?}"
+        );
+        assert!(
+            !line0.contains('C'),
+            "Should not show 'C' for Conflicted file in: {line0:?}"
+        );
+        assert!(
+            line0.contains("conflict.txt"),
+            "Expected filename in: {line0:?}"
+        );
+
+        // Modified file should show 'M' not '⚠'
+        let line1: String = (0..40)
+            .map(|x| buf[(x, 1)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line1.contains('M'),
+            "Expected 'M' for Modified file in: {line1:?}"
+        );
     }
 
     #[test]

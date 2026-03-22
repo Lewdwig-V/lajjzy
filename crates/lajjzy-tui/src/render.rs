@@ -33,6 +33,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         &state.pending_background,
         state.target_pick.as_ref(),
         state.hunk_picker.as_ref(),
+        state.conflict_view.as_ref(),
     );
     frame.render_widget(status_widget, outer[1]);
 

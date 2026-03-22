@@ -1,4 +1,4 @@
-use lajjzy_core::types::{DiffHunk, FileDiff, GraphData, OpLogEntry};
+use lajjzy_core::types::{ConflictData, DiffHunk, FileDiff, GraphData, OpLogEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arity {
@@ -33,6 +33,7 @@ pub enum DetailMode {
     FileList,
     DiffView,
     HunkPicker,
+    ConflictView,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,6 +52,7 @@ pub enum MutationKind {
     GitFetch,
     RebaseSingle,
     RebaseWithDescendants,
+    ResolveConflict,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -165,4 +167,33 @@ pub enum Action {
     HunkPrevFile,
     HunkConfirm,
     HunkCancel,
+
+    // Conflict view actions
+    ConflictAcceptLeft,
+    ConflictAcceptRight,
+    ConflictConfirm,
+    ConflictLaunchMerge,
+    ConflictNextHunk,
+    ConflictPrevHunk,
+    ConflictScrollDown,
+    ConflictScrollUp,
+
+    // File list conflict navigation
+    NextConflictFile,
+    PrevConflictFile,
+
+    // Conflict effect results
+    ConflictDataLoaded {
+        change_id: String,
+        path: String,
+        result: Result<ConflictData, String>,
+    },
+    MergeToolComplete {
+        path: String,
+        graph: Option<(u64, Result<GraphData, String>)>,
+    },
+    MergeToolFailed {
+        path: String,
+        error: String,
+    },
 }

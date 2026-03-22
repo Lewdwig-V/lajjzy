@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use crate::backend::RepoBackend;
 use crate::types::GraphData;
@@ -60,6 +61,35 @@ impl JjCliBackend {
         }
 
         Ok(if stderr.is_empty() { stdout } else { stderr })
+    }
+
+    /// Open a jj-lib repo handle for read-only conflict data extraction.
+    ///
+    /// Reopened each call so it picks up mutations made by CLI commands.
+    fn open_jj_repo(&self) -> Result<Arc<jj_lib::repo::ReadonlyRepo>> {
+        use pollster::FutureExt as _;
+
+        let config = jj_lib::config::StackedConfig::with_defaults();
+        let settings = jj_lib::settings::UserSettings::from_config(config)
+            .map_err(|e| anyhow::anyhow!("Failed to create UserSettings: {e}"))?;
+        let store_factories = jj_lib::repo::StoreFactories::default();
+        let wc_factories = jj_lib::workspace::default_working_copy_factories();
+
+        let workspace = jj_lib::workspace::Workspace::load(
+            &settings,
+            &self.workspace_root,
+            &store_factories,
+            &wc_factories,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to load jj workspace: {e}"))?;
+
+        let repo = workspace
+            .repo_loader()
+            .load_at_head()
+            .block_on()
+            .map_err(|e| anyhow::anyhow!("Failed to load repo at head: {e}"))?;
+
+        Ok(repo)
     }
 }
 
@@ -133,6 +163,10 @@ fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
             path: after_status.trim().to_string(),
             status: crate::types::FileStatus::Renamed,
         }),
+        b'C' if after_status.starts_with(' ') => Some(crate::types::FileChange {
+            path: after_status.trim().to_string(),
+            status: crate::types::FileStatus::Conflicted,
+        }),
         c if c.is_ascii_uppercase() && after_status.starts_with(' ') => {
             Some(crate::types::FileChange {
                 path: after_status.trim().to_string(),
@@ -144,6 +178,7 @@ fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
 }
 
 /// Parse the raw output of `jj log` with our custom template into `GraphData`.
+#[expect(clippy::too_many_lines)]
 fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
     let mut lines = Vec::new();
     let mut details = std::collections::HashMap::new();
@@ -193,7 +228,7 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
                         fields[6].split(' ').map(String::from).collect()
                     },
                     is_empty: fields[7] == "true",
-                    has_conflict: fields[8] == "true",
+                    conflict_count: usize::from(fields[8] == "true"),
                     files: vec![],
                     parents: if fields[10].is_empty() {
                         vec![]
@@ -232,6 +267,32 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
              The jj template output format may have changed.",
             lines.len()
         );
+    }
+
+    // Sort files: conflicted first, then by status priority, then alphabetically.
+    // Also recompute conflict_count from actual file statuses (the template boolean
+    // only tells us "has conflicts", not the count).
+    for detail in details.values_mut() {
+        detail.files.sort_by(|a, b| {
+            fn sort_key(s: crate::types::FileStatus) -> u8 {
+                match s {
+                    crate::types::FileStatus::Conflicted => 0,
+                    crate::types::FileStatus::Modified => 1,
+                    crate::types::FileStatus::Added => 2,
+                    crate::types::FileStatus::Deleted => 3,
+                    crate::types::FileStatus::Renamed => 4,
+                    crate::types::FileStatus::Unknown(_) => 5,
+                }
+            }
+            sort_key(a.status)
+                .cmp(&sort_key(b.status))
+                .then(a.path.cmp(&b.path))
+        });
+        detail.conflict_count = detail
+            .files
+            .iter()
+            .filter(|f| f.status == crate::types::FileStatus::Conflicted)
+            .count();
     }
 
     Ok(GraphData::new(lines, details, working_copy_index, op_id))
@@ -676,6 +737,147 @@ impl RepoBackend for JjCliBackend {
         self.run_jj(&args)?;
         Ok(format!("Squashed from {change_id}"))
     }
+
+    fn conflict_sides(&self, change_id: &str, path: &str) -> Result<crate::types::ConflictData> {
+        use crate::types::{ConflictData, ConflictRegion};
+        use jj_lib::repo::Repo as _;
+        use pollster::FutureExt as _;
+
+        let repo = self.open_jj_repo()?;
+
+        // Resolve short change_id prefix to a commit.
+        // change_id.short() outputs reverse-hex format (alphabet: k-z + a-j),
+        // not standard hex. Use try_from_reverse_hex, not try_from_hex.
+        let prefix = jj_lib::object_id::HexPrefix::try_from_reverse_hex(change_id)
+            .ok_or_else(|| anyhow::anyhow!("Invalid change id: {change_id}"))?;
+        let resolution = repo
+            .resolve_change_id_prefix(&prefix)
+            .map_err(|e| anyhow::anyhow!("Index error resolving change id: {e}"))?;
+        let targets = match resolution {
+            jj_lib::object_id::PrefixResolution::NoMatch => {
+                bail!("Change id not found: {change_id}");
+            }
+            jj_lib::object_id::PrefixResolution::AmbiguousMatch => {
+                bail!("Ambiguous change id: {change_id}");
+            }
+            jj_lib::object_id::PrefixResolution::SingleMatch(t) => t,
+        };
+        let commit_id = targets
+            .targets
+            .first()
+            .map(|(id, _)| id)
+            .ok_or_else(|| anyhow::anyhow!("No commit for change id: {change_id}"))?;
+        let commit = repo
+            .store()
+            .get_commit(commit_id)
+            .map_err(|e| anyhow::anyhow!("Failed to load commit: {e}"))?;
+
+        // Get the merged tree value at the given path.
+        let repo_path = jj_lib::repo_path::RepoPathBuf::from_internal_string(path)
+            .map_err(|e| anyhow::anyhow!("Invalid repo path '{path}': {e}"))?;
+        let tree = commit.tree();
+        let value = tree
+            .path_value(&repo_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read tree path: {e}"))?;
+
+        if value.is_resolved() {
+            bail!("File is not conflicted: {path}");
+        }
+        if value.num_sides() > 2 {
+            bail!(
+                "Complex conflict ({}-way) — use external merge tool",
+                value.num_sides()
+            );
+        }
+
+        // Extract file IDs for each conflict side.
+        let file_merge = value
+            .to_file_merge()
+            .ok_or_else(|| anyhow::anyhow!("Conflict on non-file entry: {path}"))?;
+
+        // Get full file contents for each side (base, left, right).
+        let contents =
+            jj_lib::conflicts::extract_as_single_hunk(&file_merge, repo.store(), &repo_path)
+                .block_on()
+                .map_err(|e| anyhow::anyhow!("Failed to extract conflict hunks: {e}"))?;
+
+        // Use per-hunk merging to split into resolved and conflicted regions.
+        let merge_options = repo.store().merge_options().clone();
+        let merge_result = jj_lib::files::merge_hunks(&contents, &merge_options);
+
+        let mut regions = Vec::new();
+        match merge_result {
+            jj_lib::files::MergeResult::Resolved(content) => {
+                let text = String::from_utf8(content.to_vec()).map_err(|_| {
+                    anyhow::anyhow!(
+                        "File contains non-UTF8 content — use external merge tool (m key)"
+                    )
+                })?;
+                regions.push(ConflictRegion::Resolved(text));
+            }
+            jj_lib::files::MergeResult::Conflict(hunks) => {
+                for hunk in hunks {
+                    if let Some(resolved) = hunk.as_resolved() {
+                        let text = String::from_utf8(resolved.to_vec()).map_err(|_| {
+                            anyhow::anyhow!(
+                                "File contains non-UTF8 content — use external merge tool (m key)"
+                            )
+                        })?;
+                        regions.push(ConflictRegion::Resolved(text));
+                    } else {
+                        // For a 2-sided conflict: first()=left, get_remove(0)=base, get_add(1)=right
+                        let left_bytes = hunk.first();
+                        let base_bytes = hunk.get_remove(0).ok_or_else(|| {
+                            anyhow::anyhow!("Missing base side for conflict in '{path}'")
+                        })?;
+                        let right_bytes = hunk.get_add(1).ok_or_else(|| {
+                            anyhow::anyhow!("Missing right side for conflict in '{path}'")
+                        })?;
+
+                        let left = String::from_utf8(left_bytes.to_vec()).map_err(|_| {
+                            anyhow::anyhow!(
+                                "File contains non-UTF8 content — use external merge tool (m key)"
+                            )
+                        })?;
+                        let base = String::from_utf8(base_bytes.to_vec()).map_err(|_| {
+                            anyhow::anyhow!(
+                                "File contains non-UTF8 content — use external merge tool (m key)"
+                            )
+                        })?;
+                        let right = String::from_utf8(right_bytes.to_vec()).map_err(|_| {
+                            anyhow::anyhow!(
+                                "File contains non-UTF8 content — use external merge tool (m key)"
+                            )
+                        })?;
+
+                        // Empty string means deletion — this is the expected representation
+                        // for a side that deleted the file/region.
+                        regions.push(ConflictRegion::Conflict { base, left, right });
+                    }
+                }
+            }
+        }
+
+        Ok(ConflictData { regions })
+    }
+
+    fn resolve_file(&self, change_id: &str, path: &str, content: Vec<u8>) -> Result<String> {
+        // Defense-in-depth: verify change_id is the working copy
+        let wc_id = self
+            .run_jj(&["log", "-r", "@", "--no-graph", "-T", "change_id.short()"])
+            .context("Failed to verify working copy")?;
+        if wc_id.trim() != change_id {
+            bail!(
+                "resolve_file: change {} is not the working copy (@={})",
+                change_id,
+                wc_id.trim()
+            );
+        }
+        let abs_path = self.workspace_root.join(path);
+        std::fs::write(&abs_path, &content)
+            .with_context(|| format!("Failed to write resolved file: {}", abs_path.display()))?;
+        Ok(format!("Resolved {path}"))
+    }
 }
 
 #[cfg(test)]
@@ -789,10 +991,11 @@ mod tests {
 
         let detail = graph.details.get("mpvponzr").unwrap();
         assert_eq!(detail.files.len(), 2);
-        assert_eq!(detail.files[0].path, "bar.txt");
-        assert_eq!(detail.files[0].status, crate::types::FileStatus::Added);
-        assert_eq!(detail.files[1].path, "foo.txt");
-        assert_eq!(detail.files[1].status, crate::types::FileStatus::Modified);
+        // After sort: Modified before Added (sort_key M=1 < A=2)
+        assert_eq!(detail.files[0].path, "foo.txt");
+        assert_eq!(detail.files[0].status, crate::types::FileStatus::Modified);
+        assert_eq!(detail.files[1].path, "bar.txt");
+        assert_eq!(detail.files[1].status, crate::types::FileStatus::Added);
 
         let detail2 = graph.details.get("mrvmvrsz").unwrap();
         assert_eq!(detail2.files.len(), 1);
@@ -840,6 +1043,50 @@ mod tests {
         let graph = parse_graph_output(output, String::new()).unwrap();
         let detail = graph.details.get("abc").unwrap();
         assert!(detail.files.is_empty());
+    }
+
+    #[test]
+    fn parse_file_line_conflicted() {
+        let result = parse_file_line("│  C conflict.txt");
+        assert!(result.is_some());
+        let change = result.unwrap();
+        assert_eq!(change.path, "conflict.txt");
+        assert_eq!(change.status, crate::types::FileStatus::Conflicted);
+    }
+
+    #[test]
+    fn parse_graph_output_files_sort_conflicted_first() {
+        // Conflicted file listed last in raw output; after sort it must be first.
+        let output = "\
+@  abc conflict\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Econflict\x1E\x1Efalse\x1Efalse\x1E@\x1E
+│  A added.txt
+│  M modified.txt
+│  C conflict.txt";
+
+        let graph = parse_graph_output(output, String::new()).unwrap();
+        let detail = graph.details.get("abc").unwrap();
+        assert_eq!(detail.files.len(), 3);
+        assert_eq!(detail.files[0].status, crate::types::FileStatus::Conflicted);
+        assert_eq!(detail.files[0].path, "conflict.txt");
+        assert_eq!(detail.files[1].status, crate::types::FileStatus::Modified);
+        assert_eq!(detail.files[2].status, crate::types::FileStatus::Added);
+    }
+
+    #[test]
+    fn parse_graph_output_files_sort_alpha_within_status() {
+        // Within the same status, files should sort alphabetically.
+        let output = "\
+@  abc alpha\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Ealpha\x1E\x1Efalse\x1Efalse\x1E@\x1E
+│  A zoo.txt
+│  A alpha.txt
+│  A mid.txt";
+
+        let graph = parse_graph_output(output, String::new()).unwrap();
+        let detail = graph.details.get("abc").unwrap();
+        assert_eq!(detail.files.len(), 3);
+        assert_eq!(detail.files[0].path, "alpha.txt");
+        assert_eq!(detail.files[1].path, "mid.txt");
+        assert_eq!(detail.files[2].path, "zoo.txt");
     }
 
     #[test]

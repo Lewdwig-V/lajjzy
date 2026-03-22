@@ -1,4 +1,4 @@
-use crate::types::{FileDiff, GraphData};
+use crate::types::{ConflictData, FileDiff, GraphData};
 use anyhow::Result;
 
 /// Abstraction over jj repo access. Implementations may shell out to jj CLI
@@ -83,4 +83,13 @@ pub trait RepoBackend: Send + Sync {
         change_id: &str,
         selections: &[crate::types::FileHunkSelection],
     ) -> Result<String>;
+
+    /// Load structured conflict data for a file in a change.
+    /// Returns regions of resolved content interleaved with conflict hunks.
+    /// Returns Err for n-way conflicts (> 2 sides) or binary files.
+    fn conflict_sides(&self, change_id: &str, path: &str) -> Result<ConflictData>;
+
+    /// Write resolved file content to the working copy.
+    /// The change must be @ (enforced by dispatch before emitting the effect).
+    fn resolve_file(&self, change_id: &str, path: &str, content: Vec<u8>) -> Result<String>;
 }

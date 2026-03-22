@@ -1,6 +1,17 @@
 use std::collections::HashSet;
 
-use lajjzy_core::types::{ChangeDetail, DiffHunk, DiffLine, GraphData};
+use lajjzy_core::types::{
+    ChangeDetail, ConflictData, ConflictRegion, DiffHunk, DiffLine, GraphData,
+};
+
+/// Per-hunk resolution state for the conflict view.
+/// Lives in lajjzy-tui because it is only used by dispatch and widgets — never by the backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HunkResolution {
+    Unresolved,
+    AcceptLeft,
+    AcceptRight,
+}
 
 pub use crate::action::{Action, BackgroundKind, DetailMode, MutationKind, PanelFocus};
 use crate::action::{HunkPickerOp, RebaseMode};
@@ -48,6 +59,41 @@ pub struct PickerHunk {
     pub selected: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConflictView {
+    pub change_id: String,
+    pub path: String,
+    pub data: ConflictData,
+    /// Per conflict hunk resolution state. Parallel to Conflict variants only.
+    pub resolutions: Vec<HunkResolution>,
+    /// Cursor indexes into conflict hunks only (0..N).
+    pub cursor: usize,
+    pub scroll: usize,
+    pub viewport_height: usize,
+}
+
+impl ConflictView {
+    /// Construct a `ConflictView` with the `resolutions` array guaranteed to match
+    /// the number of `Conflict` regions in `data`. This enforces the parallel-array
+    /// invariant at the single construction site.
+    pub fn new(change_id: String, path: String, data: ConflictData) -> Self {
+        let conflict_count = data
+            .regions
+            .iter()
+            .filter(|r| matches!(r, ConflictRegion::Conflict { .. }))
+            .count();
+        Self {
+            change_id,
+            path,
+            data,
+            resolutions: vec![HunkResolution::Unresolved; conflict_count],
+            cursor: 0,
+            scroll: 0,
+            viewport_height: 0,
+        }
+    }
+}
+
 pub struct AppState {
     pub graph: GraphData,
     pub(crate) cursor: usize,
@@ -72,6 +118,7 @@ pub struct AppState {
     pub(crate) omnibar_fallback_idx: Option<usize>,
     pub target_pick: Option<TargetPick>,
     pub hunk_picker: Option<HunkPicker>,
+    pub conflict_view: Option<ConflictView>,
 }
 
 impl AppState {
@@ -99,6 +146,7 @@ impl AppState {
             omnibar_fallback_idx: None,
             target_pick: None,
             hunk_picker: None,
+            conflict_view: None,
         }
     }
 

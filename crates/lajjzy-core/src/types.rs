@@ -48,7 +48,7 @@ pub struct ChangeDetail {
     pub description: String,
     pub bookmarks: Vec<String>,
     pub is_empty: bool,
-    pub has_conflict: bool,
+    pub conflict_count: usize,
     pub files: Vec<FileChange>,
     pub parents: Vec<String>,
 }
@@ -67,6 +67,7 @@ pub enum FileStatus {
     Deleted,
     /// Rename: path contains `{old => new}` format from jj.
     Renamed,
+    Conflicted,
     /// Unknown status code from jj — displayed as-is.
     Unknown(char),
 }
@@ -78,6 +79,7 @@ impl std::fmt::Display for FileStatus {
             Self::Modified => write!(f, "M"),
             Self::Deleted => write!(f, "D"),
             Self::Renamed => write!(f, "R"),
+            Self::Conflicted => write!(f, "C"),
             Self::Unknown(c) => write!(f, "{c}"),
         }
     }
@@ -96,6 +98,26 @@ pub struct FileHunkSelection {
     pub path: String,
     pub selected_hunks: Vec<usize>,
     pub total_hunks: usize,
+}
+
+/// Structured conflict data for a single file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConflictData {
+    pub regions: Vec<ConflictRegion>,
+}
+
+/// A region of a conflicted file — either resolved content or a conflict hunk.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConflictRegion {
+    /// Non-conflicting content between conflict hunks.
+    Resolved(String),
+    /// A single conflict hunk with its three sides.
+    /// An empty string for any side means that side deleted the file/region.
+    Conflict {
+        base: String,
+        left: String,
+        right: String,
+    },
 }
 
 /// A hunk from a file diff (parsed from `jj diff --git`).
@@ -198,7 +220,7 @@ mod tests {
                         description: "fix: resolve parser bug".into(),
                         bookmarks: vec!["main".into()],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -213,7 +235,7 @@ mod tests {
                         description: "feat: add retry logic".into(),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -228,7 +250,7 @@ mod tests {
                         description: String::new(),
                         bookmarks: vec![],
                         is_empty: true,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },

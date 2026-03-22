@@ -126,6 +126,15 @@ impl<'a> GraphWidget<'a> {
                     Style::default().fg(Color::Magenta),
                 ));
             }
+
+            // Conflict indicator in yellow
+            if detail.conflict_count > 0 {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(
+                    format!("⚠{}", detail.conflict_count),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
         } else {
             // No detail — fall back to the raw tail after the glyph prefix
             debug_assert!(
@@ -239,7 +248,7 @@ mod tests {
                         description: "first".into(),
                         bookmarks: vec![],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -254,7 +263,7 @@ mod tests {
                         description: "second".into(),
                         bookmarks: vec!["main".into()],
                         is_empty: false,
-                        has_conflict: false,
+                        conflict_count: 0,
                         files: vec![],
                         parents: vec![],
                     },
@@ -386,6 +395,52 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::REVERSED),
             "non-excluded change 'def' at cursor should be REVERSED (highlighted)"
+        );
+    }
+
+    #[test]
+    fn graph_renders_conflict_indicator() {
+        // Build a graph where "abc" has conflict_count > 0.
+        let graph = GraphData::new(
+            vec![GraphLine {
+                raw: "◉  abc conflicted change".into(),
+                change_id: Some("abc".into()),
+                glyph_prefix: "◉  ".into(),
+            }],
+            HashMap::from([(
+                "abc".into(),
+                ChangeDetail {
+                    commit_id: "aaa".into(),
+                    author: "alice".into(),
+                    email: "alice@ex.com".into(),
+                    timestamp: "1m ago".into(),
+                    description: "conflicted change".into(),
+                    bookmarks: vec![],
+                    is_empty: false,
+                    conflict_count: 3,
+                    files: vec![],
+                    parents: vec![],
+                },
+            )]),
+            Some(0),
+            String::new(),
+        );
+
+        let widget = GraphWidget::new(&graph, 0);
+        let area = Rect::new(0, 0, 80, 2);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..80)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains('⚠'),
+            "Expected '⚠' conflict indicator in: {line0:?}"
+        );
+        assert!(
+            line0.contains('3'),
+            "Expected conflict count '3' in: {line0:?}"
         );
     }
 

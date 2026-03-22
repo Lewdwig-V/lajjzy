@@ -69,6 +69,21 @@ pub enum Effect {
         query: String,
     },
 
+    // Conflict handling
+    LoadConflictData {
+        change_id: String,
+        path: String,
+    },
+    ResolveFile {
+        change_id: String,
+        path: String,
+        content: Vec<u8>,
+    },
+    LaunchMergeTool {
+        change_id: String,
+        path: String,
+    },
+
     // Non-repo
     SuspendForEditor {
         change_id: String,

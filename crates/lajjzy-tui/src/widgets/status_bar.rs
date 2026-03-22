@@ -9,7 +9,7 @@ use ratatui::widgets::Widget;
 use lajjzy_core::types::ChangeDetail;
 
 use crate::action::{BackgroundKind, HunkPickerOp, RebaseMode};
-use crate::app::{HunkPicker, PickingMode, TargetPick};
+use crate::app::{ConflictView, HunkPicker, HunkResolution, PickingMode, TargetPick};
 
 pub struct StatusBarWidget<'a> {
     change_id: Option<&'a str>,
@@ -20,6 +20,7 @@ pub struct StatusBarWidget<'a> {
     pending_background: &'a HashSet<BackgroundKind>,
     target_pick: Option<&'a TargetPick>,
     hunk_picker: Option<&'a HunkPicker>,
+    conflict_view: Option<&'a ConflictView>,
 }
 
 impl<'a> StatusBarWidget<'a> {
@@ -33,6 +34,7 @@ impl<'a> StatusBarWidget<'a> {
         pending_background: &'a HashSet<BackgroundKind>,
         target_pick: Option<&'a TargetPick>,
         hunk_picker: Option<&'a HunkPicker>,
+        conflict_view: Option<&'a ConflictView>,
     ) -> Self {
         Self {
             change_id,
@@ -43,6 +45,7 @@ impl<'a> StatusBarWidget<'a> {
             pending_background,
             target_pick,
             hunk_picker,
+            conflict_view,
         }
     }
 }
@@ -118,6 +121,23 @@ impl Widget for StatusBarWidget<'_> {
         if let Some(msg) = self.status_message {
             let style = Style::default().fg(Color::Green);
             let line = Line::styled(msg, style);
+            buf.set_line(area.x, area.y, &line, area.width);
+            return;
+        }
+
+        if let Some(cv) = self.conflict_view {
+            let total = cv.resolutions.len();
+            let current = cv.cursor + 1;
+            let state_str = match cv.resolutions.get(cv.cursor) {
+                Some(HunkResolution::Unresolved) | None => "unresolved",
+                Some(HunkResolution::AcceptLeft) => "left (ours)",
+                Some(HunkResolution::AcceptRight) => "right (theirs)",
+            };
+            let text = format!(
+                "Hunk {current}/{total}: {state_str} | 1: left | 2: right | n: next | m: merge tool"
+            );
+            let style = Style::default().fg(Color::Yellow);
+            let line = Line::styled(text, style);
             buf.set_line(area.x, area.y, &line, area.width);
             return;
         }
@@ -201,7 +221,7 @@ mod tests {
             description: "fix: parser bug".into(),
             bookmarks: vec!["main".into()],
             is_empty: false,
-            has_conflict: false,
+            conflict_count: 0,
             files: vec![],
             parents: vec![],
         }
@@ -218,6 +238,7 @@ mod tests {
             None,
             None,
             &bg,
+            None,
             None,
             None,
         );
@@ -250,6 +271,7 @@ mod tests {
             &bg,
             None,
             None,
+            None,
         );
         let area = Rect::new(0, 0, 40, 2);
         let mut buf = Buffer::empty(area);
@@ -265,7 +287,7 @@ mod tests {
     #[test]
     fn renders_nothing_when_no_detail_and_no_error() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None, None);
         let area = Rect::new(0, 0, 40, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -279,8 +301,17 @@ mod tests {
     #[test]
     fn renders_status_message_in_green() {
         let bg = empty_bg();
-        let widget =
-            StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg, None, None);
+        let widget = StatusBarWidget::new(
+            None,
+            None,
+            None,
+            Some("Pushed ok"),
+            None,
+            &bg,
+            None,
+            None,
+            None,
+        );
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -304,6 +335,7 @@ mod tests {
             &bg,
             None,
             None,
+            None,
         );
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
@@ -321,7 +353,7 @@ mod tests {
     fn renders_pushing_indicator_in_cyan() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -337,7 +369,7 @@ mod tests {
     fn renders_fetching_indicator_in_cyan() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Fetch);
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -354,7 +386,7 @@ mod tests {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
         bg.insert(BackgroundKind::Fetch);
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None, None);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -369,8 +401,17 @@ mod tests {
     fn status_message_takes_priority_over_pending_indicator() {
         let mut bg: HashSet<BackgroundKind> = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget =
-            StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg, None, None);
+        let widget = StatusBarWidget::new(
+            None,
+            None,
+            None,
+            Some("Pushed ok"),
+            None,
+            &bg,
+            None,
+            None,
+            None,
+        );
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -394,6 +435,7 @@ mod tests {
             &bg,
             None,
             None,
+            None,
         );
         let area = Rect::new(0, 0, 60, 1);
         let mut buf = Buffer::empty(area);
@@ -413,7 +455,17 @@ mod tests {
     fn active_revset_takes_priority_over_pending_indicator() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, None, Some("mine()"), &bg, None, None);
+        let widget = StatusBarWidget::new(
+            None,
+            None,
+            None,
+            None,
+            Some("mine()"),
+            &bg,
+            None,
+            None,
+            None,
+        );
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -451,7 +503,8 @@ mod tests {
     fn status_bar_shows_picking_mode_text() {
         let bg = empty_bg();
         let pick = sample_pick_single();
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick), None);
+        let widget =
+            StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick), None, None);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -474,7 +527,8 @@ mod tests {
     fn status_bar_shows_blast_radius() {
         let bg = empty_bg();
         let pick = sample_pick_with_descendants();
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick), None);
+        let widget =
+            StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick), None, None);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -496,7 +550,8 @@ mod tests {
         pick.picking = PickingMode::Filtering {
             query: "main".into(),
         };
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick), None);
+        let widget =
+            StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick), None, None);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -522,6 +577,7 @@ mod tests {
             None,
             &bg,
             Some(&pick),
+            None,
             None,
         );
         let area = Rect::new(0, 0, 80, 1);
@@ -605,7 +661,7 @@ mod tests {
     fn status_bar_shows_hunk_picker_split() {
         let bg = empty_bg();
         let hp = sample_hunk_picker_split();
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, Some(&hp));
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, Some(&hp), None);
         let area = Rect::new(0, 0, 100, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -632,7 +688,7 @@ mod tests {
     fn status_bar_shows_hunk_picker_squash() {
         let bg = empty_bg();
         let hp = sample_hunk_picker_squash();
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, Some(&hp));
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, Some(&hp), None);
         let area = Rect::new(0, 0, 100, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -665,6 +721,7 @@ mod tests {
             &bg,
             None,
             Some(&hp),
+            None,
         );
         let area = Rect::new(0, 0, 100, 1);
         let mut buf = Buffer::empty(area);
