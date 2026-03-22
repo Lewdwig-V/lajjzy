@@ -54,6 +54,15 @@ impl HelpWidget {
                 ("n/N", "Next/previous hunk"),
                 ("Esc", "Return to file list"),
             ],
+            HelpContext::ConflictView => vec![
+                ("1", "Accept left (ours)"),
+                ("2", "Accept right (theirs)"),
+                ("n/N", "Next/previous conflict hunk"),
+                ("j/k", "Scroll"),
+                ("m", "Launch external merge tool"),
+                ("Enter", "Confirm all resolutions"),
+                ("Esc", "Cancel (discard selections)"),
+            ],
         }
     }
 }
@@ -64,6 +73,7 @@ impl Widget for HelpWidget {
             HelpContext::Graph => "Help — Graph",
             HelpContext::DetailFileList => "Help — File List",
             HelpContext::DetailDiffView => "Help — Diff View",
+            HelpContext::ConflictView => "Help — Conflict View",
         };
         let block = Block::default()
             .borders(Borders::ALL)

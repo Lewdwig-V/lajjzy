@@ -617,8 +617,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 PanelFocus::Detail => match state.detail_mode {
                     DetailMode::FileList => HelpContext::DetailFileList,
                     DetailMode::DiffView => HelpContext::DetailDiffView,
-                    // Use Graph context for HunkPicker/ConflictView until dedicated help is added
-                    DetailMode::HunkPicker | DetailMode::ConflictView => HelpContext::Graph,
+                    DetailMode::HunkPicker => HelpContext::Graph,
+                    DetailMode::ConflictView => HelpContext::ConflictView,
                 },
             };
             state.modal = Some(Modal::Help { context, scroll: 0 });
