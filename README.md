@@ -117,7 +117,12 @@ See `CLAUDE.md` for architectural constraints and crate structure.
 - **M3d — Autocomplete**: for jj revset query language syntax in the Omnibar
 - **M4 — Conflict Handling**: conflict file navigation, 3-way merge view, external merge tool launch
 - **M5 — Forge Integration**: Gerrit, GitHub, GitLab — review status in graph, push-for-review
-- **M6 — Polish**: configurable keymap, theming, mouse support, packaging, collapsible debug pane which shows which jj commands we are running, move hunks in hunk picker
+- **M6a — Polish**: configurable keymaps
+- **M6b — Polish**: theming support; colour sets; nerd font support; noto emoji font support; statusline font support.
+- **M6c — Polish**: basic mouse support
+- **M6d — Polish**: release packaging; enable easy publishing to crates.io; `cargo install lajjzy`, `cargo binstall` support; Nix flake (jj community leans heavily on Nix) 
+- **M6e — Polish**: collapsible command log pane which shows which jj commands we run on behalf of the user
+- **M6f — Polish**: `jj move` hunks in hunk picker; other advanced rebasing workflows (if not too niche) 
 - **M7 — Parallel Branches**: lane view for concurrent work (git-butler model)
 - **M8 — Gerrit Depth**: patchset comparison, review actions, inline comments
 - **M9 — GitHub/GitLab Stacked PRs**: Graphite-style stack-aware PR management
