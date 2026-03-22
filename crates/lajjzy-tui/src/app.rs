@@ -6,6 +6,9 @@ use lajjzy_core::types::{
 };
 use ratatui::layout::Rect;
 
+/// Cached layout rectangles from the last render, used for mouse hit-testing.
+/// Use `from_outer_rects` to construct — it derives inner rects from outer rects
+/// so the border inset is defined in one place.
 #[derive(Debug, Clone, Default)]
 pub struct LayoutRects {
     pub graph_inner: Rect,
@@ -14,6 +17,30 @@ pub struct LayoutRects {
     pub detail_outer: Rect,
     pub modal_area: Option<Rect>,
     pub graph_scroll_offset: usize,
+}
+
+impl LayoutRects {
+    /// Construct layout rects from outer panel areas. Inner rects are derived
+    /// by shrinking by 1 cell on each side (matching `Borders::ALL`).
+    pub fn from_outer_rects(graph_outer: Rect, detail_outer: Rect) -> Self {
+        Self {
+            graph_inner: shrink_by_border(graph_outer),
+            detail_inner: shrink_by_border(detail_outer),
+            graph_outer,
+            detail_outer,
+            modal_area: None,
+            graph_scroll_offset: 0,
+        }
+    }
+}
+
+fn shrink_by_border(r: Rect) -> Rect {
+    Rect::new(
+        r.x + 1,
+        r.y + 1,
+        r.width.saturating_sub(2),
+        r.height.saturating_sub(2),
+    )
 }
 
 /// Per-hunk resolution state for the conflict view.

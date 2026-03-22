@@ -227,8 +227,10 @@ pub enum Action {
     ClickFocusDetail,
     ScrollUp {
         count: usize,
+        panel: PanelFocus,
     },
     ScrollDown {
         count: usize,
+        panel: PanelFocus,
     },
 }

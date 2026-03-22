@@ -46,11 +46,8 @@ fn handle_click(col: u16, row: u16, layout: &LayoutRects, state: &AppState) -> O
         return None;
     }
 
-    // Click in graph inner area
+    // Click in graph inner area — focus + select in one action (lazygit style)
     if hit_test(layout.graph_inner, col, row) {
-        if state.focus != PanelFocus::Graph {
-            return Some(Action::ClickFocusGraph);
-        }
         let viewport_row = (row - layout.graph_inner.y) as usize;
         let absolute_line = layout.graph_scroll_offset + viewport_row;
         return Some(Action::ClickGraphNode {
@@ -58,13 +55,19 @@ fn handle_click(col: u16, row: u16, layout: &LayoutRects, state: &AppState) -> O
         });
     }
 
-    // Click in detail inner area
+    // Click in detail inner area — focus + select in one action
     if hit_test(layout.detail_inner, col, row) {
-        if state.focus != PanelFocus::Detail {
-            return Some(Action::ClickFocusDetail);
-        }
         let row_offset = (row - layout.detail_inner.y) as usize;
         return Some(Action::ClickDetailItem { index: row_offset });
+    }
+
+    // Click on graph border (not inner) — just focus
+    if hit_test(layout.graph_outer, col, row) {
+        return Some(Action::ClickFocusGraph);
+    }
+    // Click on detail border — just focus
+    if hit_test(layout.detail_outer, col, row) {
+        return Some(Action::ClickFocusDetail);
     }
 
     None
@@ -89,14 +92,25 @@ fn handle_scroll(
         }
         return None;
     }
-    if hit_test(layout.graph_outer, col, row) || hit_test(layout.detail_outer, col, row) {
+    // Determine which pane the scroll is over — scroll targets the hovered pane,
+    // not the focused pane, so scrolling an unfocused pane works correctly.
+    let panel = if hit_test(layout.graph_outer, col, row) {
+        Some(PanelFocus::Graph)
+    } else if hit_test(layout.detail_outer, col, row) {
+        Some(PanelFocus::Detail)
+    } else {
+        None
+    };
+    if let Some(panel) = panel {
         return Some(if up {
             Action::ScrollUp {
                 count: SCROLL_LINES,
+                panel,
             }
         } else {
             Action::ScrollDown {
                 count: SCROLL_LINES,
+                panel,
             }
         });
     }
@@ -244,22 +258,43 @@ mod tests {
     }
 
     #[test]
-    fn click_detail_when_graph_focused_switches_focus() {
+    fn click_detail_when_graph_focused_selects_item() {
         let state = make_state_with_layout(default_layout());
-        // focus defaults to Graph; click in detail_inner
+        // focus defaults to Graph; click in detail_inner — focus + select in one click
         let event = make_event(MouseEventKind::Down(MouseButton::Left), 45, 5);
         let action = map_mouse_event(event, &state);
-        assert_eq!(action, Some(Action::ClickFocusDetail));
+        // detail_inner.y = 1, click row 5 => offset 4
+        assert_eq!(action, Some(Action::ClickDetailItem { index: 4 }));
     }
 
     #[test]
-    fn click_graph_when_detail_focused_switches_focus() {
+    fn click_graph_when_detail_focused_selects_node() {
         let mut state = make_state_with_layout(default_layout());
         state.focus = PanelFocus::Detail;
-        // click inside graph_inner
+        // click inside graph_inner — focus + select in one click
         let event = make_event(MouseEventKind::Down(MouseButton::Left), 5, 5);
         let action = map_mouse_event(event, &state);
+        // graph_inner.y = 1, click row 5 => viewport row 4, absolute = 0 + 4 = 4
+        assert_eq!(action, Some(Action::ClickGraphNode { line_index: 4 }));
+    }
+
+    #[test]
+    fn click_graph_border_only_focuses() {
+        let mut state = make_state_with_layout(default_layout());
+        state.focus = PanelFocus::Detail;
+        // Click at (0, 0) — graph_outer but not graph_inner (border)
+        let event = make_event(MouseEventKind::Down(MouseButton::Left), 0, 0);
+        let action = map_mouse_event(event, &state);
         assert_eq!(action, Some(Action::ClickFocusGraph));
+    }
+
+    #[test]
+    fn click_detail_border_only_focuses() {
+        let state = make_state_with_layout(default_layout());
+        // detail_outer starts at x=40. Click at (40, 0) — border, not inner
+        let event = make_event(MouseEventKind::Down(MouseButton::Left), 40, 0);
+        let action = map_mouse_event(event, &state);
+        assert_eq!(action, Some(Action::ClickFocusDetail));
     }
 
     #[test]
@@ -280,7 +315,13 @@ mod tests {
         // col=5, row=5 is inside graph_outer
         let event = make_event(MouseEventKind::ScrollUp, 5, 5);
         let action = map_mouse_event(event, &state);
-        assert_eq!(action, Some(Action::ScrollUp { count: 3 }));
+        assert_eq!(
+            action,
+            Some(Action::ScrollUp {
+                count: 3,
+                panel: PanelFocus::Graph
+            })
+        );
     }
 
     #[test]
@@ -289,7 +330,13 @@ mod tests {
         // col=45, row=5 is inside detail_outer
         let event = make_event(MouseEventKind::ScrollDown, 45, 5);
         let action = map_mouse_event(event, &state);
-        assert_eq!(action, Some(Action::ScrollDown { count: 3 }));
+        assert_eq!(
+            action,
+            Some(Action::ScrollDown {
+                count: 3,
+                panel: PanelFocus::Detail
+            })
+        );
     }
 
     #[test]
@@ -422,12 +469,13 @@ mod tests {
     // ── border / boundary tests ──────────────────────────────────────────────
 
     #[test]
-    fn click_on_border_returns_none() {
-        let state = make_state_with_layout(default_layout());
-        // (0,0) is on the graph_outer border, not inside graph_inner (which starts at 1,1)
+    fn click_on_graph_border_focuses_graph() {
+        let mut state = make_state_with_layout(default_layout());
+        state.focus = PanelFocus::Detail;
+        // (0,0) is on the graph_outer border, not inside graph_inner
         let event = make_event(MouseEventKind::Down(MouseButton::Left), 0, 0);
         let action = map_mouse_event(event, &state);
-        assert_eq!(action, None);
+        assert_eq!(action, Some(Action::ClickFocusGraph));
     }
 
     // ── mode guard tests ─────────────────────────────────────────────────────
@@ -485,5 +533,19 @@ mod tests {
         assert!(!hit_test(rect, 30, 10)); // right of rect (x + width)
         assert!(!hit_test(rect, 10, 9)); // above rect
         assert!(!hit_test(rect, 10, 20)); // below rect (y + height)
+    }
+
+    #[test]
+    fn right_click_ignored() {
+        let state = make_state_with_layout(default_layout());
+        let event = make_event(MouseEventKind::Down(MouseButton::Right), 5, 5);
+        assert_eq!(map_mouse_event(event, &state), None);
+    }
+
+    #[test]
+    fn middle_click_ignored() {
+        let state = make_state_with_layout(default_layout());
+        let event = make_event(MouseEventKind::Down(MouseButton::Middle), 5, 5);
+        assert_eq!(map_mouse_event(event, &state), None);
     }
 }

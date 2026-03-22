@@ -16,20 +16,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let main =
         Layout::horizontal([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)]).split(outer[0]);
 
-    state.layout.graph_outer = main[0];
-    state.layout.graph_inner = Rect::new(
-        main[0].x + 1,
-        main[0].y + 1,
-        main[0].width.saturating_sub(2),
-        main[0].height.saturating_sub(2),
-    );
-    state.layout.detail_outer = main[1];
-    state.layout.detail_inner = Rect::new(
-        main[1].x + 1,
-        main[1].y + 1,
-        main[1].width.saturating_sub(2),
-        main[1].height.saturating_sub(2),
-    );
+    state.layout = crate::app::LayoutRects::from_outer_rects(main[0], main[1]);
 
     panels::graph::render(frame, state, main[0]);
     panels::detail::render(frame, state, main[1]);
