@@ -238,6 +238,38 @@ impl EffectExecutor {
                 );
             }
 
+            // M7 mutations
+            Effect::Absorb { change_id } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Absorb,
+                    generation,
+                    &active_revset,
+                    || backend.absorb(&change_id),
+                );
+            }
+            Effect::Duplicate { change_id } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Duplicate,
+                    generation,
+                    &active_revset,
+                    || backend.duplicate(&change_id),
+                );
+            }
+            Effect::Revert { change_id } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::Revert,
+                    generation,
+                    &active_revset,
+                    || backend.revert(&change_id),
+                );
+            }
+
             // Conflict handling
             Effect::LoadConflictData { change_id, path } => {
                 let result = backend
@@ -299,9 +331,10 @@ impl EffectExecutor {
             | Effect::EvalRevset { .. }
             | Effect::RebaseSingle { .. }
             | Effect::RebaseWithDescendants { .. }
-            | Effect::ResolveFile { .. } => {
-                self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1
-            }
+            | Effect::ResolveFile { .. }
+            | Effect::Absorb { .. }
+            | Effect::Duplicate { .. }
+            | Effect::Revert { .. } => self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1,
             Effect::LoadOpLog
             | Effect::LoadFileDiff { .. }
             | Effect::LoadChangeDiff { .. }

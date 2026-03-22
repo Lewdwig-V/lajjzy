@@ -42,6 +42,9 @@ impl HelpWidget {
                 ("B", "Set bookmark"),
                 ("P", "Git push"),
                 ("f", "Git fetch"),
+                ("a", "Absorb into ancestors"),
+                ("D", "Duplicate change"),
+                ("x", "Revert (apply reverse after @)"),
             ],
             HelpContext::DetailFileList => vec![
                 ("j/k", "Move between files"),

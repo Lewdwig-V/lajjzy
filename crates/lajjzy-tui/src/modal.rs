@@ -47,7 +47,7 @@ pub enum HelpContext {
 impl HelpContext {
     pub fn line_count(self) -> usize {
         match self {
-            Self::Graph => 23,
+            Self::Graph => 26,
             Self::DetailFileList => 4,
             Self::DetailDiffView => 3,
             Self::ConflictView => 7,

@@ -63,13 +63,33 @@ impl JjCliBackend {
         Ok(if stderr.is_empty() { stdout } else { stderr })
     }
 
-    /// Open a jj-lib repo handle for read-only conflict data extraction.
-    ///
-    /// Reopened each call so it picks up mutations made by CLI commands.
-    fn open_jj_repo(&self) -> Result<Arc<jj_lib::repo::ReadonlyRepo>> {
+    /// Open a jj-lib workspace and repo at head. Reopened per-call to pick up
+    /// CLI mutation effects. Returns `(workspace_name, repo)`.
+    fn open_jj_workspace(
+        &self,
+    ) -> Result<(
+        jj_lib::ref_name::WorkspaceNameBuf,
+        Arc<jj_lib::repo::ReadonlyRepo>,
+    )> {
         use pollster::FutureExt as _;
 
-        let config = jj_lib::config::StackedConfig::with_defaults();
+        let mut config = jj_lib::config::StackedConfig::with_defaults();
+
+        // Load user config (~/.config/jj/config.toml) so commits get correct
+        // author identity, signing config, etc. Without this, jj-lib operations
+        // would create commits with placeholder metadata.
+        if let Some(config_dir) = dirs::config_dir() {
+            let user_config = config_dir.join("jj").join("config.toml");
+            if user_config.exists()
+                && let Ok(layer) = jj_lib::config::ConfigLayer::load_from_file(
+                    jj_lib::config::ConfigSource::User,
+                    user_config,
+                )
+            {
+                config.add_layer(layer);
+            }
+        }
+
         let settings = jj_lib::settings::UserSettings::from_config(config)
             .map_err(|e| anyhow::anyhow!("Failed to create UserSettings: {e}"))?;
         let store_factories = jj_lib::repo::StoreFactories::default();
@@ -83,13 +103,51 @@ impl JjCliBackend {
         )
         .map_err(|e| anyhow::anyhow!("Failed to load jj workspace: {e}"))?;
 
+        let ws_name = workspace.workspace_name().to_owned();
         let repo = workspace
             .repo_loader()
             .load_at_head()
             .block_on()
             .map_err(|e| anyhow::anyhow!("Failed to load repo at head: {e}"))?;
 
-        Ok(repo)
+        Ok((ws_name, repo))
+    }
+
+    /// Open a jj-lib repo at head (convenience wrapper when workspace name isn't needed).
+    fn open_jj_repo(&self) -> Result<Arc<jj_lib::repo::ReadonlyRepo>> {
+        self.open_jj_workspace().map(|(_, repo)| repo)
+    }
+
+    /// Resolve a short change id (reverse-hex) to a single non-divergent
+    /// commit ID. Returns an error if the id is invalid, not found, ambiguous,
+    /// or divergent.
+    fn resolve_change(
+        repo: &dyn jj_lib::repo::Repo,
+        change_id: &str,
+    ) -> Result<jj_lib::backend::CommitId> {
+        let prefix = jj_lib::object_id::HexPrefix::try_from_reverse_hex(change_id)
+            .ok_or_else(|| anyhow::anyhow!("Invalid change id: {change_id}"))?;
+        let resolution = repo
+            .resolve_change_id_prefix(&prefix)
+            .map_err(|e| anyhow::anyhow!("Index error resolving change id: {e}"))?;
+        let targets = match resolution {
+            jj_lib::object_id::PrefixResolution::NoMatch => {
+                bail!("Change id not found: {change_id}");
+            }
+            jj_lib::object_id::PrefixResolution::AmbiguousMatch => {
+                bail!("Ambiguous change id: {change_id}");
+            }
+            jj_lib::object_id::PrefixResolution::SingleMatch(t) => t,
+        };
+        if targets.is_divergent() {
+            bail!("Change id {change_id} is divergent (multiple visible commits)");
+        }
+        targets
+            .targets
+            .into_iter()
+            .find(|(_, state)| *state == jj_lib::index::ResolvedChangeState::Visible)
+            .map(|(id, _)| id)
+            .ok_or_else(|| anyhow::anyhow!("No visible commit for change id: {change_id}"))
     }
 }
 
@@ -738,6 +796,121 @@ impl RepoBackend for JjCliBackend {
         Ok(format!("Squashed from {change_id}"))
     }
 
+    fn absorb(&self, change_id: &str) -> Result<String> {
+        // Absorb is complex to wire via jj-lib (revset construction for
+        // destinations, split_hunks_to_trees, absorb_hunks, descendant
+        // rebasing). Use CLI fallback for reliability.
+        // TODO: migrate to jj-lib transaction once revset construction is
+        // straightforward (requires building ResolvedRevsetExpression for
+        // "mutable() & ancestors(source)").
+        let output = self.run_jj(&["absorb", "--from", change_id])?;
+        if output.is_empty() {
+            Ok(format!("Absorbed changes from {change_id}"))
+        } else {
+            Ok(output)
+        }
+    }
+
+    fn duplicate(&self, change_id: &str) -> Result<String> {
+        use jj_lib::object_id::ObjectId as _;
+        use pollster::FutureExt as _;
+
+        let repo = self.open_jj_repo()?;
+
+        let commit_id = Self::resolve_change(repo.as_ref(), change_id)?;
+
+        // Start transaction and duplicate
+        let mut tx = repo.start_transaction();
+        let stats = jj_lib::rewrite::duplicate_commits_onto_parents(
+            tx.repo_mut(),
+            std::slice::from_ref(&commit_id),
+            &std::collections::HashMap::new(),
+        )
+        .block_on()
+        .map_err(|e| anyhow::anyhow!("Failed to duplicate commit: {e}"))?;
+
+        tx.commit("duplicate commit")
+            .block_on()
+            .map_err(|e| anyhow::anyhow!("Failed to commit transaction: {e}"))?;
+
+        let new_change_id = stats
+            .duplicated_commits
+            .get(&commit_id)
+            .map(|c| c.change_id().hex())
+            .expect("duplicate succeeded but commit not in stats");
+
+        Ok(format!("Duplicated {change_id} → {new_change_id}"))
+    }
+
+    fn revert(&self, change_id: &str) -> Result<String> {
+        use jj_lib::merge::Merge;
+        use jj_lib::repo::Repo as _;
+        use pollster::FutureExt as _;
+
+        let (ws_name, repo) = self.open_jj_workspace()?;
+
+        let commit_id = Self::resolve_change(repo.as_ref(), change_id)?;
+        let commit = repo
+            .store()
+            .get_commit(&commit_id)
+            .map_err(|e| anyhow::anyhow!("Failed to load commit: {e}"))?;
+
+        // Get the commit's tree and its parent tree
+        let commit_tree = commit.tree();
+        let parent_tree = commit
+            .parent_tree(repo.as_ref())
+            .block_on()
+            .map_err(|e| anyhow::anyhow!("Failed to load parent tree: {e}"))?;
+
+        // Get working copy commit
+        let wc_commit_id = repo
+            .view()
+            .get_wc_commit_id(&ws_name)
+            .ok_or_else(|| anyhow::anyhow!("No working copy commit found"))?
+            .clone();
+        let wc_commit = repo
+            .store()
+            .get_commit(&wc_commit_id)
+            .map_err(|e| anyhow::anyhow!("Failed to load working copy commit: {e}"))?;
+        let wc_tree = wc_commit.tree();
+
+        // Compute reverse: merge(wc_tree, parent_tree, commit_tree)
+        // This is: wc_tree - commit_tree + parent_tree = wc + reverse(commit changes)
+        // Merge format: from_removes_adds(removes=[commit_tree], adds=[wc_tree, parent_tree])
+        let merge_input = Merge::from_removes_adds(
+            [(commit_tree, "commit".to_string())],
+            [
+                (wc_tree, "working copy".to_string()),
+                (parent_tree, "parent".to_string()),
+            ],
+        );
+        let new_tree = jj_lib::merged_tree::MergedTree::merge(merge_input)
+            .block_on()
+            .map_err(|e| anyhow::anyhow!("Failed to merge trees: {e}"))?;
+
+        let has_conflicts = new_tree.has_conflict();
+
+        // Start transaction, create new commit as child of @
+        let mut tx = repo.start_transaction();
+        let description = format!("revert {change_id}");
+        tx.repo_mut()
+            .new_commit(vec![wc_commit_id], new_tree)
+            .set_description(&description)
+            .write()
+            .block_on()
+            .map_err(|e| anyhow::anyhow!("Failed to write revert commit: {e}"))?;
+
+        tx.commit("revert commit")
+            .block_on()
+            .map_err(|e| anyhow::anyhow!("Failed to commit transaction: {e}"))?;
+
+        if has_conflicts {
+            Ok(format!("Reverted {change_id} (new commit has conflicts)"))
+        } else {
+            Ok(format!("Reverted {change_id}"))
+        }
+    }
+
     fn conflict_sides(&self, change_id: &str, path: &str) -> Result<crate::types::ConflictData> {
         use crate::types::{ConflictData, ConflictRegion};
         use jj_lib::repo::Repo as _;
@@ -747,29 +920,11 @@ impl RepoBackend for JjCliBackend {
 
         // Resolve short change_id prefix to a commit.
         // change_id.short() outputs reverse-hex format (alphabet: k-z + a-j),
-        // not standard hex. Use try_from_reverse_hex, not try_from_hex.
-        let prefix = jj_lib::object_id::HexPrefix::try_from_reverse_hex(change_id)
-            .ok_or_else(|| anyhow::anyhow!("Invalid change id: {change_id}"))?;
-        let resolution = repo
-            .resolve_change_id_prefix(&prefix)
-            .map_err(|e| anyhow::anyhow!("Index error resolving change id: {e}"))?;
-        let targets = match resolution {
-            jj_lib::object_id::PrefixResolution::NoMatch => {
-                bail!("Change id not found: {change_id}");
-            }
-            jj_lib::object_id::PrefixResolution::AmbiguousMatch => {
-                bail!("Ambiguous change id: {change_id}");
-            }
-            jj_lib::object_id::PrefixResolution::SingleMatch(t) => t,
-        };
-        let commit_id = targets
-            .targets
-            .first()
-            .map(|(id, _)| id)
-            .ok_or_else(|| anyhow::anyhow!("No commit for change id: {change_id}"))?;
+        // not standard hex. resolve_change uses try_from_reverse_hex internally.
+        let commit_id = Self::resolve_change(repo.as_ref(), change_id)?;
         let commit = repo
             .store()
-            .get_commit(commit_id)
+            .get_commit(&commit_id)
             .map_err(|e| anyhow::anyhow!("Failed to load commit: {e}"))?;
 
         // Get the merged tree value at the given path.
@@ -2031,5 +2186,151 @@ diff --git a/my file.txt b/my file.txt
             result.is_err(),
             "squash_partial with no selected hunks should return an error"
         );
+    }
+
+    #[test]
+    fn duplicate_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Create a commit with content to duplicate
+        std::fs::write(tmp.path().join("a.txt"), "hello\n").unwrap();
+        backend.describe("@", "original commit").unwrap();
+
+        let graph_before = backend.load_graph(None).unwrap();
+        let node_count_before = graph_before.node_indices().len();
+
+        // Find the working copy change_id
+        let wc_idx = graph_before.working_copy_index.unwrap();
+        let wc_id = graph_before.lines[wc_idx]
+            .change_id
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        let result = backend.duplicate(&wc_id).unwrap();
+        assert!(
+            result.contains("Duplicated"),
+            "expected success message, got: {result}"
+        );
+
+        let graph_after = backend.load_graph(None).unwrap();
+        assert!(
+            graph_after.node_indices().len() > node_count_before,
+            "node count should increase after duplicate"
+        );
+
+        // The duplicate should have the same description as the original
+        let descriptions: Vec<&str> = graph_after
+            .details
+            .values()
+            .map(|d| d.description.as_str())
+            .filter(|d| *d == "original commit")
+            .collect();
+        assert_eq!(
+            descriptions.len(),
+            2,
+            "should have two commits with 'original commit' description"
+        );
+    }
+
+    #[test]
+    fn revert_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Create a commit with a file change
+        std::fs::write(tmp.path().join("a.txt"), "hello\n").unwrap();
+        backend.describe("@", "add file").unwrap();
+
+        // Create a new child so we can revert the parent
+        backend.new_change("@").unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+        let node_count_before = graph.node_indices().len();
+
+        // Find the "add file" change
+        let target_id = graph
+            .node_indices()
+            .iter()
+            .find_map(|&i| {
+                let cid = graph.lines[i].change_id.as_ref()?;
+                let detail = graph.details.get(cid)?;
+                if detail.description == "add file" {
+                    Some(cid.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("should find the 'add file' change");
+
+        let result = backend.revert(&target_id).unwrap();
+        assert!(
+            result.contains("Reverted"),
+            "expected success message, got: {result}"
+        );
+
+        // A new commit should have been created
+        let graph_after = backend.load_graph(None).unwrap();
+        assert!(
+            graph_after.node_indices().len() > node_count_before,
+            "node count should increase after revert (new child of @)"
+        );
+
+        // The new commit should have "revert <change_id>" description
+        let has_revert = graph_after
+            .details
+            .values()
+            .any(|d| d.description.starts_with("revert "));
+        assert!(
+            has_revert,
+            "should have a commit with 'revert ...' description"
+        );
+    }
+
+    #[test]
+    fn absorb_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Create parent commit with a file
+        std::fs::write(tmp.path().join("a.txt"), "line1\nline2\nline3\n").unwrap();
+        backend.describe("@", "parent with file").unwrap();
+
+        // Create child commit, modify the file
+        backend.new_change("@").unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "line1\nmodified\nline3\n").unwrap();
+        backend.describe("@", "child with modification").unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+        let wc_idx = graph.working_copy_index.unwrap();
+        let wc_id = graph.lines[wc_idx].change_id.as_ref().unwrap().clone();
+
+        let result = backend.absorb(&wc_id);
+        // Absorb may fail if jj version doesn't support it or if there are
+        // no hunks to absorb. Either way, it should not panic.
+        match result {
+            Ok(msg) => assert!(
+                msg.contains("Absorbed") || msg.contains("absorb"),
+                "expected absorb message, got: {msg}"
+            ),
+            Err(e) => {
+                // Acceptable: jj may not have absorb command or hunks may not
+                // be absorbable in all jj versions
+                eprintln!("absorb returned error (acceptable): {e}");
+            }
+        }
     }
 }

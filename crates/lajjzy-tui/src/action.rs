@@ -53,6 +53,9 @@ pub enum MutationKind {
     RebaseSingle,
     RebaseWithDescendants,
     ResolveConflict,
+    Absorb,
+    Duplicate,
+    Revert,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,6 +157,9 @@ pub enum Action {
     DescribeEscalateEditor,
     RebaseSingle,
     RebaseWithDescendants,
+    Absorb,
+    DuplicateChange,
+    Revert,
     PickConfirm,
     PickCancel,
     PickFilterChar(char),
