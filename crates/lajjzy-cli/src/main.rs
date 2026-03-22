@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use clap::Parser;
 use crossterm::event::{self, Event, KeyEventKind};
 
 use lajjzy_core::backend::RepoBackend;
@@ -489,7 +490,14 @@ fn key_event_to_textarea_input(key: crossterm::event::KeyEvent) -> tui_textarea:
     }
 }
 
+/// A keyboard-driven, lazygit-style TUI for Jujutsu (jj)
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {}
+
 fn main() -> Result<()> {
+    let _cli = Cli::parse();
+
     let cwd = env::current_dir().context("Failed to get current directory")?;
     let backend = Arc::new(JjCliBackend::new(&cwd).context("Failed to open jj workspace")?);
 
