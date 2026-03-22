@@ -1376,7 +1376,8 @@ pub(crate) const REVSET_FUNCTIONS: &[(&str, Arity)] = &[
 ];
 
 pub(crate) fn is_revset_boundary(c: char) -> bool {
-    matches!(c, '&' | '|' | '~' | '(' | ')' | ':' | '.' | ',') || c.is_ascii_whitespace()
+    matches!(c, '&' | '|' | '~' | '(' | ')' | ':' | '.' | ',' | '+' | '-')
+        || c.is_ascii_whitespace()
 }
 
 pub(crate) fn extract_current_word(query: &str) -> (usize, &str) {
@@ -1409,10 +1410,11 @@ pub(crate) fn compute_completions(query: &str, graph: &GraphData) -> Vec<Complet
         }
     }
 
-    // 2-4: Repo entities from node_indices (deterministic order)
+    // 2-3: Repo entities from node_indices (deterministic order)
+    // Note: bare author names are NOT completed — they are only valid inside
+    // author()/committer() functions, which is context-sensitive (deferred to M6).
     let mut bookmarks = Vec::new();
     let mut change_ids = Vec::new();
-    let mut authors = Vec::new();
     for &idx in graph.node_indices() {
         if let Some(cid) = graph.lines[idx].change_id.as_deref()
             && let Some(detail) = graph.details.get(cid)
@@ -1432,7 +1434,6 @@ pub(crate) fn compute_completions(query: &str, graph: &GraphData) -> Vec<Complet
                     display_text: format!("{cid} \u{2014} {desc}"),
                 });
             }
-            authors.push(detail.author.as_str());
         }
     }
 
@@ -1450,18 +1451,6 @@ pub(crate) fn compute_completions(query: &str, graph: &GraphData) -> Vec<Complet
 
     // Change IDs (ranked third)
     results.extend(change_ids);
-
-    // Authors (ranked fourth)
-    authors.sort_unstable();
-    authors.dedup();
-    for author in authors {
-        if author.to_lowercase().starts_with(&word_lower as &str) {
-            results.push(CompletionItem {
-                insert_text: author.to_string(),
-                display_text: author.to_string(),
-            });
-        }
-    }
 
     results.truncate(20);
     results
