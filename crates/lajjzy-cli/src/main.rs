@@ -11,6 +11,8 @@ use crossterm::event::{self, Event, KeyEventKind};
 
 use lajjzy_core::backend::RepoBackend;
 use lajjzy_core::cli::JjCliBackend;
+use lajjzy_core::forge::ForgeBackend;
+use lajjzy_core::gh::GhCliForge;
 use lajjzy_tui::action::{Action, MutationKind};
 use lajjzy_tui::app::AppState;
 use lajjzy_tui::dispatch::dispatch;
@@ -20,6 +22,7 @@ use lajjzy_tui::render::render;
 
 struct EffectExecutor {
     backend: Arc<JjCliBackend>,
+    forge: Arc<GhCliForge>,
     tx: mpsc::Sender<Action>,
     /// Monotonic counter for graph snapshot versioning.
     /// Incremented before each `load_graph()` call so later loads get higher generations.
@@ -39,6 +42,7 @@ impl EffectExecutor {
     #[expect(clippy::too_many_lines)]
     fn execute(&self, effect: Effect) {
         let backend = Arc::clone(&self.backend);
+        let forge = Arc::clone(&self.forge);
         let tx = self.tx.clone();
         // Assign generation BEFORE spawning thread — ordering reflects intent, not completion.
         let generation = self.next_graph_generation(&effect);
@@ -238,9 +242,19 @@ impl EffectExecutor {
                 );
             }
 
-            // Forge stubs (wired in Task 6)
-            Effect::FetchForgeStatus | Effect::OpenPrInBrowser { .. } => {
-                // TODO: Task 6
+            // Forge effects
+            Effect::FetchForgeStatus => {
+                let result = forge.fetch_status().map_err(|e| e.to_string());
+                let _ = tx.send(Action::ForgeStatusLoaded(result));
+            }
+            Effect::OpenPrInBrowser { bookmark, url } => {
+                let workspace_root = backend.workspace_root().to_path_buf();
+                // Best-effort browser launch
+                let _ = std::process::Command::new("gh")
+                    .args(["pr", "view", &bookmark, "--web"])
+                    .current_dir(&workspace_root)
+                    .output();
+                let _ = tx.send(Action::PrViewUrl { url });
             }
 
             // CreatePr is intercepted in execute_effects (suspend pattern)
@@ -392,6 +406,7 @@ fn run_mutation(
     }
 }
 
+#[expect(clippy::too_many_lines)]
 fn execute_effects(
     terminal: &mut ratatui::DefaultTerminal,
     state: &mut AppState,
@@ -467,6 +482,35 @@ fn execute_effects(
                             },
                         );
                         execute_effects(terminal, state, executor, new_effects);
+                    }
+                }
+            }
+            Effect::CreatePr { bookmark } => {
+                ratatui::restore();
+                let status = std::process::Command::new("gh")
+                    .args(["pr", "create", "--head", &bookmark])
+                    .current_dir(executor.backend.workspace_root())
+                    .status();
+                *terminal = ratatui::init();
+                match status {
+                    Ok(s) if s.success() => {
+                        let effects = dispatch(state, Action::PrCreateComplete);
+                        execute_effects(terminal, state, executor, effects);
+                    }
+                    Ok(s) => {
+                        let effects = dispatch(
+                            state,
+                            Action::PrCreateFailed {
+                                error: format!(
+                                    "gh pr create exited with {}",
+                                    s.code().unwrap_or(-1)
+                                ),
+                            },
+                        );
+                        execute_effects(terminal, state, executor, effects);
+                    }
+                    Err(e) => {
+                        state.error = Some(format!("Failed to launch gh: {e}"));
                     }
                 }
             }
@@ -546,13 +590,16 @@ fn main() -> Result<()> {
 
     let cwd = env::current_dir().context("Failed to get current directory")?;
     let backend = Arc::new(JjCliBackend::new(&cwd).context("Failed to open jj workspace")?);
+    let forge = Arc::new(GhCliForge::new(&cwd));
+    let forge_kind = forge.forge_kind();
 
     let graph = backend.load_graph(None).context("Failed to load graph")?;
-    let mut state = AppState::new(graph, None);
+    let mut state = AppState::new(graph, forge_kind);
 
     let (tx, rx) = mpsc::channel();
     let executor = EffectExecutor {
         backend,
+        forge,
         tx,
         graph_generation: AtomicU64::new(0),
         active_revset: Arc::new(Mutex::new(None)),
