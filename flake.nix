@@ -12,6 +12,7 @@
         craneLib = crane.mkLib pkgs;
         lajjzy = craneLib.buildPackage {
           src = craneLib.cleanCargoSource ./.;
+          pname = "lajjzy";
           # jj-lib uses gix (pure Rust git), no native deps needed.
           # If builds fail on specific systems, add deps here.
         };
