@@ -1,20 +1,31 @@
 [package]
 name = "lajjzy"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [[bin]]
 name = "lajjzy"
 path = "src/main.rs"
 
 [dependencies]
-lajjzy-core = { path = "../lajjzy-core" }
-lajjzy-tui = { path = "../lajjzy-tui" }
+lajjzy-core = { path = "../lajjzy-core", version = "0.1.0" }
+lajjzy-tui = { path = "../lajjzy-tui", version = "0.1.0" }
 ratatui = "0.30"
 crossterm = "0.29"
 tui-textarea = "0.7.0"
 anyhow = "1"
 tempfile = "3"
+clap = { version = "4", features = ["derive"] }
+
+[package.metadata.binstall]
+pkg-url = "{{ repo }}/releases/download/v{{ version }}/lajjzy-{{ target }}{{ archive-suffix }}"
+pkg-fmt = "tgz"
 
 [lints]
 workspace = true

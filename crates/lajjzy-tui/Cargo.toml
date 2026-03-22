@@ -1,10 +1,13 @@
 [package]
 name = "lajjzy-tui"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TUI widgets and state machine for lajjzy"
 
 [dependencies]
-lajjzy-core = { path = "../lajjzy-core" }
+lajjzy-core = { path = "../lajjzy-core", version = "0.1.0" }
 ratatui = "0.30"
 crossterm = "0.29"
 anyhow = "1"
