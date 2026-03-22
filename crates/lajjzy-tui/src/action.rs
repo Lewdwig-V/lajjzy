@@ -1,6 +1,22 @@
 use lajjzy_core::types::{DiffHunk, FileDiff, GraphData, OpLogEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arity {
+    Nullary,  // insert "()" — complete
+    Optional, // insert "(" — user can close or add arg
+    Required, // insert "(" — needs argument
+}
+
+/// A single completion candidate for the omnibar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompletionItem {
+    /// The text to insert (e.g., "ancestors(", "`mine()`", "main")
+    pub insert_text: String,
+    /// The text to display in the dropdown (e.g., "ksqxwpml — refactor: extract trait")
+    pub display_text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebaseMode {
     Single,
     WithDescendants,
@@ -79,6 +95,7 @@ pub enum Action {
     ModalEnter,
     OmnibarInput(char),
     OmnibarBackspace,
+    OmnibarAcceptCompletion,
 
     // Effect result actions
     /// `generation` is a monotonic counter assigned by the executor at load time.
