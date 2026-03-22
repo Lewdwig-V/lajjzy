@@ -76,7 +76,8 @@ struct GhPrJson {
     title: String,
     state: String,
     head_ref_name: String,
-    review_decision: String,
+    /// Can be null for draft PRs or PRs with no review activity.
+    review_decision: Option<String>,
     #[serde(default)]
     url: String,
 }
@@ -95,10 +96,10 @@ fn parse_gh_pr_list(json: &str) -> Result<Vec<PrInfo>> {
                 "CLOSED" => PrState::Closed,
                 _ => PrState::Open, // "OPEN" or unknown → Open
             },
-            review: match pr.review_decision.as_str() {
-                "APPROVED" => ReviewStatus::Approved,
-                "CHANGES_REQUESTED" => ReviewStatus::ChangesRequested,
-                "REVIEW_REQUIRED" => ReviewStatus::ReviewRequired,
+            review: match pr.review_decision.as_deref() {
+                Some("APPROVED") => ReviewStatus::Approved,
+                Some("CHANGES_REQUESTED") => ReviewStatus::ChangesRequested,
+                Some("REVIEW_REQUIRED") => ReviewStatus::ReviewRequired,
                 _ => ReviewStatus::Unknown,
             },
             head_ref: pr.head_ref_name,
@@ -142,6 +143,20 @@ mod tests {
         }]"#;
         let prs = parse_gh_pr_list(json).unwrap();
         assert_eq!(prs[0].review, ReviewStatus::ChangesRequested);
+    }
+
+    #[test]
+    fn parse_null_review_decision() {
+        let json = r#"[{
+            "number": 99,
+            "title": "draft PR",
+            "state": "OPEN",
+            "headRefName": "draft",
+            "reviewDecision": null,
+            "url": ""
+        }]"#;
+        let prs = parse_gh_pr_list(json).unwrap();
+        assert_eq!(prs[0].review, ReviewStatus::Unknown);
     }
 
     #[test]

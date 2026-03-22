@@ -247,27 +247,9 @@ impl EffectExecutor {
                 let result = forge.fetch_status().map_err(|e| e.to_string());
                 let _ = tx.send(Action::ForgeStatusLoaded(result));
             }
-            Effect::OpenPrInBrowser { bookmark, url } => {
-                let workspace_root = backend.workspace_root().to_path_buf();
-                let result = std::process::Command::new("gh")
-                    .args(["pr", "view", &bookmark, "--web"])
-                    .current_dir(&workspace_root)
-                    .output();
-                match result {
-                    Ok(o) if o.status.success() => {
-                        // Browser opened — also show URL in status bar
-                        let _ = tx.send(Action::PrViewUrl { url });
-                    }
-                    _ => {
-                        // Browser failed — show URL as clickable fallback
-                        let _ = tx.send(Action::PrViewUrl { url });
-                    }
-                }
-            }
-
-            // CreatePr is intercepted in execute_effects (suspend pattern)
-            Effect::CreatePr { .. } => {
-                unreachable!("CreatePr must be intercepted by execute_effects")
+            // OpenOrCreatePr is intercepted in execute_effects (may need terminal suspend)
+            Effect::OpenOrCreatePr { .. } => {
+                unreachable!("OpenOrCreatePr must be intercepted by execute_effects")
             }
 
             // M7 mutations
@@ -373,8 +355,7 @@ impl EffectExecutor {
             | Effect::LoadConflictData { .. }
             | Effect::LaunchMergeTool { .. }
             | Effect::FetchForgeStatus
-            | Effect::OpenPrInBrowser { .. }
-            | Effect::CreatePr { .. }
+            | Effect::OpenOrCreatePr { .. }
             | Effect::SuspendForEditor { .. } => 0,
         }
     }
@@ -493,32 +474,57 @@ fn execute_effects(
                     }
                 }
             }
-            Effect::CreatePr { bookmark } => {
-                ratatui::restore();
-                let status = std::process::Command::new("gh")
-                    .args(["pr", "create", "--head", &bookmark])
-                    .current_dir(executor.backend.workspace_root())
-                    .status();
-                *terminal = ratatui::init();
-                match status {
-                    Ok(s) if s.success() => {
-                        let effects = dispatch(state, Action::PrCreateComplete);
+            Effect::OpenOrCreatePr { bookmark } => {
+                let ws = executor.backend.workspace_root();
+                // Try opening existing PR in browser first
+                let view_result = std::process::Command::new("gh")
+                    .args(["pr", "view", &bookmark, "--web"])
+                    .current_dir(ws)
+                    .output();
+                match view_result {
+                    Ok(o) if o.status.success() => {
+                        // PR exists and browser opened. Also extract URL for status bar.
+                        let url_output = std::process::Command::new("gh")
+                            .args(["pr", "view", &bookmark, "--json", "url", "-q", ".url"])
+                            .current_dir(ws)
+                            .output();
+                        let url = url_output
+                            .ok()
+                            .and_then(|o| String::from_utf8(o.stdout).ok())
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
+                        let effects = dispatch(state, Action::PrViewUrl { url });
                         execute_effects(terminal, state, executor, effects);
                     }
-                    Ok(s) => {
-                        let effects = dispatch(
-                            state,
-                            Action::PrCreateFailed {
-                                error: format!(
-                                    "gh pr create exited with {}",
-                                    s.code().unwrap_or(-1)
-                                ),
-                            },
-                        );
-                        execute_effects(terminal, state, executor, effects);
-                    }
-                    Err(e) => {
-                        state.error = Some(format!("Failed to launch gh: {e}"));
+                    _ => {
+                        // No PR or gh failed — suspend and create
+                        ratatui::restore();
+                        let status = std::process::Command::new("gh")
+                            .args(["pr", "create", "--head", &bookmark])
+                            .current_dir(ws)
+                            .status();
+                        *terminal = ratatui::init();
+                        match status {
+                            Ok(s) if s.success() => {
+                                let effects = dispatch(state, Action::PrCreateComplete);
+                                execute_effects(terminal, state, executor, effects);
+                            }
+                            Ok(s) => {
+                                let effects = dispatch(
+                                    state,
+                                    Action::PrCreateFailed {
+                                        error: format!(
+                                            "gh pr create exited with {}",
+                                            s.code().unwrap_or(-1)
+                                        ),
+                                    },
+                                );
+                                execute_effects(terminal, state, executor, effects);
+                            }
+                            Err(e) => {
+                                state.error = Some(format!("Failed to launch gh: {e}"));
+                            }
+                        }
                     }
                 }
             }

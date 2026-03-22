@@ -1212,15 +1212,18 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             if let Some(detail) = state.selected_detail() {
                 if detail.bookmarks.is_empty() {
-                    state.error = Some("No bookmark on this change — set one with B first".into());
+                    state.error =
+                        Some("No bookmark on this change \u{2014} set one with B first".into());
                     return vec![];
                 }
-                let bookmark = detail.bookmarks[0].clone();
-                if let Some(pr) = state.pr_status.get(&bookmark) {
-                    let url = pr.url.clone();
-                    return vec![Effect::OpenPrInBrowser { bookmark, url }];
-                }
-                return vec![Effect::CreatePr { bookmark }];
+                // Prefer a bookmark that has a known PR; fall back to first.
+                let bookmark = detail
+                    .bookmarks
+                    .iter()
+                    .find(|b| state.pr_status.contains_key(*b))
+                    .unwrap_or(&detail.bookmarks[0])
+                    .clone();
+                return vec![Effect::OpenOrCreatePr { bookmark }];
             }
             state.error = Some("No change selected".into());
         }
@@ -5513,23 +5516,24 @@ mod tests {
             },
         );
         let effects = dispatch(&mut state, Action::OpenOrCreatePr);
+        // With a known PR, dispatch prefers the bookmark with a PR
         assert_eq!(
             effects,
-            vec![Effect::OpenPrInBrowser {
+            vec![Effect::OpenOrCreatePr {
                 bookmark: "feat-branch".into(),
-                url: "https://github.com/org/repo/pull/7".into(),
             }]
         );
     }
 
     #[test]
-    fn open_or_create_pr_routes_to_create_when_no_pr() {
+    fn open_or_create_pr_emits_effect_when_no_cached_pr() {
         use lajjzy_core::forge::ForgeKind;
         let mut state = AppState::new(sample_graph_with_bookmark(), Some(ForgeKind::GitHub));
+        // No pr_status populated — executor will try gh pr view first
         let effects = dispatch(&mut state, Action::OpenOrCreatePr);
         assert_eq!(
             effects,
-            vec![Effect::CreatePr {
+            vec![Effect::OpenOrCreatePr {
                 bookmark: "feat-branch".into(),
             }]
         );
