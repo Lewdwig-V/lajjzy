@@ -6,11 +6,30 @@ Built for jj's data model: immutable changes, automatic rebasing, first-class co
 
 ## Install
 
-```bash
-# From source (requires Rust 1.85+)
-cargo install --path crates/lajjzy-cli
+### Pre-built binaries (recommended)
 
-# Or build locally
+```bash
+# Via cargo-binstall (fastest)
+cargo binstall lajjzy
+
+# Via Homebrew (macOS)
+brew tap lewdwig-v/lajjzy && brew install lajjzy
+
+# Via Nix
+nix run github:Lewdwig-V/lajjzy
+# or persistent install:
+nix profile install github:Lewdwig-V/lajjzy
+```
+
+### From source
+
+```bash
+# Via cargo (from crates.io)
+cargo install lajjzy
+
+# Or build locally (requires Rust 1.85+)
+git clone https://github.com/Lewdwig-V/lajjzy
+cd lajjzy
 cargo build --release
 ```
 
@@ -193,6 +212,16 @@ cargo fmt --check              # format check
 ```
 
 See `CLAUDE.md` for architectural constraints and crate structure.
+
+## Releasing
+
+1. Ensure `Cargo.lock` is up to date and committed
+2. Update version in `Cargo.toml` (`[workspace.package] version`)
+3. `cargo build --release` locally to verify
+4. `git tag vX.Y.Z && git push --tags`
+5. Wait for release workflow (builds binaries, creates GitHub Release, publishes to crates.io)
+6. Copy sha256 sums from release notes into `homebrew-lajjzy` formula
+7. Verify: `cargo install lajjzy`, `cargo binstall lajjzy`, `brew install lajjzy`, `nix run github:Lewdwig-V/lajjzy`
 
 ## Roadmap
 
