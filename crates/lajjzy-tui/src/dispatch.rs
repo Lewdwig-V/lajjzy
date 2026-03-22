@@ -1192,13 +1192,67 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
 
-        // Forge stubs (implementations in Task 4)
-        Action::FetchForgeStatus
-        | Action::OpenOrCreatePr
-        | Action::ForgeStatusLoaded(_)
-        | Action::PrViewUrl { .. }
-        | Action::PrCreateComplete
-        | Action::PrCreateFailed { .. } => {}
+        // Forge integration
+        Action::FetchForgeStatus => {
+            if state.forge.is_none() {
+                state.error = Some("Install gh for GitHub integration".into());
+                return vec![];
+            }
+            if state.pending_forge_fetch {
+                return vec![];
+            }
+            state.pending_forge_fetch = true;
+            return vec![Effect::FetchForgeStatus];
+        }
+
+        Action::OpenOrCreatePr => {
+            if state.forge.is_none() {
+                state.error = Some("Install gh for GitHub integration".into());
+                return vec![];
+            }
+            if let Some(detail) = state.selected_detail() {
+                if detail.bookmarks.is_empty() {
+                    state.error = Some("No bookmark on this change — set one with B first".into());
+                    return vec![];
+                }
+                let bookmark = detail.bookmarks[0].clone();
+                if let Some(pr) = state.pr_status.get(&bookmark) {
+                    let url = pr.url.clone();
+                    return vec![Effect::OpenPrInBrowser { bookmark, url }];
+                }
+                return vec![Effect::CreatePr { bookmark }];
+            }
+            state.error = Some("No change selected".into());
+        }
+
+        Action::ForgeStatusLoaded(result) => {
+            state.pending_forge_fetch = false;
+            match result {
+                Ok(Some(prs)) => {
+                    state.pr_status.clear();
+                    for pr in &prs {
+                        state.pr_status.insert(pr.head_ref.clone(), pr.clone());
+                    }
+                    state.status_message = Some(format!("PR status loaded ({} PRs)", prs.len()));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    state.error = Some(e);
+                }
+            }
+        }
+
+        Action::PrViewUrl { url } => {
+            state.status_message = Some(url);
+        }
+
+        Action::PrCreateComplete => {
+            return vec![Effect::FetchForgeStatus];
+        }
+
+        Action::PrCreateFailed { error } => {
+            state.error = Some(error);
+        }
 
         Action::Absorb => {
             if state.pending_mutation.is_some() {
@@ -5300,5 +5354,219 @@ mod tests {
         state.pending_mutation = Some(MutationKind::Revert);
         let effects = dispatch(&mut state, Action::Revert);
         assert!(effects.is_empty());
+    }
+
+    // --- Forge dispatch tests ---
+
+    fn sample_graph_with_bookmark() -> GraphData {
+        GraphData::new(
+            vec![
+                GraphLine {
+                    raw: "◉  abc".into(),
+                    change_id: Some("abc".into()),
+                    glyph_prefix: String::new(),
+                },
+                GraphLine {
+                    raw: "◉  def".into(),
+                    change_id: Some("def".into()),
+                    glyph_prefix: String::new(),
+                },
+            ],
+            HashMap::from([
+                (
+                    "abc".into(),
+                    ChangeDetail {
+                        commit_id: "a1".into(),
+                        author: "a".into(),
+                        email: "a@b".into(),
+                        timestamp: "1m".into(),
+                        description: "desc1".into(),
+                        bookmarks: vec!["feat-branch".into()],
+                        is_empty: false,
+                        conflict_count: 0,
+                        files: vec![],
+                        parents: vec![],
+                    },
+                ),
+                (
+                    "def".into(),
+                    ChangeDetail {
+                        commit_id: "d1".into(),
+                        author: "b".into(),
+                        email: "b@c".into(),
+                        timestamp: "2m".into(),
+                        description: "desc2".into(),
+                        bookmarks: vec![],
+                        is_empty: false,
+                        conflict_count: 0,
+                        files: vec![],
+                        parents: vec![],
+                    },
+                ),
+            ]),
+            Some(0),
+            String::new(),
+        )
+    }
+
+    #[test]
+    fn forge_fetch_no_forge_sets_error() {
+        let mut state = AppState::new(sample_graph(), None);
+        let effects = dispatch(&mut state, Action::FetchForgeStatus);
+        assert!(effects.is_empty());
+        assert_eq!(
+            state.error,
+            Some("Install gh for GitHub integration".into())
+        );
+    }
+
+    #[test]
+    fn forge_fetch_emits_effect_and_sets_pending() {
+        use lajjzy_core::forge::ForgeKind;
+        let mut state = AppState::new(sample_graph(), Some(ForgeKind::GitHub));
+        let effects = dispatch(&mut state, Action::FetchForgeStatus);
+        assert_eq!(effects, vec![Effect::FetchForgeStatus]);
+        assert!(state.pending_forge_fetch);
+    }
+
+    #[test]
+    fn forge_fetch_debounce_when_pending() {
+        use lajjzy_core::forge::ForgeKind;
+        let mut state = AppState::new(sample_graph(), Some(ForgeKind::GitHub));
+        state.pending_forge_fetch = true;
+        let effects = dispatch(&mut state, Action::FetchForgeStatus);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn forge_status_loaded_success_populates_pr_status() {
+        use lajjzy_core::forge::{ForgeKind, PrInfo, PrState, ReviewStatus};
+        let mut state = AppState::new(sample_graph(), Some(ForgeKind::GitHub));
+        state.pending_forge_fetch = true;
+        let prs = vec![PrInfo {
+            number: 42,
+            title: "Fix bug".into(),
+            state: PrState::Open,
+            review: ReviewStatus::Approved,
+            head_ref: "feat-branch".into(),
+            url: "https://github.com/org/repo/pull/42".into(),
+        }];
+        let effects = dispatch(&mut state, Action::ForgeStatusLoaded(Ok(Some(prs))));
+        assert!(effects.is_empty());
+        assert!(!state.pending_forge_fetch);
+        assert_eq!(state.pr_status.len(), 1);
+        assert_eq!(state.pr_status["feat-branch"].number, 42);
+        assert!(state.status_message.is_some());
+    }
+
+    #[test]
+    fn forge_status_loaded_error_sets_error() {
+        use lajjzy_core::forge::ForgeKind;
+        let mut state = AppState::new(sample_graph(), Some(ForgeKind::GitHub));
+        state.pending_forge_fetch = true;
+        let effects = dispatch(
+            &mut state,
+            Action::ForgeStatusLoaded(Err("gh failed".into())),
+        );
+        assert!(effects.is_empty());
+        assert!(!state.pending_forge_fetch);
+        assert_eq!(state.error, Some("gh failed".into()));
+    }
+
+    #[test]
+    fn forge_status_loaded_clears_pending_on_none() {
+        use lajjzy_core::forge::ForgeKind;
+        let mut state = AppState::new(sample_graph(), Some(ForgeKind::GitHub));
+        state.pending_forge_fetch = true;
+        let effects = dispatch(&mut state, Action::ForgeStatusLoaded(Ok(None)));
+        assert!(effects.is_empty());
+        assert!(!state.pending_forge_fetch);
+    }
+
+    #[test]
+    fn open_or_create_pr_no_bookmark_sets_error() {
+        use lajjzy_core::forge::ForgeKind;
+        // sample_graph() has no bookmarks on "abc"
+        let mut state = AppState::new(sample_graph(), Some(ForgeKind::GitHub));
+        let effects = dispatch(&mut state, Action::OpenOrCreatePr);
+        assert!(effects.is_empty());
+        assert_eq!(
+            state.error,
+            Some("No bookmark on this change — set one with B first".into())
+        );
+    }
+
+    #[test]
+    fn open_or_create_pr_routes_to_open_when_pr_exists() {
+        use lajjzy_core::forge::{ForgeKind, PrInfo, PrState, ReviewStatus};
+        let mut state = AppState::new(sample_graph_with_bookmark(), Some(ForgeKind::GitHub));
+        state.pr_status.insert(
+            "feat-branch".into(),
+            PrInfo {
+                number: 7,
+                title: "WIP".into(),
+                state: PrState::Open,
+                review: ReviewStatus::Unknown,
+                head_ref: "feat-branch".into(),
+                url: "https://github.com/org/repo/pull/7".into(),
+            },
+        );
+        let effects = dispatch(&mut state, Action::OpenOrCreatePr);
+        assert_eq!(
+            effects,
+            vec![Effect::OpenPrInBrowser {
+                bookmark: "feat-branch".into(),
+                url: "https://github.com/org/repo/pull/7".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn open_or_create_pr_routes_to_create_when_no_pr() {
+        use lajjzy_core::forge::ForgeKind;
+        let mut state = AppState::new(sample_graph_with_bookmark(), Some(ForgeKind::GitHub));
+        let effects = dispatch(&mut state, Action::OpenOrCreatePr);
+        assert_eq!(
+            effects,
+            vec![Effect::CreatePr {
+                bookmark: "feat-branch".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn pr_create_complete_triggers_fetch() {
+        let mut state = AppState::new(sample_graph(), None);
+        let effects = dispatch(&mut state, Action::PrCreateComplete);
+        assert_eq!(effects, vec![Effect::FetchForgeStatus]);
+    }
+
+    #[test]
+    fn pr_create_failed_sets_error() {
+        let mut state = AppState::new(sample_graph(), None);
+        let effects = dispatch(
+            &mut state,
+            Action::PrCreateFailed {
+                error: "network error".into(),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.error, Some("network error".into()));
+    }
+
+    #[test]
+    fn pr_view_url_sets_status_message() {
+        let mut state = AppState::new(sample_graph(), None);
+        let effects = dispatch(
+            &mut state,
+            Action::PrViewUrl {
+                url: "https://github.com/org/repo/pull/1".into(),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(
+            state.status_message,
+            Some("https://github.com/org/repo/pull/1".into())
+        );
     }
 }
