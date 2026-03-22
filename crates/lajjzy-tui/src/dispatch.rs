@@ -139,6 +139,28 @@ fn picking_valid_nodes(state: &AppState) -> Vec<usize> {
         .collect()
 }
 
+/// Move cursor to the next valid node. Returns true if cursor moved.
+fn move_cursor_down(state: &mut AppState) -> bool {
+    let valid = picking_valid_nodes(state);
+    if let Some(next) = valid.iter().find(|&&i| i > state.cursor) {
+        state.cursor = *next;
+        true
+    } else {
+        false
+    }
+}
+
+/// Move cursor to the previous valid node. Returns true if cursor moved.
+fn move_cursor_up(state: &mut AppState) -> bool {
+    let valid = picking_valid_nodes(state);
+    if let Some(prev) = valid.iter().rev().find(|&&i| i < state.cursor) {
+        state.cursor = *prev;
+        true
+    } else {
+        false
+    }
+}
+
 /// Check if a change matches a filter query (case-insensitive substring match
 /// against change ID, author, and description).
 fn change_matches_filter(cid: &str, graph: &GraphData, query: &str) -> bool {
@@ -301,17 +323,11 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
 
     match action {
         Action::MoveDown => {
-            let valid = picking_valid_nodes(state);
-            if let Some(next) = valid.iter().find(|&&i| i > state.cursor) {
-                state.cursor = *next;
-            }
+            move_cursor_down(state);
             state.reset_detail();
         }
         Action::MoveUp => {
-            let valid = picking_valid_nodes(state);
-            if let Some(prev) = valid.iter().rev().find(|&&i| i < state.cursor) {
-                state.cursor = *prev;
-            }
+            move_cursor_up(state);
             state.reset_detail();
         }
         Action::JumpToTop => {
