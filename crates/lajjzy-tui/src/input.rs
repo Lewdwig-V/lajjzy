@@ -153,6 +153,13 @@ pub fn map_modal_event(event: KeyEvent, modal: &Modal) -> Option<Action> {
         _ => {}
     }
 
+    if let Modal::Omnibar { completions, .. } = modal
+        && event.code == KeyCode::Tab
+        && !completions.is_empty()
+    {
+        return Some(Action::OmnibarAcceptCompletion);
+    }
+
     let is_omnibar = matches!(modal, Modal::Omnibar { .. });
 
     if is_omnibar {
@@ -760,6 +767,38 @@ mod tests {
             Some(Action::HunkConfirm)
         );
         assert_eq!(map_hunk_picker(key(KeyCode::Esc)), Some(Action::HunkCancel));
+    }
+
+    #[test]
+    fn tab_accepts_completion_when_visible() {
+        use crate::action::CompletionItem;
+        let modal = Modal::Omnibar {
+            query: "min".into(),
+            matches: vec![],
+            cursor: 0,
+            completions: vec![CompletionItem {
+                insert_text: "mine()".into(),
+                display_text: "mine()".into(),
+            }],
+            completion_cursor: 0,
+        };
+        assert_eq!(
+            map_modal_event(key(KeyCode::Tab), &modal),
+            Some(Action::OmnibarAcceptCompletion)
+        );
+    }
+
+    #[test]
+    fn tab_noop_when_no_completions() {
+        let modal = Modal::Omnibar {
+            query: "xyz".into(),
+            matches: vec![],
+            cursor: 0,
+            completions: vec![],
+            completion_cursor: 0,
+        };
+        // Tab with no completions returns None (swallowed)
+        assert_eq!(map_modal_event(key(KeyCode::Tab), &modal), None);
     }
 
     #[test]
