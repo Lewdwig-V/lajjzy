@@ -238,6 +238,25 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
         );
     }
 
+    // Sort files: conflicted first, then by status priority, then alphabetically.
+    for detail in details.values_mut() {
+        detail.files.sort_by(|a, b| {
+            fn sort_key(s: crate::types::FileStatus) -> u8 {
+                match s {
+                    crate::types::FileStatus::Conflicted => 0,
+                    crate::types::FileStatus::Modified => 1,
+                    crate::types::FileStatus::Added => 2,
+                    crate::types::FileStatus::Deleted => 3,
+                    crate::types::FileStatus::Renamed => 4,
+                    crate::types::FileStatus::Unknown(_) => 5,
+                }
+            }
+            sort_key(a.status)
+                .cmp(&sort_key(b.status))
+                .then(a.path.cmp(&b.path))
+        });
+    }
+
     Ok(GraphData::new(lines, details, working_copy_index, op_id))
 }
 
@@ -813,10 +832,11 @@ mod tests {
 
         let detail = graph.details.get("mpvponzr").unwrap();
         assert_eq!(detail.files.len(), 2);
-        assert_eq!(detail.files[0].path, "bar.txt");
-        assert_eq!(detail.files[0].status, crate::types::FileStatus::Added);
-        assert_eq!(detail.files[1].path, "foo.txt");
-        assert_eq!(detail.files[1].status, crate::types::FileStatus::Modified);
+        // After sort: Modified before Added (sort_key M=1 < A=2)
+        assert_eq!(detail.files[0].path, "foo.txt");
+        assert_eq!(detail.files[0].status, crate::types::FileStatus::Modified);
+        assert_eq!(detail.files[1].path, "bar.txt");
+        assert_eq!(detail.files[1].status, crate::types::FileStatus::Added);
 
         let detail2 = graph.details.get("mrvmvrsz").unwrap();
         assert_eq!(detail2.files.len(), 1);
@@ -864,6 +884,50 @@ mod tests {
         let graph = parse_graph_output(output, String::new()).unwrap();
         let detail = graph.details.get("abc").unwrap();
         assert!(detail.files.is_empty());
+    }
+
+    #[test]
+    fn parse_file_line_conflicted() {
+        let result = parse_file_line("│  C conflict.txt");
+        assert!(result.is_some());
+        let change = result.unwrap();
+        assert_eq!(change.path, "conflict.txt");
+        assert_eq!(change.status, crate::types::FileStatus::Conflicted);
+    }
+
+    #[test]
+    fn parse_graph_output_files_sort_conflicted_first() {
+        // Conflicted file listed last in raw output; after sort it must be first.
+        let output = "\
+@  abc conflict\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Econflict\x1E\x1Efalse\x1Efalse\x1E@\x1E
+│  A added.txt
+│  M modified.txt
+│  C conflict.txt";
+
+        let graph = parse_graph_output(output, String::new()).unwrap();
+        let detail = graph.details.get("abc").unwrap();
+        assert_eq!(detail.files.len(), 3);
+        assert_eq!(detail.files[0].status, crate::types::FileStatus::Conflicted);
+        assert_eq!(detail.files[0].path, "conflict.txt");
+        assert_eq!(detail.files[1].status, crate::types::FileStatus::Modified);
+        assert_eq!(detail.files[2].status, crate::types::FileStatus::Added);
+    }
+
+    #[test]
+    fn parse_graph_output_files_sort_alpha_within_status() {
+        // Within the same status, files should sort alphabetically.
+        let output = "\
+@  abc alpha\x1Fabc\x1E111\x1Ea\x1Ea@b\x1E1m\x1Ealpha\x1E\x1Efalse\x1Efalse\x1E@\x1E
+│  A zoo.txt
+│  A alpha.txt
+│  A mid.txt";
+
+        let graph = parse_graph_output(output, String::new()).unwrap();
+        let detail = graph.details.get("abc").unwrap();
+        assert_eq!(detail.files.len(), 3);
+        assert_eq!(detail.files[0].path, "alpha.txt");
+        assert_eq!(detail.files[1].path, "mid.txt");
+        assert_eq!(detail.files[2].path, "zoo.txt");
     }
 
     #[test]
