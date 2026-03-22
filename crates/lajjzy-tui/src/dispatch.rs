@@ -37,7 +37,10 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
         | MutationKind::BookmarkDelete
         | MutationKind::RebaseSingle
         | MutationKind::RebaseWithDescendants
-        | MutationKind::ResolveConflict => {
+        | MutationKind::ResolveConflict
+        | MutationKind::Absorb
+        | MutationKind::Duplicate
+        | MutationKind::Revert => {
             state.pending_mutation = None;
         }
     }
@@ -1188,6 +1191,9 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
             }
         }
+
+        // M7 mutation stubs (implementations in Task 3)
+        Action::Absorb | Action::DuplicateChange | Action::Revert => {}
 
         Action::NewChange => {
             if state.pending_mutation.is_some() {

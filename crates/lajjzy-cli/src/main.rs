@@ -238,6 +238,11 @@ impl EffectExecutor {
                 );
             }
 
+            // M7 mutations — stubs until Task 4
+            Effect::Absorb { .. } | Effect::Duplicate { .. } | Effect::Revert { .. } => {
+                // TODO: Task 4 — wire up via run_mutation
+            }
+
             // Conflict handling
             Effect::LoadConflictData { change_id, path } => {
                 let result = backend
@@ -299,9 +304,10 @@ impl EffectExecutor {
             | Effect::EvalRevset { .. }
             | Effect::RebaseSingle { .. }
             | Effect::RebaseWithDescendants { .. }
-            | Effect::ResolveFile { .. } => {
-                self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1
-            }
+            | Effect::ResolveFile { .. }
+            | Effect::Absorb { .. }
+            | Effect::Duplicate { .. }
+            | Effect::Revert { .. } => self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1,
             Effect::LoadOpLog
             | Effect::LoadFileDiff { .. }
             | Effect::LoadChangeDiff { .. }

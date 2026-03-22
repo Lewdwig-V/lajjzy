@@ -69,6 +69,17 @@ pub enum Effect {
         query: String,
     },
 
+    // M7 mutations
+    Absorb {
+        change_id: String,
+    },
+    Duplicate {
+        change_id: String,
+    },
+    Revert {
+        change_id: String,
+    },
+
     // Conflict handling
     LoadConflictData {
         change_id: String,
