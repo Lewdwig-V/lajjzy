@@ -197,17 +197,20 @@ See `CLAUDE.md` for architectural constraints and crate structure.
 ## Roadmap
 
 - **M4 — Conflict Handling**: conflict file navigation, 3-way merge view, external merge tool launch
-- **M5 — Forge Integration**: Gerrit, GitHub, GitLab — review status in graph, push-for-review
-- **M6a — Polish**: configurable keymaps
-- **M6b — Polish**: theming support, colour sets, nerd font support, noto emoji, statusline fonts
-- **M6c — Polish**: basic mouse support
-- **M6d — Polish**: release packaging — `cargo install lajjzy`, `cargo binstall`, Nix flake
-- **M6e — Polish**: collapsible command log pane showing jj commands run on your behalf
-- **M6f — Polish**: `jj move` hunks in hunk picker, advanced rebasing workflows
-- **M6g — Polish**: context-aware revset completions (e.g., only authors inside `author()`)
-- **M7 — Parallel Branches**: lane view for concurrent work (git-butler model)
-- **M8 — Gerrit Depth**: patchset comparison, review actions, inline comments
-- **M9 — GitHub/GitLab Stacked PRs**: Graphite-style stack-aware PR management
+- **M5 — Release Packaging**: `cargo install lajjzy`, `cargo binstall`, Nix flake (jj community leans heavily on Nix)
+- **M6 — Forge Integration**: Gerrit, GitHub, GitLab — review status in graph, push-for-review
+- **M7 — More Mutations**: `jj absorb` (single keypress — auto-distribute fixup hunks to ancestor commits), `jj duplicate`, `jj backout`
+- **M8a — Polish**: configurable keymaps
+- **M8b — Polish**: theming support, colour sets, nerd font support, noto emoji, statusline fonts
+- **M8c — Polish**: basic mouse support
+- **M8d — Polish**: collapsible command log pane showing jj commands run on your behalf
+- **M8e — Polish**: `jj move` hunks in hunk picker, advanced rebasing workflows
+- **M8f — Polish**: context-aware revset completions (e.g., only authors inside `author()`)
+- **M8g — Polish**: workspace name in status bar, workspace picker modal (list, switch, create)
+- **M9 — Blame / Annotate**: file content with annotation gutter (change ID, author, date), drill into blame line to jump to originating change
+- **M10 — Parallel Branches**: lane view for concurrent work (git-butler model)
+- **M11 — Gerrit Depth**: patchset comparison, review actions, inline comments
+- **M12 — GitHub/GitLab Stacked PRs**: Graphite-style stack-aware PR management
 
 ## License
 
