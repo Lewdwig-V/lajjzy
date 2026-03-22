@@ -84,6 +84,16 @@ pub trait RepoBackend: Send + Sync {
         selections: &[crate::types::FileHunkSelection],
     ) -> Result<String>;
 
+    /// Absorb the changes from a commit into its ancestors.
+    /// Each hunk is attributed to the ancestor that last touched those lines.
+    fn absorb(&self, change_id: &str) -> Result<String>;
+
+    /// Duplicate a commit onto the same parents, creating an identical sibling.
+    fn duplicate(&self, change_id: &str) -> Result<String>;
+
+    /// Revert (inverse-apply) a commit's changes as a new child of `@`.
+    fn revert(&self, change_id: &str) -> Result<String>;
+
     /// Load structured conflict data for a file in a change.
     /// Returns regions of resolved content interleaved with conflict hunks.
     /// Returns Err for n-way conflicts (> 2 sides) or binary files.
