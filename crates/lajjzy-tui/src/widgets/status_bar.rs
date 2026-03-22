@@ -6,10 +6,10 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
-use lajjzy_core::types::{ChangeDetail, HunkResolution};
+use lajjzy_core::types::ChangeDetail;
 
 use crate::action::{BackgroundKind, HunkPickerOp, RebaseMode};
-use crate::app::{ConflictView, HunkPicker, PickingMode, TargetPick};
+use crate::app::{ConflictView, HunkPicker, HunkResolution, PickingMode, TargetPick};
 
 pub struct StatusBarWidget<'a> {
     change_id: Option<&'a str>,

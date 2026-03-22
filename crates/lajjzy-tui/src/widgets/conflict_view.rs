@@ -4,7 +4,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
-use lajjzy_core::types::{ConflictRegion, HunkResolution};
+use lajjzy_core::types::ConflictRegion;
+
+use crate::app::HunkResolution;
 
 use crate::app::ConflictView;
 
@@ -50,7 +52,7 @@ impl<'a> ConflictViewWidget<'a> {
                         .resolutions
                         .get(hunk_idx)
                         .copied()
-                        .unwrap_or(HunkResolution::Unresolved);
+                        .expect("resolutions length must match conflict count (enforced by ConflictView::new)");
                     let is_current = hunk_idx == self.view.cursor;
 
                     // base block (always dim)
@@ -263,15 +265,11 @@ mod tests {
     }
 
     fn make_view(regions: Vec<ConflictRegion>, resolutions: Vec<HunkResolution>) -> ConflictView {
-        ConflictView {
-            change_id: "abc".into(),
-            path: "src/lib.rs".into(),
-            data: ConflictData { regions },
-            resolutions,
-            cursor: 0,
-            scroll: 0,
-            viewport_height: 20,
-        }
+        let mut cv = ConflictView::new("abc".into(), "src/lib.rs".into(), ConflictData { regions });
+        // Override resolutions for test-specific scenarios.
+        cv.resolutions = resolutions;
+        cv.viewport_height = 20;
+        cv
     }
 
     #[test]

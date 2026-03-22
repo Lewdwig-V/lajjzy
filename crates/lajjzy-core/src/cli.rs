@@ -178,6 +178,7 @@ fn parse_file_line(raw_line: &str) -> Option<crate::types::FileChange> {
 }
 
 /// Parse the raw output of `jj log` with our custom template into `GraphData`.
+#[expect(clippy::too_many_lines)]
 fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
     let mut lines = Vec::new();
     let mut details = std::collections::HashMap::new();
@@ -269,6 +270,8 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
     }
 
     // Sort files: conflicted first, then by status priority, then alphabetically.
+    // Also recompute conflict_count from actual file statuses (the template boolean
+    // only tells us "has conflicts", not the count).
     for detail in details.values_mut() {
         detail.files.sort_by(|a, b| {
             fn sort_key(s: crate::types::FileStatus) -> u8 {
@@ -285,6 +288,11 @@ fn parse_graph_output(output: &str, op_id: String) -> Result<GraphData> {
                 .cmp(&sort_key(b.status))
                 .then(a.path.cmp(&b.path))
         });
+        detail.conflict_count = detail
+            .files
+            .iter()
+            .filter(|f| f.status == crate::types::FileStatus::Conflicted)
+            .count();
     }
 
     Ok(GraphData::new(lines, details, working_copy_index, op_id))
@@ -791,25 +799,71 @@ impl RepoBackend for JjCliBackend {
                 .block_on()
                 .map_err(|e| anyhow::anyhow!("Failed to extract conflict hunks: {e}"))?;
 
-        // For a 2-sided conflict: adds[0]=left, removes[0]=base, adds[1]=right
-        let left = String::from_utf8_lossy(contents.first()).into_owned();
-        let base = contents
-            .get_remove(0)
-            .map(|b| String::from_utf8_lossy(b).into_owned())
-            .unwrap_or_default();
-        let right = contents
-            .get_add(1)
-            .map(|b| String::from_utf8_lossy(b).into_owned())
-            .unwrap_or_default();
+        // Use per-hunk merging to split into resolved and conflicted regions.
+        let merge_options = repo.store().merge_options().clone();
+        let merge_result = jj_lib::files::merge_hunks(&contents, &merge_options);
 
-        Ok(ConflictData {
-            regions: vec![ConflictRegion::Conflict { base, left, right }],
-        })
+        let mut regions = Vec::new();
+        match merge_result {
+            jj_lib::files::MergeResult::Resolved(content) => {
+                let text = String::from_utf8(content.to_vec()).map_err(|_| {
+                    anyhow::anyhow!(
+                        "File contains non-UTF8 content — use external merge tool (m key)"
+                    )
+                })?;
+                regions.push(ConflictRegion::Resolved(text));
+            }
+            jj_lib::files::MergeResult::Conflict(hunks) => {
+                for hunk in hunks {
+                    if let Some(resolved) = hunk.as_resolved() {
+                        let text = String::from_utf8(resolved.to_vec()).map_err(|_| {
+                            anyhow::anyhow!(
+                                "File contains non-UTF8 content — use external merge tool (m key)"
+                            )
+                        })?;
+                        regions.push(ConflictRegion::Resolved(text));
+                    } else {
+                        // For a 2-sided conflict: first()=left, get_remove(0)=base, get_add(1)=right
+                        let left_bytes = hunk.first();
+                        let base_bytes = hunk.get_remove(0).ok_or_else(|| {
+                            anyhow::anyhow!("Missing base side for conflict in '{path}'")
+                        })?;
+                        let right_bytes = hunk.get_add(1).ok_or_else(|| {
+                            anyhow::anyhow!("Missing right side for conflict in '{path}'")
+                        })?;
+
+                        let left = String::from_utf8(left_bytes.to_vec()).map_err(|_| {
+                            anyhow::anyhow!(
+                                "File contains non-UTF8 content — use external merge tool (m key)"
+                            )
+                        })?;
+                        let base = String::from_utf8(base_bytes.to_vec()).map_err(|_| {
+                            anyhow::anyhow!(
+                                "File contains non-UTF8 content — use external merge tool (m key)"
+                            )
+                        })?;
+                        let right = String::from_utf8(right_bytes.to_vec()).map_err(|_| {
+                            anyhow::anyhow!(
+                                "File contains non-UTF8 content — use external merge tool (m key)"
+                            )
+                        })?;
+
+                        // Empty string means deletion — this is the expected representation
+                        // for a side that deleted the file/region.
+                        regions.push(ConflictRegion::Conflict { base, left, right });
+                    }
+                }
+            }
+        }
+
+        Ok(ConflictData { regions })
     }
 
     fn resolve_file(&self, change_id: &str, path: &str, content: Vec<u8>) -> Result<String> {
         // Defense-in-depth: verify change_id is the working copy
-        let wc_id = self.run_jj(&["log", "-r", "@", "--no-graph", "-T", "change_id.short()"])?;
+        let wc_id = self
+            .run_jj(&["log", "-r", "@", "--no-graph", "-T", "change_id.short()"])
+            .context("Failed to verify working copy")?;
         if wc_id.trim() != change_id {
             bail!(
                 "resolve_file: change {} is not the working copy (@={})",

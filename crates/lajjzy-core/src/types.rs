@@ -112,19 +112,12 @@ pub enum ConflictRegion {
     /// Non-conflicting content between conflict hunks.
     Resolved(String),
     /// A single conflict hunk with its three sides.
+    /// An empty string for any side means that side deleted the file/region.
     Conflict {
         base: String,
         left: String,
         right: String,
     },
-}
-
-/// Per-hunk resolution state for the conflict view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HunkResolution {
-    Unresolved,
-    AcceptLeft,
-    AcceptRight,
 }
 
 /// A hunk from a file diff (parsed from `jj diff --git`).
