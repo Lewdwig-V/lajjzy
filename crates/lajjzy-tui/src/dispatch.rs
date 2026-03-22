@@ -1247,6 +1247,7 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
 
         Action::PrCreateComplete => {
+            state.pending_forge_fetch = true;
             return vec![Effect::FetchForgeStatus];
         }
 

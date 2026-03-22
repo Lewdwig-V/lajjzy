@@ -249,12 +249,20 @@ impl EffectExecutor {
             }
             Effect::OpenPrInBrowser { bookmark, url } => {
                 let workspace_root = backend.workspace_root().to_path_buf();
-                // Best-effort browser launch
-                let _ = std::process::Command::new("gh")
+                let result = std::process::Command::new("gh")
                     .args(["pr", "view", &bookmark, "--web"])
                     .current_dir(&workspace_root)
                     .output();
-                let _ = tx.send(Action::PrViewUrl { url });
+                match result {
+                    Ok(o) if o.status.success() => {
+                        // Browser opened — also show URL in status bar
+                        let _ = tx.send(Action::PrViewUrl { url });
+                    }
+                    _ => {
+                        // Browser failed — show URL as clickable fallback
+                        let _ = tx.send(Action::PrViewUrl { url });
+                    }
+                }
             }
 
             // CreatePr is intercepted in execute_effects (suspend pattern)
