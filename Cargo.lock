@@ -1960,6 +1960,8 @@ dependencies = [
  "dirs",
  "jj-lib",
  "pollster",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
