@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders};
 use crate::app::{AppState, DetailMode, PanelFocus};
 use crate::widgets::diff_view::DiffViewWidget;
 use crate::widgets::file_list::FileListWidget;
+use crate::widgets::hunk_picker::HunkPickerWidget;
 
 pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
     let focused = state.focus == PanelFocus::Detail;
@@ -39,6 +40,23 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
                 format!("Diff — {path}")
             }
         }
+        DetailMode::HunkPicker => {
+            if let Some(hp) = state.hunk_picker.as_ref() {
+                match &hp.operation {
+                    crate::action::HunkPickerOp::Split { source } => {
+                        format!("Split — {source}")
+                    }
+                    crate::action::HunkPickerOp::Squash {
+                        source,
+                        destination,
+                    } => {
+                        format!("Squash — {source} → {destination}")
+                    }
+                }
+            } else {
+                "Hunk Picker".to_string()
+            }
+        }
     };
 
     let block = Block::default()
@@ -60,6 +78,12 @@ pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
         DetailMode::DiffView => {
             let widget = DiffViewWidget::new(&state.diff_data, state.diff_scroll);
             frame.render_widget(widget, inner);
+        }
+        DetailMode::HunkPicker => {
+            if let Some(hp) = state.hunk_picker.as_ref() {
+                let widget = HunkPickerWidget::new(hp);
+                frame.render_widget(widget, inner);
+            }
         }
     }
 }

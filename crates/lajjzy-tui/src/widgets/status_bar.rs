@@ -8,8 +8,8 @@ use ratatui::widgets::Widget;
 
 use lajjzy_core::types::ChangeDetail;
 
-use crate::action::{BackgroundKind, RebaseMode};
-use crate::app::{PickingMode, TargetPick};
+use crate::action::{BackgroundKind, HunkPickerOp, RebaseMode};
+use crate::app::{HunkPicker, PickingMode, TargetPick};
 
 pub struct StatusBarWidget<'a> {
     change_id: Option<&'a str>,
@@ -19,9 +19,11 @@ pub struct StatusBarWidget<'a> {
     active_revset: Option<&'a str>,
     pending_background: &'a HashSet<BackgroundKind>,
     target_pick: Option<&'a TargetPick>,
+    hunk_picker: Option<&'a HunkPicker>,
 }
 
 impl<'a> StatusBarWidget<'a> {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         change_id: Option<&'a str>,
         detail: Option<&'a ChangeDetail>,
@@ -30,6 +32,7 @@ impl<'a> StatusBarWidget<'a> {
         active_revset: Option<&'a str>,
         pending_background: &'a HashSet<BackgroundKind>,
         target_pick: Option<&'a TargetPick>,
+        hunk_picker: Option<&'a HunkPicker>,
     ) -> Self {
         Self {
             change_id,
@@ -39,17 +42,48 @@ impl<'a> StatusBarWidget<'a> {
             active_revset,
             pending_background,
             target_pick,
+            hunk_picker,
         }
     }
 }
 
 impl Widget for StatusBarWidget<'_> {
+    #[expect(clippy::too_many_lines)]
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 {
             return;
         }
 
-        // Priority: picking mode (yellow) > error (red) > status_message (green) > active_revset (cyan) > pending indicator > normal info
+        // Priority: hunk picker (magenta) > picking mode (yellow) > error (red) > status_message (green) > active_revset (cyan) > pending indicator > normal info
+        if let Some(hp) = self.hunk_picker {
+            let total: usize = hp.files.iter().map(|f| f.hunks.len()).sum();
+            let selected: usize = hp
+                .files
+                .iter()
+                .flat_map(|f| &f.hunks)
+                .filter(|h| h.selected)
+                .count();
+            let text = match &hp.operation {
+                HunkPickerOp::Split { source } => {
+                    format!(
+                        "Split: {selected}/{total} hunks selected → new change after {source}  (Space toggle, a/A all/none, Enter confirm, Esc cancel)"
+                    )
+                }
+                HunkPickerOp::Squash {
+                    source,
+                    destination,
+                } => {
+                    format!(
+                        "Squash: {selected}/{total} hunks from {source} → into {destination}  (Space toggle, a/A all/none, Enter confirm, Esc cancel)"
+                    )
+                }
+            };
+            let style = Style::default().fg(Color::Magenta);
+            let line = Line::styled(text, style);
+            buf.set_line(area.x, area.y, &line, area.width);
+            return;
+        }
+
         if let Some(pick) = self.target_pick {
             let mode_str = match pick.mode {
                 RebaseMode::Single => format!("Rebase {} onto →", pick.source),
@@ -177,8 +211,16 @@ mod tests {
     fn renders_change_detail() {
         let detail = sample_detail();
         let bg = empty_bg();
-        let widget =
-            StatusBarWidget::new(Some("abc12"), Some(&detail), None, None, None, &bg, None);
+        let widget = StatusBarWidget::new(
+            Some("abc12"),
+            Some(&detail),
+            None,
+            None,
+            None,
+            &bg,
+            None,
+            None,
+        );
         let area = Rect::new(0, 0, 60, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -207,6 +249,7 @@ mod tests {
             None,
             &bg,
             None,
+            None,
         );
         let area = Rect::new(0, 0, 40, 2);
         let mut buf = Buffer::empty(area);
@@ -222,7 +265,7 @@ mod tests {
     #[test]
     fn renders_nothing_when_no_detail_and_no_error() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None);
         let area = Rect::new(0, 0, 40, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -236,7 +279,8 @@ mod tests {
     #[test]
     fn renders_status_message_in_green() {
         let bg = empty_bg();
-        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg, None);
+        let widget =
+            StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg, None, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -259,6 +303,7 @@ mod tests {
             None,
             &bg,
             None,
+            None,
         );
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
@@ -276,7 +321,7 @@ mod tests {
     fn renders_pushing_indicator_in_cyan() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -292,7 +337,7 @@ mod tests {
     fn renders_fetching_indicator_in_cyan() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Fetch);
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -309,7 +354,7 @@ mod tests {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
         bg.insert(BackgroundKind::Fetch);
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None);
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, None);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -324,7 +369,8 @@ mod tests {
     fn status_message_takes_priority_over_pending_indicator() {
         let mut bg: HashSet<BackgroundKind> = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg, None);
+        let widget =
+            StatusBarWidget::new(None, None, None, Some("Pushed ok"), None, &bg, None, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -339,8 +385,16 @@ mod tests {
     #[test]
     fn status_bar_shows_active_revset() {
         let bg = empty_bg();
-        let widget =
-            StatusBarWidget::new(None, None, None, None, Some("mine() & ~empty()"), &bg, None);
+        let widget = StatusBarWidget::new(
+            None,
+            None,
+            None,
+            None,
+            Some("mine() & ~empty()"),
+            &bg,
+            None,
+            None,
+        );
         let area = Rect::new(0, 0, 60, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -359,7 +413,7 @@ mod tests {
     fn active_revset_takes_priority_over_pending_indicator() {
         let mut bg = HashSet::new();
         bg.insert(BackgroundKind::Push);
-        let widget = StatusBarWidget::new(None, None, None, None, Some("mine()"), &bg, None);
+        let widget = StatusBarWidget::new(None, None, None, None, Some("mine()"), &bg, None, None);
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -397,7 +451,7 @@ mod tests {
     fn status_bar_shows_picking_mode_text() {
         let bg = empty_bg();
         let pick = sample_pick_single();
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick));
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick), None);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -420,7 +474,7 @@ mod tests {
     fn status_bar_shows_blast_radius() {
         let bg = empty_bg();
         let pick = sample_pick_with_descendants();
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick));
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick), None);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -442,7 +496,7 @@ mod tests {
         pick.picking = PickingMode::Filtering {
             query: "main".into(),
         };
-        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick));
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, Some(&pick), None);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -460,8 +514,16 @@ mod tests {
     fn picking_mode_takes_priority_over_error() {
         let bg = empty_bg();
         let pick = sample_pick_single();
-        let widget =
-            StatusBarWidget::new(None, None, Some("some error"), None, None, &bg, Some(&pick));
+        let widget = StatusBarWidget::new(
+            None,
+            None,
+            Some("some error"),
+            None,
+            None,
+            &bg,
+            Some(&pick),
+            None,
+        );
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -472,6 +534,148 @@ mod tests {
         assert!(
             line0.contains("Rebase abc onto →"),
             "picking mode must beat error, got: {line0:?}"
+        );
+        assert!(!line0.contains("some error"));
+    }
+
+    fn sample_hunk_picker_split() -> HunkPicker {
+        use crate::action::HunkPickerOp;
+        use crate::app::{PickerFile, PickerHunk};
+        use lajjzy_core::types::{DiffLine, DiffLineKind};
+
+        HunkPicker {
+            operation: HunkPickerOp::Split {
+                source: "abc12".into(),
+            },
+            files: vec![PickerFile {
+                path: "src/lib.rs".into(),
+                hunks: vec![
+                    PickerHunk {
+                        header: "@@ -1,1 +1,2 @@".into(),
+                        lines: vec![DiffLine {
+                            kind: DiffLineKind::Added,
+                            content: "new line".into(),
+                        }],
+                        selected: true,
+                    },
+                    PickerHunk {
+                        header: "@@ -5,1 +6,2 @@".into(),
+                        lines: vec![DiffLine {
+                            kind: DiffLineKind::Added,
+                            content: "another".into(),
+                        }],
+                        selected: false,
+                    },
+                ],
+            }],
+            cursor: 0,
+            scroll: 0,
+            viewport_height: 20,
+        }
+    }
+
+    fn sample_hunk_picker_squash() -> HunkPicker {
+        use crate::action::HunkPickerOp;
+        use crate::app::{PickerFile, PickerHunk};
+        use lajjzy_core::types::{DiffLine, DiffLineKind};
+
+        HunkPicker {
+            operation: HunkPickerOp::Squash {
+                source: "abc12".into(),
+                destination: "def34".into(),
+            },
+            files: vec![PickerFile {
+                path: "src/lib.rs".into(),
+                hunks: vec![PickerHunk {
+                    header: "@@ -1,1 +1,2 @@".into(),
+                    lines: vec![DiffLine {
+                        kind: DiffLineKind::Added,
+                        content: "new line".into(),
+                    }],
+                    selected: true,
+                }],
+            }],
+            cursor: 0,
+            scroll: 0,
+            viewport_height: 20,
+        }
+    }
+
+    #[test]
+    fn status_bar_shows_hunk_picker_split() {
+        let bg = empty_bg();
+        let hp = sample_hunk_picker_split();
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, Some(&hp));
+        let area = Rect::new(0, 0, 100, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..100)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains("Split:"),
+            "expected Split prefix, got: {line0:?}"
+        );
+        assert!(
+            line0.contains("1/2"),
+            "expected 1/2 selected count, got: {line0:?}"
+        );
+        assert!(
+            line0.contains("abc12"),
+            "expected source id, got: {line0:?}"
+        );
+        assert_eq!(buf[(0, 0)].style().fg, Some(Color::Magenta));
+    }
+
+    #[test]
+    fn status_bar_shows_hunk_picker_squash() {
+        let bg = empty_bg();
+        let hp = sample_hunk_picker_squash();
+        let widget = StatusBarWidget::new(None, None, None, None, None, &bg, None, Some(&hp));
+        let area = Rect::new(0, 0, 100, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..100)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains("Squash:"),
+            "expected Squash prefix, got: {line0:?}"
+        );
+        assert!(line0.contains("abc12"), "expected source, got: {line0:?}");
+        assert!(
+            line0.contains("def34"),
+            "expected destination, got: {line0:?}"
+        );
+        assert_eq!(buf[(0, 0)].style().fg, Some(Color::Magenta));
+    }
+
+    #[test]
+    fn hunk_picker_takes_priority_over_error() {
+        let bg = empty_bg();
+        let hp = sample_hunk_picker_split();
+        let widget = StatusBarWidget::new(
+            None,
+            None,
+            Some("some error"),
+            None,
+            None,
+            &bg,
+            None,
+            Some(&hp),
+        );
+        let area = Rect::new(0, 0, 100, 1);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let line0: String = (0..100)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            line0.contains("Split:"),
+            "hunk picker must beat error, got: {line0:?}"
         );
         assert!(!line0.contains("some error"));
     }

@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use lajjzy_core::types::GraphData;
+use lajjzy_core::types::{FileHunkSelection, GraphData};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-use crate::action::{Action, BackgroundKind, DetailMode, MutationKind, PanelFocus, RebaseMode};
-use crate::app::{AppState, PickingMode, TargetPick};
+use crate::action::{
+    Action, BackgroundKind, DetailMode, HunkPickerOp, MutationKind, PanelFocus, RebaseMode,
+};
+use crate::app::{AppState, HunkPicker, PickerFile, PickerHunk, PickingMode, TargetPick};
 use crate::effect::Effect;
 use crate::modal::{HelpContext, Modal};
 
@@ -23,7 +25,8 @@ fn clear_op_gate(state: &mut AppState, op: MutationKind) {
         | MutationKind::New
         | MutationKind::Edit
         | MutationKind::Abandon
-        | MutationKind::Squash
+        | MutationKind::Split
+        | MutationKind::SquashPartial
         | MutationKind::Undo
         | MutationKind::Redo
         | MutationKind::BookmarkSet
@@ -115,6 +118,126 @@ fn jump_to_first_matching(state: &mut AppState) {
     if let Some(&first) = valid.first() {
         state.cursor = first;
         state.reset_detail();
+    }
+}
+
+// --- Hunk picker helpers ---
+
+/// Total selectable items in the flat list (file headers + hunks).
+fn picker_item_count(picker: &HunkPicker) -> usize {
+    picker
+        .files
+        .iter()
+        .map(|f| 1 + f.hunks.len()) // file header + its hunks
+        .sum()
+}
+
+/// Returns `(file_index, None)` for a file header row, or
+/// `(file_index, Some(hunk_index))` for a hunk row.
+fn picker_item_at(picker: &HunkPicker, flat_index: usize) -> Option<(usize, Option<usize>)> {
+    let mut offset = 0usize;
+    for (fi, file) in picker.files.iter().enumerate() {
+        if flat_index == offset {
+            return Some((fi, None));
+        }
+        offset += 1; // file header
+        let hunk_count = file.hunks.len();
+        if flat_index < offset + hunk_count {
+            return Some((fi, Some(flat_index - offset)));
+        }
+        offset += hunk_count;
+    }
+    None
+}
+
+/// Flat index of the next file header after the current cursor.
+fn picker_next_file_index(picker: &HunkPicker) -> Option<usize> {
+    let mut offset = 0usize;
+    for file in &picker.files {
+        if offset > picker.cursor {
+            return Some(offset);
+        }
+        offset += 1 + file.hunks.len();
+    }
+    None
+}
+
+/// Flat index of the previous file header before the current cursor.
+fn picker_prev_file_index(picker: &HunkPicker) -> Option<usize> {
+    let mut offset = 0usize;
+    let mut last_file_offset: Option<usize> = None;
+    for file in &picker.files {
+        if offset >= picker.cursor {
+            break;
+        }
+        last_file_offset = Some(offset);
+        offset += 1 + file.hunks.len();
+    }
+    last_file_offset
+}
+
+/// Compute the render row for a given flat cursor index.
+/// Each file header = 1 row, each hunk = 1 header row + N diff line rows.
+fn picker_cursor_render_row(picker: &HunkPicker) -> usize {
+    let mut render_row = 0;
+    let mut flat_idx = 0;
+    for file in &picker.files {
+        if flat_idx == picker.cursor {
+            return render_row;
+        }
+        render_row += 1; // file header
+        flat_idx += 1;
+        for hunk in &file.hunks {
+            if flat_idx == picker.cursor {
+                return render_row;
+            }
+            render_row += 1; // hunk header
+            render_row += hunk.lines.len(); // diff lines
+            flat_idx += 1;
+        }
+    }
+    render_row
+}
+
+/// Adjust `picker.scroll` to keep the cursor visible within `viewport_height` rows.
+fn picker_ensure_cursor_visible(picker: &mut HunkPicker, viewport_height: usize) {
+    if viewport_height == 0 {
+        return;
+    }
+    let cursor_row = picker_cursor_render_row(picker);
+    if cursor_row < picker.scroll {
+        picker.scroll = cursor_row;
+    } else if cursor_row >= picker.scroll + viewport_height {
+        picker.scroll = cursor_row - viewport_height + 1;
+    }
+}
+
+/// Convert `Vec<FileDiff>` into `HunkPicker` state with all hunks unselected.
+fn build_hunk_picker(
+    operation: HunkPickerOp,
+    file_diffs: Vec<lajjzy_core::types::FileDiff>,
+) -> HunkPicker {
+    let files = file_diffs
+        .into_iter()
+        .map(|fd| PickerFile {
+            path: fd.path,
+            hunks: fd
+                .hunks
+                .into_iter()
+                .map(|h| PickerHunk {
+                    header: h.header,
+                    lines: h.lines,
+                    selected: false,
+                })
+                .collect(),
+        })
+        .collect();
+    HunkPicker {
+        operation,
+        files,
+        cursor: 0,
+        scroll: 0,
+        viewport_height: 0, // set by event loop before dispatch
     }
 }
 
@@ -242,7 +365,15 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             };
         }
         Action::DetailMoveDown => {
-            if let Some(detail) = state.selected_detail() {
+            if state.detail_mode == DetailMode::HunkPicker {
+                if let Some(ref mut picker) = state.hunk_picker {
+                    let max = picker_item_count(picker).saturating_sub(1);
+                    if picker.cursor < max {
+                        picker.cursor += 1;
+                    }
+                    picker_ensure_cursor_visible(picker, picker.viewport_height);
+                }
+            } else if let Some(detail) = state.selected_detail() {
                 let max = detail.files.len().saturating_sub(1);
                 if state.detail_cursor < max {
                     state.detail_cursor += 1;
@@ -250,7 +381,14 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
         Action::DetailMoveUp => {
-            state.detail_cursor = state.detail_cursor.saturating_sub(1);
+            if state.detail_mode == DetailMode::HunkPicker {
+                if let Some(ref mut picker) = state.hunk_picker {
+                    picker.cursor = picker.cursor.saturating_sub(1);
+                    picker_ensure_cursor_visible(picker, picker.viewport_height);
+                }
+            } else {
+                state.detail_cursor = state.detail_cursor.saturating_sub(1);
+            }
         }
         Action::DetailEnter => {
             let file_info = state
@@ -298,6 +436,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
             DetailMode::FileList => {
                 state.focus = PanelFocus::Graph;
             }
+            // HunkPicker back handled by HunkCancel in Task 4
+            DetailMode::HunkPicker => {}
         },
         Action::DiffScrollDown => {
             let total_lines: usize = state
@@ -391,6 +531,8 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 PanelFocus::Detail => match state.detail_mode {
                     DetailMode::FileList => HelpContext::DetailFileList,
                     DetailMode::DiffView => HelpContext::DetailDiffView,
+                    // Use Graph context for HunkPicker until dedicated help is added
+                    DetailMode::HunkPicker => HelpContext::Graph,
                 },
             };
             state.modal = Some(Modal::Help { context, scroll: 0 });
@@ -535,15 +677,193 @@ pub fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return vec![Effect::Abandon { change_id: cid }];
             }
         }
-        Action::Squash => {
+        // --- Split ---
+        Action::Split => {
             if state.pending_mutation.is_some() {
                 state.status_message = Some("Operation in progress\u{2026}".into());
                 return vec![];
             }
-            if let Some(cid) = state.selected_change_id().map(String::from) {
-                state.pending_mutation = Some(MutationKind::Squash);
-                return vec![Effect::Squash { change_id: cid }];
+            if state.hunk_picker.is_some() {
+                return vec![];
             }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                return vec![Effect::LoadChangeDiff {
+                    change_id: cid.clone(),
+                    operation: HunkPickerOp::Split { source: cid },
+                }];
+            }
+        }
+        // --- SquashPartial ---
+        Action::SquashPartial => {
+            if state.pending_mutation.is_some() {
+                state.status_message = Some("Operation in progress\u{2026}".into());
+                return vec![];
+            }
+            if state.hunk_picker.is_some() {
+                return vec![];
+            }
+            if let Some(cid) = state.selected_change_id().map(String::from) {
+                let parent = state
+                    .selected_detail()
+                    .and_then(|d| d.parents.first().cloned());
+                match parent {
+                    Some(dest) => {
+                        return vec![Effect::LoadChangeDiff {
+                            change_id: cid.clone(),
+                            operation: HunkPickerOp::Squash {
+                                source: cid,
+                                destination: dest,
+                            },
+                        }];
+                    }
+                    None => {
+                        state.error = Some("Cannot squash: change has no parent".into());
+                    }
+                }
+            }
+        }
+        // --- ChangeDiffLoaded ---
+        Action::ChangeDiffLoaded { operation, result } => match result {
+            Ok(file_diffs) => {
+                if file_diffs.is_empty() || file_diffs.iter().all(|f| f.hunks.is_empty()) {
+                    let op_name = match &operation {
+                        HunkPickerOp::Split { .. } => "split",
+                        HunkPickerOp::Squash { .. } => "squash",
+                    };
+                    state.error = Some(format!("Nothing to {op_name}: change is empty"));
+                } else {
+                    state.hunk_picker = Some(build_hunk_picker(operation, file_diffs));
+                    state.detail_mode = DetailMode::HunkPicker;
+                    state.focus = PanelFocus::Detail;
+                }
+            }
+            Err(e) => {
+                state.error = Some(format!("Failed to load change diff: {e}"));
+            }
+        },
+        // --- HunkToggle ---
+        Action::HunkToggle => {
+            if let Some(ref mut picker) = state.hunk_picker
+                && let Some((fi, hunk_idx)) = picker_item_at(picker, picker.cursor)
+            {
+                if let Some(hi) = hunk_idx {
+                    // Toggle individual hunk
+                    picker.files[fi].hunks[hi].selected = !picker.files[fi].hunks[hi].selected;
+                } else {
+                    // File header: if any unselected -> select all, else deselect all
+                    let all_selected = picker.files[fi].hunks.iter().all(|h| h.selected);
+                    let new_val = !all_selected;
+                    for hunk in &mut picker.files[fi].hunks {
+                        hunk.selected = new_val;
+                    }
+                }
+            }
+        }
+        // --- HunkSelectAll ---
+        Action::HunkSelectAll => {
+            if let Some(ref mut picker) = state.hunk_picker {
+                for file in &mut picker.files {
+                    for hunk in &mut file.hunks {
+                        hunk.selected = true;
+                    }
+                }
+            }
+        }
+        // --- HunkDeselectAll ---
+        Action::HunkDeselectAll => {
+            if let Some(ref mut picker) = state.hunk_picker {
+                for file in &mut picker.files {
+                    for hunk in &mut file.hunks {
+                        hunk.selected = false;
+                    }
+                }
+            }
+        }
+        // --- HunkNextFile ---
+        Action::HunkNextFile => {
+            if let Some(ref mut picker) = state.hunk_picker
+                && let Some(idx) = picker_next_file_index(picker)
+            {
+                picker.cursor = idx;
+                picker_ensure_cursor_visible(picker, picker.viewport_height);
+            }
+        }
+        // --- HunkPrevFile ---
+        Action::HunkPrevFile => {
+            if let Some(ref mut picker) = state.hunk_picker
+                && let Some(idx) = picker_prev_file_index(picker)
+            {
+                picker.cursor = idx;
+                picker_ensure_cursor_visible(picker, picker.viewport_height);
+            }
+        }
+        // --- HunkConfirm ---
+        Action::HunkConfirm => {
+            if let Some(picker) = state.hunk_picker.take() {
+                // Validate: at least one hunk selected
+                let any_selected = picker
+                    .files
+                    .iter()
+                    .any(|f| f.hunks.iter().any(|h| h.selected));
+                if !any_selected {
+                    state.error = Some("No hunks selected".into());
+                    state.hunk_picker = Some(picker);
+                    return vec![];
+                }
+                // Validate: no mixed hunk selection within a file
+                for file in &picker.files {
+                    let selected_count = file.hunks.iter().filter(|h| h.selected).count();
+                    if selected_count > 0 && selected_count < file.hunks.len() {
+                        state.error =
+                            Some("Mixed hunk selection within a file not yet supported".into());
+                        state.hunk_picker = Some(picker);
+                        return vec![];
+                    }
+                }
+                // Build selections — include ALL files so backend can compute complement
+                // (split needs unselected files to know what stays in original)
+                let selections: Vec<FileHunkSelection> = picker
+                    .files
+                    .iter()
+                    .map(|f| {
+                        let selected: Vec<usize> = f
+                            .hunks
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, h)| h.selected)
+                            .map(|(i, _)| i)
+                            .collect();
+                        FileHunkSelection {
+                            path: f.path.clone(),
+                            selected_hunks: selected,
+                            total_hunks: f.hunks.len(),
+                        }
+                    })
+                    .collect();
+                let effect = match &picker.operation {
+                    HunkPickerOp::Split { source } => {
+                        state.pending_mutation = Some(MutationKind::Split);
+                        Effect::Split {
+                            change_id: source.clone(),
+                            selections,
+                        }
+                    }
+                    HunkPickerOp::Squash { source, .. } => {
+                        state.pending_mutation = Some(MutationKind::SquashPartial);
+                        Effect::SquashPartial {
+                            change_id: source.clone(),
+                            selections,
+                        }
+                    }
+                };
+                state.detail_mode = DetailMode::FileList;
+                return vec![effect];
+            }
+        }
+        // --- HunkCancel ---
+        Action::HunkCancel => {
+            state.hunk_picker = None;
+            state.detail_mode = DetailMode::FileList;
         }
         Action::NewChange => {
             if state.pending_mutation.is_some() {
@@ -1855,18 +2175,8 @@ mod tests {
         assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
     }
 
-    #[test]
-    fn squash_emits_effect_and_sets_gate() {
-        let mut state = AppState::new(sample_graph());
-        let effects = dispatch(&mut state, Action::Squash);
-        assert_eq!(
-            effects,
-            vec![Effect::Squash {
-                change_id: "abc".into()
-            }]
-        );
-        assert_eq!(state.pending_mutation, Some(MutationKind::Squash));
-    }
+    // split_placeholder_returns_empty and squash_partial_placeholder_returns_empty
+    // replaced by split_emits_load_change_diff and squash_partial_emits_load_change_diff
 
     #[test]
     fn edit_change_emits_effect_and_sets_gate() {
@@ -1917,7 +2227,7 @@ mod tests {
         let mut state = AppState::new(sample_graph());
         // Set the gate manually as if a prior mutation is in flight
         state.pending_mutation = Some(MutationKind::Abandon);
-        let effects = dispatch(&mut state, Action::Squash);
+        let effects = dispatch(&mut state, Action::NewChange);
         assert!(effects.is_empty());
         // Gate must still be the original Abandon — not overwritten
         assert_eq!(state.pending_mutation, Some(MutationKind::Abandon));
@@ -1991,11 +2301,11 @@ mod tests {
     #[test]
     fn repo_op_failed_clears_gate_and_sets_error() {
         let mut state = AppState::new(sample_graph());
-        state.pending_mutation = Some(MutationKind::Squash);
+        state.pending_mutation = Some(MutationKind::SquashPartial);
         let effects = dispatch(
             &mut state,
             Action::RepoOpFailed {
-                op: MutationKind::Squash,
+                op: MutationKind::SquashPartial,
                 error: "squash failed".into(),
             },
         );
@@ -3043,5 +3353,464 @@ mod tests {
         dispatch(&mut state, Action::ModalDismiss);
         assert!(state.target_pick.is_none());
         assert_eq!(state.cursor(), 0); // restored to original_cursor
+    }
+
+    // --- Hunk picker helpers & test utilities ---
+
+    fn sample_file_diffs() -> Vec<lajjzy_core::types::FileDiff> {
+        use lajjzy_core::types::{DiffHunk, DiffLine, DiffLineKind, FileDiff};
+        vec![
+            FileDiff {
+                path: "src/main.rs".into(),
+                hunks: vec![
+                    DiffHunk {
+                        header: "@@ -1,3 +1,4 @@".into(),
+                        lines: vec![
+                            DiffLine {
+                                kind: DiffLineKind::Context,
+                                content: " fn main()".into(),
+                            },
+                            DiffLine {
+                                kind: DiffLineKind::Added,
+                                content: "+    new_line()".into(),
+                            },
+                        ],
+                    },
+                    DiffHunk {
+                        header: "@@ -10,3 +11,4 @@".into(),
+                        lines: vec![
+                            DiffLine {
+                                kind: DiffLineKind::Removed,
+                                content: "-    old()".into(),
+                            },
+                            DiffLine {
+                                kind: DiffLineKind::Added,
+                                content: "+    new()".into(),
+                            },
+                        ],
+                    },
+                ],
+            },
+            FileDiff {
+                path: "src/lib.rs".into(),
+                hunks: vec![DiffHunk {
+                    header: "@@ -1,1 +1,2 @@".into(),
+                    lines: vec![DiffLine {
+                        kind: DiffLineKind::Added,
+                        content: "+pub mod utils".into(),
+                    }],
+                }],
+            },
+        ]
+    }
+
+    /// Flat layout for `sample_file_diffs()`:
+    ///   0: file "src/main.rs"
+    ///   1: hunk 0 of main.rs
+    ///   2: hunk 1 of main.rs
+    ///   3: file "src/lib.rs"
+    ///   4: hunk 0 of lib.rs
+    /// Total items = 5
+
+    #[test]
+    fn split_emits_load_change_diff() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let effects = dispatch(&mut state, Action::Split);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            &effects[0],
+            Effect::LoadChangeDiff {
+                change_id,
+                operation: HunkPickerOp::Split { source },
+            } if change_id == "abc" && source == "abc"
+        ));
+    }
+
+    #[test]
+    fn squash_partial_emits_load_change_diff() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let effects = dispatch(&mut state, Action::SquashPartial);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            &effects[0],
+            Effect::LoadChangeDiff {
+                change_id,
+                operation: HunkPickerOp::Squash { source, destination },
+            } if change_id == "abc" && source == "abc" && destination == "def"
+        ));
+    }
+
+    #[test]
+    fn squash_partial_on_root_shows_error() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        // Move cursor to "ghi" which has no parents
+        state.set_cursor_for_test(4);
+        let effects = dispatch(&mut state, Action::SquashPartial);
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("no parent"));
+    }
+
+    #[test]
+    fn split_suppressed_while_pending() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        state.pending_mutation = Some(MutationKind::Describe);
+        let effects = dispatch(&mut state, Action::Split);
+        assert!(effects.is_empty());
+        assert!(
+            state
+                .status_message
+                .as_deref()
+                .unwrap()
+                .contains("in progress")
+        );
+    }
+
+    #[test]
+    fn change_diff_loaded_opens_hunk_picker() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        let effects = dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op.clone(),
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.detail_mode, DetailMode::HunkPicker);
+        assert_eq!(state.focus, PanelFocus::Detail);
+        let picker = state.hunk_picker.as_ref().unwrap();
+        assert_eq!(picker.files.len(), 2);
+        assert_eq!(picker.cursor, 0);
+        // All hunks unselected
+        assert!(
+            picker
+                .files
+                .iter()
+                .all(|f| f.hunks.iter().all(|h| !h.selected))
+        );
+    }
+
+    #[test]
+    fn change_diff_loaded_empty_shows_error() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        let effects = dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(vec![]),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("empty"));
+        assert!(state.hunk_picker.is_none());
+    }
+
+    #[test]
+    fn change_diff_loaded_error_sets_error() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        let effects = dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Err("backend failure".into()),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(state.error.as_deref().unwrap().contains("backend failure"));
+    }
+
+    #[test]
+    fn hunk_toggle_selects_and_deselects() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        // Move cursor to hunk 0 of main.rs (flat index 1)
+        state.hunk_picker.as_mut().unwrap().cursor = 1;
+        dispatch(&mut state, Action::HunkToggle);
+        assert!(state.hunk_picker.as_ref().unwrap().files[0].hunks[0].selected);
+        // Toggle again to deselect
+        dispatch(&mut state, Action::HunkToggle);
+        assert!(!state.hunk_picker.as_ref().unwrap().files[0].hunks[0].selected);
+    }
+
+    #[test]
+    fn hunk_toggle_on_file_header_toggles_all() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        // Cursor at 0 = file header for main.rs
+        dispatch(&mut state, Action::HunkToggle);
+        // All hunks in main.rs should be selected
+        let picker = state.hunk_picker.as_ref().unwrap();
+        assert!(picker.files[0].hunks.iter().all(|h| h.selected));
+        // Toggle again: all selected -> deselect all
+        dispatch(&mut state, Action::HunkToggle);
+        let picker = state.hunk_picker.as_ref().unwrap();
+        assert!(picker.files[0].hunks.iter().all(|h| !h.selected));
+    }
+
+    #[test]
+    fn hunk_select_all_and_deselect_all() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        dispatch(&mut state, Action::HunkSelectAll);
+        let picker = state.hunk_picker.as_ref().unwrap();
+        assert!(
+            picker
+                .files
+                .iter()
+                .all(|f| f.hunks.iter().all(|h| h.selected))
+        );
+
+        dispatch(&mut state, Action::HunkDeselectAll);
+        let picker = state.hunk_picker.as_ref().unwrap();
+        assert!(
+            picker
+                .files
+                .iter()
+                .all(|f| f.hunks.iter().all(|h| !h.selected))
+        );
+    }
+
+    #[test]
+    fn hunk_next_file_and_prev_file() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        // Cursor starts at 0 (first file header)
+        dispatch(&mut state, Action::HunkNextFile);
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 3); // second file header
+
+        dispatch(&mut state, Action::HunkNextFile);
+        // No next file — stays at 3
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 3);
+
+        dispatch(&mut state, Action::HunkPrevFile);
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 0); // back to first file header
+
+        dispatch(&mut state, Action::HunkPrevFile);
+        // No prev file — stays at 0
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn hunk_confirm_emits_split_effect() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        // Select all hunks in first file only (via file header toggle)
+        dispatch(&mut state, Action::HunkToggle); // cursor 0 = main.rs header
+        let effects = dispatch(&mut state, Action::HunkConfirm);
+        assert_eq!(effects.len(), 1);
+        // ALL files included in selections (backend needs complement for split)
+        if let Effect::Split {
+            change_id,
+            selections,
+        } = &effects[0]
+        {
+            assert_eq!(change_id, "abc");
+            assert_eq!(selections.len(), 2); // both files sent
+            let main_rs = selections.iter().find(|s| s.path == "src/main.rs").unwrap();
+            assert_eq!(main_rs.selected_hunks, vec![0, 1]); // selected
+            assert_eq!(main_rs.total_hunks, 2);
+            let lib_rs = selections.iter().find(|s| s.path == "src/lib.rs").unwrap();
+            assert!(lib_rs.selected_hunks.is_empty()); // NOT selected
+        } else {
+            panic!("expected Effect::Split");
+        }
+        assert_eq!(state.pending_mutation, Some(MutationKind::Split));
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+        assert!(state.hunk_picker.is_none());
+    }
+
+    #[test]
+    fn hunk_confirm_emits_squash_partial_effect() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Squash {
+            source: "abc".into(),
+            destination: "def".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        // Select all
+        dispatch(&mut state, Action::HunkSelectAll);
+        let effects = dispatch(&mut state, Action::HunkConfirm);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            &effects[0],
+            Effect::SquashPartial { change_id, selections }
+                if change_id == "abc" && selections.len() == 2
+        ));
+        assert_eq!(state.pending_mutation, Some(MutationKind::SquashPartial));
+    }
+
+    #[test]
+    fn hunk_confirm_with_nothing_selected_shows_error() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        // Don't select anything
+        let effects = dispatch(&mut state, Action::HunkConfirm);
+        assert!(effects.is_empty());
+        assert!(
+            state
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("No hunks selected")
+        );
+        // Picker still active
+        assert!(state.hunk_picker.is_some());
+    }
+
+    #[test]
+    fn hunk_confirm_with_mixed_selection_shows_error() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        // Select only hunk 0 of main.rs (which has 2 hunks) — mixed selection
+        state.hunk_picker.as_mut().unwrap().cursor = 1;
+        dispatch(&mut state, Action::HunkToggle);
+        let effects = dispatch(&mut state, Action::HunkConfirm);
+        assert!(effects.is_empty());
+        assert!(
+            state
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("Mixed hunk selection")
+        );
+        assert!(state.hunk_picker.is_some());
+    }
+
+    #[test]
+    fn hunk_cancel_exits_picker() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        assert_eq!(state.detail_mode, DetailMode::HunkPicker);
+        dispatch(&mut state, Action::HunkCancel);
+        assert!(state.hunk_picker.is_none());
+        assert_eq!(state.detail_mode, DetailMode::FileList);
+    }
+
+    #[test]
+    fn detail_move_down_up_in_hunk_picker() {
+        let mut state = AppState::new(sample_graph_with_parents());
+        let op = HunkPickerOp::Split {
+            source: "abc".into(),
+        };
+        dispatch(
+            &mut state,
+            Action::ChangeDiffLoaded {
+                operation: op,
+                result: Ok(sample_file_diffs()),
+            },
+        );
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 0);
+
+        dispatch(&mut state, Action::DetailMoveDown);
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 1);
+
+        dispatch(&mut state, Action::DetailMoveDown);
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 2);
+
+        dispatch(&mut state, Action::DetailMoveDown);
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 3);
+
+        dispatch(&mut state, Action::DetailMoveDown);
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 4);
+
+        // At max (4), should stay
+        dispatch(&mut state, Action::DetailMoveDown);
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 4);
+
+        // Move back up
+        dispatch(&mut state, Action::DetailMoveUp);
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 3);
+
+        // Move to 0 and try going up past it
+        state.hunk_picker.as_mut().unwrap().cursor = 0;
+        dispatch(&mut state, Action::DetailMoveUp);
+        assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 0);
     }
 }

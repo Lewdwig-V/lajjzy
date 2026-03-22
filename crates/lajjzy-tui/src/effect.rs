@@ -1,3 +1,7 @@
+use lajjzy_core::types::FileHunkSelection;
+
+use crate::action::HunkPickerOp;
+
 /// Effects emitted by dispatch. Defined in lajjzy-tui, executed in lajjzy-cli.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
@@ -26,8 +30,17 @@ pub enum Effect {
     Abandon {
         change_id: String,
     },
-    Squash {
+    LoadChangeDiff {
         change_id: String,
+        operation: HunkPickerOp,
+    },
+    Split {
+        change_id: String,
+        selections: Vec<FileHunkSelection>,
+    },
+    SquashPartial {
+        change_id: String,
+        selections: Vec<FileHunkSelection>,
     },
     Undo,
     Redo,

@@ -83,6 +83,21 @@ impl std::fmt::Display for FileStatus {
     }
 }
 
+/// All hunks for a single file in a change's diff.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileDiff {
+    pub path: String,
+    pub hunks: Vec<DiffHunk>,
+}
+
+/// User's hunk selection for a single file (sent to backend for split/squash).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileHunkSelection {
+    pub path: String,
+    pub selected_hunks: Vec<usize>,
+    pub total_hunks: usize,
+}
+
 /// A hunk from a file diff (parsed from `jj diff --git`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiffHunk {

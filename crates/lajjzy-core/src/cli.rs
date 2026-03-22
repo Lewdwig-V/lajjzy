@@ -297,6 +297,108 @@ fn parse_diff_output(output: &str) -> Result<Vec<crate::types::DiffHunk>> {
     Ok(hunks)
 }
 
+/// Flush the accumulated state for the current file into `files`.
+///
+/// Handles the header-only case (chmod, binary, pure rename) by creating a
+/// synthetic hunk so the caller always sees at least one hunk per file.
+fn flush_file_diff(
+    files: &mut Vec<crate::types::FileDiff>,
+    path: Option<String>,
+    hunks: &mut Vec<crate::types::DiffHunk>,
+    open_hunk: &mut Option<crate::types::DiffHunk>,
+    header_lines: &mut Vec<crate::types::DiffLine>,
+) {
+    let Some(p) = path else { return };
+    if let Some(h) = open_hunk.take() {
+        hunks.push(h);
+    }
+    if hunks.is_empty() && !header_lines.is_empty() {
+        hunks.push(crate::types::DiffHunk {
+            header: String::new(),
+            lines: std::mem::take(header_lines),
+        });
+    }
+    header_lines.clear();
+    files.push(crate::types::FileDiff {
+        path: p,
+        hunks: std::mem::take(hunks),
+    });
+}
+
+/// Parse git-format diff output for an entire change, grouping hunks by file.
+///
+/// Splits on `diff --git a/<path> b/<path>` lines. Each file gets its own
+/// [`FileDiff`][crate::types::FileDiff]. Header-only diffs (chmod, binary,
+/// pure rename) produce a synthetic hunk so callers always see something.
+#[expect(clippy::unnecessary_wraps)] // Result kept for forward-compatibility with error paths
+fn parse_file_diffs(output: &str) -> Result<Vec<crate::types::FileDiff>> {
+    let mut files: Vec<crate::types::FileDiff> = Vec::new();
+
+    // State for the file currently being accumulated.
+    let mut current_path: Option<String> = None;
+    let mut current_hunks: Vec<crate::types::DiffHunk> = Vec::new();
+    let mut current_hunk: Option<crate::types::DiffHunk> = None;
+    let mut header_lines: Vec<crate::types::DiffLine> = Vec::new();
+
+    for line in output.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            // Flush the previous file before starting a new one.
+            flush_file_diff(
+                &mut files,
+                current_path.take(),
+                &mut current_hunks,
+                &mut current_hunk,
+                &mut header_lines,
+            );
+
+            // Extract path from `a/<path> b/<path>` — take the part after ` b/`.
+            let path = rest
+                .find(" b/")
+                .map_or_else(|| rest.to_string(), |i| rest[i + 3..].to_string());
+            current_path = Some(path);
+        } else if line.starts_with("@@") {
+            if let Some(h) = current_hunk.take() {
+                current_hunks.push(h);
+            }
+            current_hunk = Some(crate::types::DiffHunk {
+                header: line.to_string(),
+                lines: Vec::new(),
+            });
+        } else if let Some(ref mut hunk) = current_hunk {
+            let (kind, content) = if let Some(rest) = line.strip_prefix('+') {
+                (crate::types::DiffLineKind::Added, rest)
+            } else if let Some(rest) = line.strip_prefix('-') {
+                (crate::types::DiffLineKind::Removed, rest)
+            } else if let Some(rest) = line.strip_prefix(' ') {
+                (crate::types::DiffLineKind::Context, rest)
+            } else {
+                (crate::types::DiffLineKind::Context, line)
+            };
+            hunk.lines.push(crate::types::DiffLine {
+                kind,
+                content: content.to_string(),
+            });
+        } else if current_path.is_some() {
+            // Pre-@@ header lines (index, new file mode, --- +++, etc.)
+            header_lines.push(crate::types::DiffLine {
+                kind: crate::types::DiffLineKind::Header,
+                content: line.to_string(),
+            });
+        }
+    }
+
+    // Flush the last file.
+    flush_file_diff(
+        &mut files,
+        current_path.take(),
+        &mut current_hunks,
+        &mut current_hunk,
+        &mut header_lines,
+    );
+
+    Ok(files)
+}
+
 /// Parse the raw output of `jj op log` with our custom template into a list of `OpLogEntry`.
 ///
 /// Expected line format: `<id>\x1f<description>\x1e<timestamp>`
@@ -353,6 +455,24 @@ impl RepoBackend for JjCliBackend {
             String::from_utf8(output.stdout).context("jj diff output was not valid UTF-8")?;
 
         parse_diff_output(&stdout)
+    }
+
+    fn change_diff(&self, change_id: &str) -> Result<Vec<crate::types::FileDiff>> {
+        let output = Command::new("jj")
+            .args(["diff", "-r", change_id, "--git", "--color=never"])
+            .current_dir(&self.workspace_root)
+            .output()
+            .with_context(|| format!("Failed to run `jj diff` for {change_id}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("jj diff failed for {change_id}: {}", stderr.trim());
+        }
+
+        let stdout =
+            String::from_utf8(output.stdout).context("jj diff output was not valid UTF-8")?;
+
+        parse_file_diffs(&stdout)
     }
 
     fn load_graph(&self, revset: Option<&str>) -> Result<GraphData> {
@@ -460,14 +580,6 @@ impl RepoBackend for JjCliBackend {
         Ok(format!("Abandoned {change_id}"))
     }
 
-    fn squash(&self, change_id: &str) -> Result<String> {
-        // `-u` / `--use-destination-message` prevents jj from opening an editor
-        // to compose a combined description when both source and destination have
-        // non-empty descriptions.
-        self.run_jj(&["squash", "-r", change_id, "-u"])?;
-        Ok(format!("Squashed {change_id} into parent"))
-    }
-
     fn undo(&self) -> Result<String> {
         self.run_jj(&["undo"])?;
         Ok("Undid last operation".into())
@@ -506,6 +618,63 @@ impl RepoBackend for JjCliBackend {
     fn rebase_with_descendants(&self, source: &str, destination: &str) -> Result<String> {
         self.run_jj(&["rebase", "-s", source, "--onto", destination])?;
         Ok(format!("Rebased {source} + descendants onto {destination}"))
+    }
+
+    fn split(
+        &self,
+        change_id: &str,
+        selections: &[crate::types::FileHunkSelection],
+    ) -> Result<String> {
+        // Our convention: "selected = moves to child".
+        // `jj split <paths>` keeps <paths> in the ORIGINAL commit; the rest go
+        // to the NEW child.  So we must pass the *complement* — the files that
+        // are NOT fully selected — to jj split, keeping them in the original.
+        // Fully-selected files (selected_hunks.len() == total_hunks) are the
+        // ones we want in the child, so they must NOT appear in the args.
+        let all_paths: std::collections::HashSet<&str> =
+            selections.iter().map(|s| s.path.as_str()).collect();
+        let fully_selected: std::collections::HashSet<&str> = selections
+            .iter()
+            .filter(|s| !s.selected_hunks.is_empty() && s.selected_hunks.len() == s.total_hunks)
+            .map(|s| s.path.as_str())
+            .collect();
+        let mut keep_in_original: Vec<&str> =
+            all_paths.difference(&fully_selected).copied().collect();
+        if keep_in_original.is_empty() {
+            bail!("Cannot split: all files are fully selected (nothing would remain in original)");
+        }
+        // Sort for determinism in tests and CLI output.
+        keep_in_original.sort_unstable();
+        // `-m ""` prevents jj from opening $EDITOR for the first commit's
+        // description.  The second (child) commit keeps the original description.
+        let mut args = vec!["split", "-r", change_id, "-m", "", "--"];
+        args.extend(keep_in_original);
+        self.run_jj(&args)?;
+        Ok(format!("Split {change_id}"))
+    }
+
+    fn squash_partial(
+        &self,
+        change_id: &str,
+        selections: &[crate::types::FileHunkSelection],
+    ) -> Result<String> {
+        let mut selected_paths: Vec<&str> = selections
+            .iter()
+            .filter(|s| !s.selected_hunks.is_empty())
+            .map(|s| s.path.as_str())
+            .collect();
+        if selected_paths.is_empty() {
+            bail!("No files selected for squash");
+        }
+        // Sort for determinism.
+        selected_paths.sort_unstable();
+        // `-u` / `--use-destination-message` prevents jj from opening $EDITOR
+        // for a combined description when both source and destination have
+        // non-empty descriptions.
+        let mut args = vec!["squash", "-r", change_id, "-u", "--"];
+        args.extend(selected_paths);
+        self.run_jj(&args)?;
+        Ok(format!("Squashed from {change_id}"))
     }
 }
 
@@ -1067,71 +1236,6 @@ new mode 100755";
     }
 
     #[test]
-    fn squash_on_real_repo() {
-        if !jj_available() {
-            eprintln!("Skipping");
-            return;
-        }
-        let tmp = init_repo();
-
-        // Write a file in the initial change.
-        std::fs::write(tmp.path().join("parent.txt"), "parent content\n").unwrap();
-        Command::new("jj")
-            .args(["describe", "-m", "parent"])
-            .current_dir(tmp.path())
-            .status()
-            .unwrap();
-
-        // Create a child change and write another file.
-        Command::new("jj")
-            .args(["new"])
-            .current_dir(tmp.path())
-            .status()
-            .unwrap();
-        std::fs::write(tmp.path().join("child.txt"), "child content\n").unwrap();
-        Command::new("jj")
-            .args(["describe", "-m", "child"])
-            .current_dir(tmp.path())
-            .status()
-            .unwrap();
-
-        let backend = JjCliBackend::new(tmp.path()).unwrap();
-        let graph_before = backend.load_graph(None).unwrap();
-        let wc_idx = graph_before.working_copy_index.unwrap();
-        let child_id = graph_before.lines[wc_idx]
-            .change_id
-            .as_ref()
-            .unwrap()
-            .clone();
-
-        backend.squash(&child_id).unwrap();
-
-        let graph_after = backend.load_graph(None).unwrap();
-        // After squash the child change ID is gone from the graph.
-        // jj creates a new empty working-copy commit in its place, so the
-        // total node count stays the same — we verify absence of the original ID.
-        assert!(
-            !graph_after.details.contains_key(&child_id),
-            "squashed child change should not appear in graph"
-        );
-        // child.txt should now appear in the surviving parent change's files.
-        let surviving_id = graph_after
-            .node_indices()
-            .iter()
-            .filter_map(|&i| graph_after.lines[i].change_id.as_ref())
-            .find(|id| {
-                graph_after
-                    .details
-                    .get(*id)
-                    .is_some_and(|d| d.files.iter().any(|f| f.path == "child.txt"))
-            });
-        assert!(
-            surviving_id.is_some(),
-            "child.txt should appear in the squashed parent"
-        );
-    }
-
-    #[test]
     fn undo_on_real_repo() {
         if !jj_available() {
             eprintln!("Skipping");
@@ -1445,6 +1549,240 @@ new mode 100755";
             detail(&c_id).parents.contains(&b_id),
             "after rebase_with_descendants, C should still be a child of B; parents={:?}",
             detail(&c_id).parents
+        );
+    }
+
+    // ── parse_file_diffs tests ───────────────────────────────────────────────
+
+    #[test]
+    fn parse_file_diffs_empty() {
+        let files = parse_file_diffs("").unwrap();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn parse_file_diffs_multi_file() {
+        let output = "\
+diff --git a/foo.txt b/foo.txt
+new file mode 100644
+--- /dev/null
++++ b/foo.txt
+@@ -0,0 +1,1 @@
++hello
+diff --git a/bar.txt b/bar.txt
+new file mode 100644
+--- /dev/null
++++ b/bar.txt
+@@ -0,0 +1,1 @@
++world";
+        let files = parse_file_diffs(output).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "foo.txt");
+        assert_eq!(files[1].path, "bar.txt");
+        assert!(!files[0].hunks.is_empty());
+        assert!(!files[1].hunks.is_empty());
+    }
+
+    #[test]
+    fn parse_file_diffs_single_file_multi_hunk() {
+        let output = "\
+diff --git a/foo.txt b/foo.txt
+--- a/foo.txt
++++ b/foo.txt
+@@ -1,3 +1,3 @@
+ line1
+-old2
++new2
+ line3
+@@ -10,3 +10,3 @@
+ line10
+-old11
++new11
+ line12";
+        let files = parse_file_diffs(output).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "foo.txt");
+        assert_eq!(files[0].hunks.len(), 2);
+    }
+
+    #[test]
+    fn parse_file_diffs_header_only_file() {
+        // chmod-only diff: has headers but no @@ hunks — should produce a synthetic hunk.
+        let output = "\
+diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755";
+        let files = parse_file_diffs(output).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "script.sh");
+        assert_eq!(files[0].hunks.len(), 1);
+        assert!(files[0].hunks[0].header.is_empty());
+        assert_eq!(
+            files[0].hunks[0].lines[0].kind,
+            crate::types::DiffLineKind::Header
+        );
+    }
+
+    #[test]
+    fn parse_file_diffs_path_with_spaces() {
+        // Paths containing spaces: the ` b/` marker split must still work.
+        let output = "\
+diff --git a/my file.txt b/my file.txt
+--- a/my file.txt
++++ b/my file.txt
+@@ -1 +1 @@
+-old
++new";
+        let files = parse_file_diffs(output).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "my file.txt");
+    }
+
+    #[test]
+    fn change_diff_returns_grouped_file_diffs() {
+        if !jj_available() {
+            eprintln!("Skipping");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        std::fs::write(tmp.path().join("foo.txt"), "hello\n").unwrap();
+        std::fs::write(tmp.path().join("bar.txt"), "world\n").unwrap();
+        backend.describe("@", "add files").unwrap();
+
+        let files = backend.change_diff("@").unwrap();
+        assert!(files.len() >= 2);
+        assert!(files.iter().any(|f| f.path == "foo.txt"));
+        assert!(files.iter().any(|f| f.path == "bar.txt"));
+        for f in &files {
+            assert!(!f.hunks.is_empty(), "file {} should have hunks", f.path);
+        }
+    }
+
+    // ── split / squash_partial tests ─────────────────────────────────────────
+
+    #[test]
+    fn split_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        std::fs::write(tmp.path().join("keep.txt"), "keep\n").unwrap();
+        std::fs::write(tmp.path().join("move.txt"), "move\n").unwrap();
+        backend.describe("@", "two files").unwrap();
+
+        // "move.txt" is fully selected — it should end up in the child change.
+        // "keep.txt" is NOT selected — it stays in the original.
+        let selections = vec![
+            crate::types::FileHunkSelection {
+                path: "keep.txt".into(),
+                selected_hunks: vec![],
+                total_hunks: 1,
+            },
+            crate::types::FileHunkSelection {
+                path: "move.txt".into(),
+                selected_hunks: vec![0],
+                total_hunks: 1,
+            },
+        ];
+        backend.split("@", &selections).unwrap();
+
+        let graph = backend.load_graph(None).unwrap();
+        // root + original (keep.txt) + child (move.txt) = at least 3 node lines.
+        assert!(
+            graph.node_indices().len() >= 3,
+            "expected at least 3 change nodes after split, got {}",
+            graph.node_indices().len()
+        );
+    }
+
+    #[test]
+    fn split_rejects_all_files_selected() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "a\n").unwrap();
+        backend.describe("@", "one file").unwrap();
+
+        let selections = vec![crate::types::FileHunkSelection {
+            path: "a.txt".into(),
+            selected_hunks: vec![0],
+            total_hunks: 1,
+        }];
+        let result = backend.split("@", &selections);
+        assert!(
+            result.is_err(),
+            "split with all files selected should return an error"
+        );
+    }
+
+    #[test]
+    fn squash_partial_on_real_repo() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+
+        // Set up: parent change, then a child change with a file.
+        backend.describe("@", "parent").unwrap();
+        backend.new_change("@").unwrap();
+        std::fs::write(tmp.path().join("file.txt"), "content\n").unwrap();
+        backend.describe("@", "child with file").unwrap();
+
+        let selections = vec![crate::types::FileHunkSelection {
+            path: "file.txt".into(),
+            selected_hunks: vec![0],
+            total_hunks: 1,
+        }];
+        backend.squash_partial("@", &selections).unwrap();
+
+        // After squash_partial the child may be abandoned (it became empty).
+        // file.txt should now appear in the parent.
+        let graph = backend.load_graph(None).unwrap();
+        assert!(
+            graph.node_indices().len() >= 2,
+            "expected at least 2 node lines after squash_partial"
+        );
+        let file_in_parent = graph
+            .node_indices()
+            .iter()
+            .filter_map(|&i| graph.detail_at(i))
+            .any(|d| d.files.iter().any(|f| f.path == "file.txt"));
+        assert!(
+            file_in_parent,
+            "file.txt should appear in a change after squash_partial"
+        );
+    }
+
+    #[test]
+    fn squash_partial_rejects_empty_selection() {
+        if !jj_available() {
+            eprintln!("Skipping: jj not in PATH");
+            return;
+        }
+        let tmp = init_repo();
+        let backend = JjCliBackend::new(tmp.path()).unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "a\n").unwrap();
+        backend.describe("@", "has file").unwrap();
+
+        // No hunks selected for any file.
+        let selections = vec![crate::types::FileHunkSelection {
+            path: "a.txt".into(),
+            selected_hunks: vec![],
+            total_hunks: 1,
+        }];
+        let result = backend.squash_partial("@", &selections);
+        assert!(
+            result.is_err(),
+            "squash_partial with no selected hunks should return an error"
         );
     }
 }

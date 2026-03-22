@@ -104,14 +104,37 @@ impl EffectExecutor {
                     || backend.abandon(&change_id),
                 );
             }
-            Effect::Squash { change_id } => {
+            Effect::LoadChangeDiff {
+                change_id,
+                operation,
+            } => {
+                let result = backend.change_diff(&change_id).map_err(|e| e.to_string());
+                let _ = tx.send(Action::ChangeDiffLoaded { operation, result });
+            }
+            Effect::Split {
+                change_id,
+                selections,
+            } => {
                 run_mutation(
                     &backend,
                     &tx,
-                    MutationKind::Squash,
+                    MutationKind::Split,
                     generation,
                     &active_revset,
-                    || backend.squash(&change_id),
+                    || backend.split(&change_id, &selections),
+                );
+            }
+            Effect::SquashPartial {
+                change_id,
+                selections,
+            } => {
+                run_mutation(
+                    &backend,
+                    &tx,
+                    MutationKind::SquashPartial,
+                    generation,
+                    &active_revset,
+                    || backend.squash_partial(&change_id, &selections),
                 );
             }
             Effect::Undo => {
@@ -230,7 +253,8 @@ impl EffectExecutor {
             | Effect::New { .. }
             | Effect::Edit { .. }
             | Effect::Abandon { .. }
-            | Effect::Squash { .. }
+            | Effect::Split { .. }
+            | Effect::SquashPartial { .. }
             | Effect::Undo
             | Effect::Redo
             | Effect::BookmarkSet { .. }
@@ -242,7 +266,10 @@ impl EffectExecutor {
             | Effect::RebaseWithDescendants { .. } => {
                 self.graph_generation.fetch_add(1, Ordering::SeqCst) + 1
             }
-            Effect::LoadOpLog | Effect::LoadFileDiff { .. } | Effect::SuspendForEditor { .. } => 0,
+            Effect::LoadOpLog
+            | Effect::LoadFileDiff { .. }
+            | Effect::LoadChangeDiff { .. }
+            | Effect::SuspendForEditor { .. } => 0,
         }
     }
 }
@@ -408,6 +435,14 @@ fn run_loop(
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| render(frame, state))?;
+
+        // Update hunk picker viewport height from terminal size so dispatch
+        // can adjust scroll. The detail pane is ~2/3 width, full height minus
+        // status bar (2) and borders (2). Approximate with terminal height - 4.
+        if let Some(ref mut hp) = state.hunk_picker {
+            let term_height = terminal.size().map_or(20, |s| s.height as usize);
+            hp.viewport_height = term_height.saturating_sub(4);
+        }
 
         if crossterm::event::poll(Duration::from_millis(50))?
             && let Event::Key(key_event) = event::read()?

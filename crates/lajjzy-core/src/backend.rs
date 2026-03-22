@@ -1,4 +1,4 @@
-use crate::types::GraphData;
+use crate::types::{FileDiff, GraphData};
 use anyhow::Result;
 
 /// Abstraction over jj repo access. Implementations may shell out to jj CLI
@@ -17,6 +17,10 @@ pub trait RepoBackend: Send + Sync {
     /// Lazy — called only when user drills into a file.
     fn file_diff(&self, change_id: &str, path: &str) -> Result<Vec<crate::types::DiffHunk>>;
 
+    /// Return all file diffs for a change, grouped by file.
+    /// Each entry contains the file path and its parsed hunks.
+    fn change_diff(&self, change_id: &str) -> Result<Vec<FileDiff>>;
+
     /// Load the operation log.
     fn op_log(&self) -> Result<Vec<crate::types::OpLogEntry>>;
 
@@ -31,9 +35,6 @@ pub trait RepoBackend: Send + Sync {
 
     /// Abandon (delete) the given change.
     fn abandon(&self, change_id: &str) -> Result<String>;
-
-    /// Squash the given change into its parent.
-    fn squash(&self, change_id: &str) -> Result<String>;
 
     /// Undo the most recent operation (`jj op restore @-`).
     fn undo(&self) -> Result<String>;
@@ -58,4 +59,28 @@ pub trait RepoBackend: Send + Sync {
 
     /// Rebase a revision and all of its descendants onto a new parent.
     fn rebase_with_descendants(&self, source: &str, destination: &str) -> Result<String>;
+
+    /// Split a change into two: selected files move to a new child, unselected
+    /// stay in the original.
+    ///
+    /// `selections` describes every file in the change and which hunks are
+    /// selected. A file is considered "fully selected" when
+    /// `selected_hunks.len() == total_hunks`.  Fully-selected files end up in
+    /// the child; the rest remain in the original.
+    fn split(
+        &self,
+        change_id: &str,
+        selections: &[crate::types::FileHunkSelection],
+    ) -> Result<String>;
+
+    /// Squash a subset of files from a change into its parent.
+    ///
+    /// Any file in `selections` with at least one selected hunk is moved to
+    /// the parent.  Uses `-u` so jj does not open `$EDITOR` for a combined
+    /// description.
+    fn squash_partial(
+        &self,
+        change_id: &str,
+        selections: &[crate::types::FileHunkSelection],
+    ) -> Result<String>;
 }
