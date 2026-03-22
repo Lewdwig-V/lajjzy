@@ -6,38 +6,56 @@ use crate::app::{Action, DetailMode, Modal, PanelFocus, PickingMode};
 pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) -> Option<Action> {
     // Global keys
     match (event.code, event.modifiers) {
-        (KeyCode::Char('q'), KeyModifiers::NONE) if detail_mode != DetailMode::HunkPicker => {
+        (KeyCode::Char('q'), KeyModifiers::NONE)
+            if detail_mode != DetailMode::HunkPicker && detail_mode != DetailMode::ConflictView =>
+        {
             return Some(Action::Quit);
         }
-        // Ctrl-C always works: quit normally, or cancel hunk picker
+        // Ctrl-C: quit normally, cancel hunk picker, or cancel conflict view
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
             return Some(if detail_mode == DetailMode::HunkPicker {
                 Action::HunkCancel
+            } else if detail_mode == DetailMode::ConflictView {
+                Action::DetailBack
             } else {
                 Action::Quit
             });
         }
-        (KeyCode::Tab, _) if detail_mode != DetailMode::HunkPicker => {
+        (KeyCode::Tab, _)
+            if detail_mode != DetailMode::HunkPicker && detail_mode != DetailMode::ConflictView =>
+        {
             return Some(Action::TabFocus);
         }
-        (KeyCode::BackTab, _) if detail_mode != DetailMode::HunkPicker => {
+        (KeyCode::BackTab, _)
+            if detail_mode != DetailMode::HunkPicker && detail_mode != DetailMode::ConflictView =>
+        {
             return Some(Action::BackTabFocus);
         }
         (KeyCode::Char('R'), m)
-            if !m.contains(KeyModifiers::CONTROL) && detail_mode != DetailMode::HunkPicker =>
+            if !m.contains(KeyModifiers::CONTROL)
+                && detail_mode != DetailMode::HunkPicker
+                && detail_mode != DetailMode::ConflictView =>
         {
             return Some(Action::Refresh);
         }
-        (KeyCode::Char('@'), _) if detail_mode != DetailMode::HunkPicker => {
+        (KeyCode::Char('@'), _)
+            if detail_mode != DetailMode::HunkPicker && detail_mode != DetailMode::ConflictView =>
+        {
             return Some(Action::JumpToWorkingCopy);
         }
-        (KeyCode::Char('O'), _) if detail_mode != DetailMode::HunkPicker => {
+        (KeyCode::Char('O'), _)
+            if detail_mode != DetailMode::HunkPicker && detail_mode != DetailMode::ConflictView =>
+        {
             return Some(Action::ToggleOpLog);
         }
-        (KeyCode::Char('b'), KeyModifiers::NONE) if detail_mode != DetailMode::HunkPicker => {
+        (KeyCode::Char('b'), KeyModifiers::NONE)
+            if detail_mode != DetailMode::HunkPicker && detail_mode != DetailMode::ConflictView =>
+        {
             return Some(Action::OpenBookmarks);
         }
-        (KeyCode::Char('/'), _) if detail_mode != DetailMode::HunkPicker => {
+        (KeyCode::Char('/'), _)
+            if detail_mode != DetailMode::HunkPicker && detail_mode != DetailMode::ConflictView =>
+        {
             return Some(Action::OpenOmnibar);
         }
         (KeyCode::Char('?'), _) => return Some(Action::OpenHelp), // help always available
@@ -77,6 +95,9 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
                 (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
                     Some(Action::DetailMoveUp)
                 }
+                (KeyCode::Char('n'), KeyModifiers::NONE) => Some(Action::NextConflictFile),
+                (KeyCode::Char('N'), _) => Some(Action::PrevConflictFile),
+                (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Action::ConflictLaunchMerge),
                 (KeyCode::Enter, _) => Some(Action::DetailEnter),
                 (KeyCode::Esc, _) => Some(Action::DetailBack),
                 _ => None,
@@ -93,8 +114,19 @@ pub fn map_event(event: KeyEvent, focus: PanelFocus, detail_mode: DetailMode) ->
                 (KeyCode::Esc, _) => Some(Action::DetailBack),
                 _ => None,
             },
-            // Stub — full implementation in Task 6
             DetailMode::ConflictView => match (event.code, event.modifiers) {
+                (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+                    Some(Action::ConflictScrollDown)
+                }
+                (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+                    Some(Action::ConflictScrollUp)
+                }
+                (KeyCode::Char('n'), KeyModifiers::NONE) => Some(Action::ConflictNextHunk),
+                (KeyCode::Char('N'), _) => Some(Action::ConflictPrevHunk),
+                (KeyCode::Char('1'), _) => Some(Action::ConflictAcceptLeft),
+                (KeyCode::Char('2'), _) => Some(Action::ConflictAcceptRight),
+                (KeyCode::Char('m'), KeyModifiers::NONE) => Some(Action::ConflictLaunchMerge),
+                (KeyCode::Enter, _) => Some(Action::ConflictConfirm),
                 (KeyCode::Esc, _) => Some(Action::DetailBack),
                 _ => None,
             },
@@ -830,6 +862,85 @@ mod tests {
         );
         // q works normally in other detail modes
         assert_eq!(map_file_list(key(KeyCode::Char('q'))), Some(Action::Quit));
+    }
+
+    fn map_conflict_view(event: KeyEvent) -> Option<Action> {
+        map_event(event, PanelFocus::Detail, DetailMode::ConflictView)
+    }
+
+    #[test]
+    fn conflict_view_key_routing() {
+        assert_eq!(
+            map_conflict_view(key(KeyCode::Char('1'))),
+            Some(Action::ConflictAcceptLeft)
+        );
+        assert_eq!(
+            map_conflict_view(key(KeyCode::Char('2'))),
+            Some(Action::ConflictAcceptRight)
+        );
+        assert_eq!(
+            map_conflict_view(key(KeyCode::Char('n'))),
+            Some(Action::ConflictNextHunk)
+        );
+        assert_eq!(
+            map_conflict_view(key(KeyCode::Char('N'))),
+            Some(Action::ConflictPrevHunk)
+        );
+        assert_eq!(
+            map_conflict_view(key(KeyCode::Char('m'))),
+            Some(Action::ConflictLaunchMerge)
+        );
+        assert_eq!(
+            map_conflict_view(key(KeyCode::Char('j'))),
+            Some(Action::ConflictScrollDown)
+        );
+        assert_eq!(
+            map_conflict_view(key(KeyCode::Char('k'))),
+            Some(Action::ConflictScrollUp)
+        );
+        assert_eq!(
+            map_conflict_view(key(KeyCode::Enter)),
+            Some(Action::ConflictConfirm)
+        );
+        assert_eq!(
+            map_conflict_view(key(KeyCode::Esc)),
+            Some(Action::DetailBack)
+        );
+    }
+
+    #[test]
+    fn quit_suppressed_during_conflict_view() {
+        assert_eq!(map_conflict_view(key(KeyCode::Char('q'))), None);
+    }
+
+    #[test]
+    fn tab_suppressed_during_conflict_view() {
+        assert_eq!(map_conflict_view(key(KeyCode::Tab)), None);
+        assert_eq!(map_conflict_view(key(KeyCode::BackTab)), None);
+    }
+
+    #[test]
+    fn ctrl_c_cancels_conflict_view() {
+        assert_eq!(
+            map_conflict_view(key_mod(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(Action::DetailBack)
+        );
+    }
+
+    #[test]
+    fn file_list_conflict_navigation() {
+        assert_eq!(
+            map_file_list(key(KeyCode::Char('n'))),
+            Some(Action::NextConflictFile)
+        );
+        assert_eq!(
+            map_file_list(key(KeyCode::Char('N'))),
+            Some(Action::PrevConflictFile)
+        );
+        assert_eq!(
+            map_file_list(key(KeyCode::Char('m'))),
+            Some(Action::ConflictLaunchMerge)
+        );
     }
 
     #[test]
