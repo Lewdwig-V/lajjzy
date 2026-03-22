@@ -195,6 +195,22 @@ Selected hunks are tinted cyan. File headers show selection counts (e.g., `[2/5]
 | `b` | Open bookmark picker (navigate + jump, `d` to delete) |
 | `B` | Set a new bookmark on the selected change (type name, Enter to confirm) |
 
+### GitHub Integration
+
+Requires `gh` CLI installed and authenticated (`gh auth login`). Features are automatically hidden when `gh` is not available.
+
+| Key | Action |
+|-----|--------|
+| `F` | Fetch PR status from GitHub |
+| `W` | Open PR in browser (or create if none exists) |
+
+After pressing `F`, PR status indicators appear next to bookmarks in the graph:
+- `#42 ✓` approved (green)
+- `#42 ●` review required (yellow)
+- `#42 ✗` changes requested (red)
+
+If the browser can't open (SSH, containers), the PR URL is shown in the status bar as a clickable link.
+
 ## Architecture
 
 Three crates with strict dependency boundaries:
