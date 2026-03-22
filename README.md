@@ -120,6 +120,9 @@ All mutations are performed from the graph panel. Every mutation is reversible v
 | `B` | Set bookmark on selected change |
 | `P` | Git push |
 | `f` | Git fetch |
+| `a` | Absorb changes into ancestor commits |
+| `D` | Duplicate selected change |
+| `x` | Revert (apply reverse after working copy) |
 
 **Concurrency:** Local mutations, push, and fetch run on three independent background lanes. You can push while a fetch is in-flight, or start a new mutation the moment the previous one completes. Each lane has its own gate — no operation blocks another lane.
 
@@ -225,21 +228,26 @@ See `CLAUDE.md` for architectural constraints and crate structure.
 
 ## Roadmap
 
-- **M4 — Conflict Handling**: conflict file navigation, 3-way merge view, external merge tool launch
-- **M5 — Release Packaging**: `cargo install lajjzy`, `cargo binstall`, Nix flake (jj community leans heavily on Nix)
 - **M6 — Forge Integration**: Gerrit, GitHub, GitLab — review status in graph, push-for-review
-- **M7 — More Mutations**: `jj absorb` (single keypress — auto-distribute fixup hunks to ancestor commits), `jj duplicate`, `jj backout`
-- **M8a — Polish**: configurable keymaps
-- **M8b — Polish**: theming support, colour sets, nerd font support, noto emoji, statusline fonts
-- **M8c — Polish**: basic mouse support
-- **M8d — Polish**: collapsible command log pane showing jj commands run on your behalf
-- **M8e — Polish**: `jj move` hunks in hunk picker, advanced rebasing workflows
-- **M8f — Polish**: context-aware revset completions (e.g., only authors inside `author()`)
-- **M8g — Polish**: workspace name in status bar, workspace picker modal (list, switch, create)
-- **M9 — Blame / Annotate**: file content with annotation gutter (change ID, author, date), drill into blame line to jump to originating change
-- **M10 — Parallel Branches**: lane view for concurrent work (git-butler model)
-- **M11 — Gerrit Depth**: patchset comparison, review actions, inline comments
-- **M12 — GitHub/GitLab Stacked PRs**: Graphite-style stack-aware PR management
+- **M8 — jj-lib Backend Migration**: incremental migration from CLI shelling to jj-lib. M4 established read path (conflict_sides), M7 established write path (transactions). Remaining methods migrate by value:
+  - **M8a**: `load_graph` — eliminates jj log output parsing, structured revset evaluation
+  - **M8b**: `file_diff` / `change_diff` — structured hunks without parsing unified diff
+  - **M8c**: `split` / `squash_partial` — direct tree construction
+  - **M8d**: `resolve_file` — upgrade from `fs::write` to jj-lib tree mutation
+  - **M8e**: `rebase_single` / `rebase_with_descendants` — structured error reporting
+  - **M8f**: simple mutations (`describe`, `new_change`, `edit_change`, `abandon`, `undo`, `redo`, `bookmark_*`)
+  - **M8g**: `git_push` / `git_fetch` — may stay CLI-backed long-term
+- **M9a — Polish**: configurable keymaps
+- **M9b — Polish**: theming support, colour sets, nerd font support, noto emoji, statusline fonts
+- **M9c — Polish**: basic mouse support
+- **M9d — Polish**: collapsible command log pane showing jj commands run on your behalf
+- **M9e — Polish**: `jj move` hunks in hunk picker, advanced rebasing workflows
+- **M9f — Polish**: context-aware revset completions (e.g., only authors inside `author()`)
+- **M9g — Polish**: workspace name in status bar, workspace picker modal (list, switch, create)
+- **M10 — Blame / Annotate**: file content with annotation gutter (change ID, author, date), drill into blame line to jump to originating change
+- **M11 — Parallel Branches**: lane view for concurrent work (git-butler model)
+- **M12 — Gerrit Depth**: patchset comparison, review actions, inline comments
+- **M13 — GitHub/GitLab Stacked PRs**: Graphite-style stack-aware PR management
 
 ## License
 
