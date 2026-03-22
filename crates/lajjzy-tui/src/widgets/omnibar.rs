@@ -141,7 +141,7 @@ impl Widget for OmnibarWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let showing_completions = !self.completions.is_empty();
         let title = if showing_completions {
-            " / Completing... "
+            " / Tab: accept | Enter: submit as revset "
         } else if self.query.is_empty() && !self.has_active_revset {
             " / Search or Revset "
         } else if self.has_active_revset {
@@ -369,8 +369,8 @@ mod tests {
 
         let title = title_from_buf(&buf, 60);
         assert!(
-            title.contains("Completing"),
-            "expected 'Completing' in title row when completions present, got: {title:?}"
+            title.contains("Tab: accept"),
+            "expected 'Tab: accept' in title row when completions present, got: {title:?}"
         );
     }
 
@@ -387,8 +387,8 @@ mod tests {
         // Title should NOT say "Completing"
         let title = title_from_buf(&buf, 60);
         assert!(
-            !title.contains("Completing"),
-            "title must not say 'Completing' when no completions, got: {title:?}"
+            !title.contains("Tab: accept"),
+            "title must not say 'Tab: accept' when no completions, got: {title:?}"
         );
 
         // First result row should contain the change id "abc"
