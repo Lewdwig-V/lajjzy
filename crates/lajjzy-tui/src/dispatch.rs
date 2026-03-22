@@ -5,7 +5,8 @@ use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use crate::action::{
-    Action, BackgroundKind, DetailMode, HunkPickerOp, MutationKind, PanelFocus, RebaseMode,
+    Action, Arity, BackgroundKind, CompletionItem, DetailMode, HunkPickerOp, MutationKind,
+    PanelFocus, RebaseMode,
 };
 use crate::app::{AppState, HunkPicker, PickerFile, PickerHunk, PickingMode, TargetPick};
 use crate::effect::Effect;
@@ -1306,6 +1307,133 @@ fn fuzzy_match(query: &str, graph: &GraphData) -> Vec<usize> {
     }
     scored.sort_by(|a, b| b.1.cmp(&a.1));
     scored.into_iter().map(|(idx, _)| idx).collect()
+}
+
+// TODO(Task 3): remove allow once wired into dispatch
+#[allow(dead_code)]
+pub(crate) const REVSET_FUNCTIONS: &[(&str, Arity)] = &[
+    ("all", Arity::Nullary),
+    ("ancestors", Arity::Required),
+    ("author", Arity::Required),
+    ("bookmarks", Arity::Optional),
+    ("committer", Arity::Required),
+    ("conflicts", Arity::Nullary),
+    ("connected", Arity::Required),
+    ("descendants", Arity::Required),
+    ("description", Arity::Required),
+    ("diff_contains", Arity::Required),
+    ("empty", Arity::Nullary),
+    ("file", Arity::Required),
+    ("fork_point", Arity::Required),
+    ("heads", Arity::Required),
+    ("immutable", Arity::Nullary),
+    ("mine", Arity::Nullary),
+    ("none", Arity::Nullary),
+    ("present", Arity::Required),
+    ("remote_bookmarks", Arity::Optional),
+    ("root", Arity::Nullary),
+    ("roots", Arity::Required),
+    ("tags", Arity::Optional),
+    ("trunk", Arity::Nullary),
+    ("visible_heads", Arity::Nullary),
+];
+
+// TODO(Task 3): remove allow once wired into dispatch
+#[allow(dead_code)]
+pub(crate) fn is_revset_boundary(c: char) -> bool {
+    matches!(c, '&' | '|' | '~' | '(' | ')' | ':' | '.' | ',') || c.is_ascii_whitespace()
+}
+
+// TODO(Task 3): remove allow once wired into dispatch
+#[allow(dead_code)]
+pub(crate) fn extract_current_word(query: &str) -> (usize, &str) {
+    let boundary = query.rfind(is_revset_boundary);
+    match boundary {
+        Some(pos) => (pos + 1, &query[pos + 1..]),
+        None => (0, query),
+    }
+}
+
+// TODO(Task 3): remove allow once wired into dispatch
+#[allow(dead_code)]
+pub(crate) fn compute_completions(query: &str, graph: &GraphData) -> Vec<CompletionItem> {
+    let (_, current_word) = extract_current_word(query);
+    if current_word.is_empty() {
+        return vec![];
+    }
+    let word_lower = current_word.to_lowercase();
+    let mut results = Vec::new();
+
+    // 1. Revset functions (ranked first)
+    for &(name, arity) in REVSET_FUNCTIONS {
+        if name.starts_with(&word_lower as &str) {
+            let insert_text = match arity {
+                Arity::Nullary => format!("{name}()"),
+                Arity::Optional | Arity::Required => format!("{name}("),
+            };
+            results.push(CompletionItem {
+                display_text: insert_text.clone(),
+                insert_text,
+            });
+        }
+    }
+
+    // 2-4: Repo entities from node_indices (deterministic order)
+    let mut bookmarks = Vec::new();
+    let mut change_ids = Vec::new();
+    let mut authors = Vec::new();
+    for &idx in graph.node_indices() {
+        if let Some(cid) = graph.lines[idx].change_id.as_deref()
+            && let Some(detail) = graph.details.get(cid)
+        {
+            for bm in &detail.bookmarks {
+                bookmarks.push(bm.as_str());
+            }
+            // Change IDs: require 2+ char prefix to reduce noise
+            if word_lower.len() >= 2 && cid.to_lowercase().starts_with(&word_lower as &str) {
+                let desc = if detail.description.is_empty() {
+                    "(no description)".to_string()
+                } else {
+                    detail.description.clone()
+                };
+                change_ids.push(CompletionItem {
+                    insert_text: cid.to_string(),
+                    display_text: format!("{cid} \u{2014} {desc}"),
+                });
+            }
+            authors.push(detail.author.as_str());
+        }
+    }
+
+    // Bookmarks (ranked second)
+    bookmarks.sort_unstable();
+    bookmarks.dedup();
+    for bm in bookmarks {
+        if bm.to_lowercase().starts_with(&word_lower as &str) {
+            results.push(CompletionItem {
+                insert_text: bm.to_string(),
+                display_text: bm.to_string(),
+            });
+        }
+    }
+
+    // Change IDs (ranked third)
+    results.extend(change_ids);
+
+    // Authors (ranked fourth)
+    authors.sort_unstable();
+    authors.dedup();
+    for author in authors {
+        if author.to_lowercase().starts_with(&word_lower as &str) {
+            results.push(CompletionItem {
+                insert_text: author.to_string(),
+                display_text: author.to_string(),
+            });
+        }
+    }
+
+    results.truncate(20);
+    results
 }
 
 #[cfg(test)]
@@ -3829,5 +3957,123 @@ mod tests {
         state.hunk_picker.as_mut().unwrap().cursor = 0;
         dispatch(&mut state, Action::DetailMoveUp);
         assert_eq!(state.hunk_picker.as_ref().unwrap().cursor, 0);
+    }
+
+    // --- extract_current_word tests ---
+
+    #[test]
+    fn extract_current_word_simple() {
+        assert_eq!(extract_current_word("mine"), (0, "mine"));
+    }
+
+    #[test]
+    fn extract_current_word_after_tilde() {
+        assert_eq!(extract_current_word("~mi"), (1, "mi"));
+    }
+
+    #[test]
+    fn extract_current_word_after_paren() {
+        assert_eq!(extract_current_word("ancestors(mi"), (10, "mi"));
+    }
+
+    #[test]
+    fn extract_current_word_after_ampersand() {
+        assert_eq!(extract_current_word("mine() & desc"), (9, "desc"));
+    }
+
+    #[test]
+    fn extract_current_word_after_dotdot() {
+        assert_eq!(extract_current_word("trunk()..@"), (9, "@"));
+    }
+
+    #[test]
+    fn extract_current_word_empty_after_paren() {
+        assert_eq!(extract_current_word("desc("), (5, ""));
+    }
+
+    #[test]
+    fn extract_current_word_empty() {
+        assert_eq!(extract_current_word(""), (0, ""));
+    }
+
+    #[test]
+    fn extract_current_word_comma() {
+        assert_eq!(extract_current_word("diff_contains(foo,bar"), (18, "bar"));
+    }
+
+    // --- compute_completions tests ---
+
+    #[test]
+    fn compute_completions_revset_function() {
+        let graph = sample_graph();
+        let c = compute_completions("anc", &graph);
+        assert!(c.iter().any(|x| x.insert_text == "ancestors("));
+    }
+
+    #[test]
+    fn compute_completions_nullary() {
+        let graph = sample_graph();
+        let c = compute_completions("min", &graph);
+        assert!(c.iter().any(|x| x.insert_text == "mine()"));
+    }
+
+    #[test]
+    fn compute_completions_case_insensitive() {
+        let graph = sample_graph();
+        let c = compute_completions("MIN", &graph);
+        assert!(c.iter().any(|x| x.insert_text == "mine()"));
+    }
+
+    #[test]
+    fn compute_completions_empty_returns_empty() {
+        assert!(compute_completions("", &sample_graph()).is_empty());
+    }
+
+    #[test]
+    fn compute_completions_no_match() {
+        assert!(compute_completions("xyznothing", &sample_graph()).is_empty());
+    }
+
+    #[test]
+    fn compute_completions_includes_bookmarks() {
+        let graph = sample_graph_with_bookmarks();
+        let c = compute_completions("mai", &graph);
+        assert!(c.iter().any(|x| x.insert_text == "main"));
+    }
+
+    #[test]
+    fn compute_completions_change_id_needs_2_chars() {
+        let graph = sample_graph(); // has change IDs "abc", "def", "ghi"
+        // Single char should NOT match change IDs
+        assert!(
+            !compute_completions("a", &graph)
+                .iter()
+                .any(|x| x.insert_text == "abc")
+        );
+        // Two chars should match
+        assert!(
+            compute_completions("ab", &graph)
+                .iter()
+                .any(|x| x.insert_text == "abc")
+        );
+    }
+
+    #[test]
+    fn compute_completions_change_id_shows_description() {
+        let graph = sample_graph(); // "abc" has description "desc1"
+        let c = compute_completions("ab", &graph);
+        let abc = c.iter().find(|x| x.insert_text == "abc").unwrap();
+        assert!(abc.display_text.contains('\u{2014}'));
+    }
+
+    #[test]
+    fn compute_completions_functions_rank_first() {
+        let graph = sample_graph();
+        // "de" matches descendants(, description( — both functions
+        // Also "def" is a change ID but requires 2+ chars, and "de" is 2 chars
+        // Functions must appear before change IDs
+        let c = compute_completions("de", &graph);
+        assert!(!c.is_empty());
+        assert!(c[0].insert_text.ends_with('('));
     }
 }
