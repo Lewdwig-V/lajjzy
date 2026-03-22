@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: x86_64-apple-darwin
+            runner: macos-13
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Strip binary
+        run: strip target/${{ matrix.target }}/release/lajjzy
+
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../lajjzy-${{ matrix.target }}.tar.gz lajjzy
+          cd ../../..
+          shasum -a 256 lajjzy-${{ matrix.target }}.tar.gz > lajjzy-${{ matrix.target }}.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lajjzy-${{ matrix.target }}
+          path: |
+            lajjzy-${{ matrix.target }}.tar.gz
+            lajjzy-${{ matrix.target }}.tar.gz.sha256
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Collect sha256 sums
+        id: shasums
+        run: |
+          {
+            echo 'SHASUMS<<EOF'
+            cat *.sha256
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "lajjzy-*.tar.gz"
+          generate_release_notes: true
+          body: |
+            ## SHA256 Checksums
+
+            ```
+            ${{ steps.shasums.outputs.SHASUMS }}
+            ```
+
+  publish:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install jj
+        run: cargo install --locked --bin jj jj-cli@0.39.0
+      - name: Publish
+        run: cargo publish -p lajjzy --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
