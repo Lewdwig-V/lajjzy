@@ -1348,8 +1348,6 @@ fn fuzzy_match(query: &str, graph: &GraphData) -> Vec<usize> {
     scored.into_iter().map(|(idx, _)| idx).collect()
 }
 
-// TODO(Task 3): remove allow once wired into dispatch
-#[allow(dead_code)]
 pub(crate) const REVSET_FUNCTIONS: &[(&str, Arity)] = &[
     ("all", Arity::Nullary),
     ("ancestors", Arity::Required),
@@ -1377,14 +1375,10 @@ pub(crate) const REVSET_FUNCTIONS: &[(&str, Arity)] = &[
     ("visible_heads", Arity::Nullary),
 ];
 
-// TODO(Task 3): remove allow once wired into dispatch
-#[allow(dead_code)]
 pub(crate) fn is_revset_boundary(c: char) -> bool {
     matches!(c, '&' | '|' | '~' | '(' | ')' | ':' | '.' | ',') || c.is_ascii_whitespace()
 }
 
-// TODO(Task 3): remove allow once wired into dispatch
-#[allow(dead_code)]
 pub(crate) fn extract_current_word(query: &str) -> (usize, &str) {
     let boundary = query.rfind(is_revset_boundary);
     match boundary {
