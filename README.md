@@ -267,7 +267,7 @@ See `CLAUDE.md` for architectural constraints and crate structure.
   - **M8g**: `git_push` / `git_fetch` — may stay CLI-backed long-term
 - **M9a — Polish**: configurable keymaps
 - **M9b — Polish**: theming support, colour sets, nerd font support, noto emoji, statusline fonts
-- **M9d — Polish**: collapsible command log pane showing jj commands run on your behalf
+- **M9d — Polish**: collapsible jj oplog pane with command-equivalent observations (jj op log/jj op diff/jj op show), restoration (jj op restore --to/jj abandon), a filter toggle to hide automatic snapshots and only show manual commands.
 - **M9e — Polish**: `jj move` hunks in hunk picker, advanced rebasing workflows
 - **M9f — Polish**: context-aware revset completions (e.g., only authors inside `author()`)
 - **M9g — Polish**: workspace name in status bar, workspace picker modal (list, switch, create)
