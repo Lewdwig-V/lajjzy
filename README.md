@@ -49,9 +49,9 @@ lajjzy
 ┌───────────────┬───────────────────────────────┐
 │ Change Graph  │ Detail Pane                   │
 │               │                               │
-│ ◉ ksqxwpml   │ Files changed:                │
-│ ◉ ytoqrzxn   │   M src/lib.rs                │
-│ ◉ zzzzzzzz   │   A src/new.rs                │
+│  ◉ ksqxwpml   │ Files changed:                │
+│  ◉ ytoqrzxn   │   M src/lib.rs                │
+│  ◉ zzzzzzzz   │   A src/new.rs                │
 │               │                               │
 ├───────────────┴───────────────────────────────┤
 │ Status bar: change info, errors, operations   │
