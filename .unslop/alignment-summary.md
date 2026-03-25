@@ -3,4 +3,9 @@
 
 ## Managed files
 
-No managed files yet. Use /unslop:takeover or /unslop:spec to get started.
+- `crates/lajjzy-core/src/backend.rs` <- `crates/lajjzy-core/src/backend.spec.md` (fresh, generated 2026-03-25)
+  Intent: RepoBackend trait — facade for all jj repository operations
+- `crates/lajjzy-core/src/types.rs` <- `crates/lajjzy-core/src/types.spec.md` (fresh, generated 2026-03-25)
+  Intent: Core domain types shared across the crate boundary (GraphData, ChangeDetail, diffs, conflicts)
+- `crates/lajjzy-core/src/forge.rs` <- `crates/lajjzy-core/src/forge.spec.md` (fresh, generated 2026-03-25)
+  Intent: ForgeBackend trait and PR/review types for forge integration
