@@ -17,3 +17,7 @@
   Intent: Effect enum — backend operations and suspensions emitted by dispatch
 - `crates/lajjzy-tui/src/modal.rs` <- `crates/lajjzy-tui/src/modal.spec.md` (fresh, generated 2026-03-25)
   Intent: Modal dialog state variants and HelpContext with line counts
+- `crates/lajjzy-tui/src/input.rs` <- `crates/lajjzy-tui/src/input.spec.md` (fresh, generated 2026-03-25)
+  Intent: Keyboard input mapper — pure stateless KeyEvent to Action mapping
+- `crates/lajjzy-tui/src/mouse.rs` <- `crates/lajjzy-tui/src/mouse.spec.md` (fresh, generated 2026-03-25)
+  Intent: Mouse event mapper — pure stateless MouseEvent to Action mapping
