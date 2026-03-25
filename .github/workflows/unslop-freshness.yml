@@ -1,0 +1,12 @@
+name: unslop freshness check
+on: [pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Set up Python
+        run: uv python install 3.11
+      - name: Check managed file freshness
+        run: uv run python .unslop/scripts/orchestrator.py check-freshness .
