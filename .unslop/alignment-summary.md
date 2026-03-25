@@ -21,3 +21,7 @@
   Intent: Keyboard input mapper — pure stateless KeyEvent to Action mapping
 - `crates/lajjzy-tui/src/mouse.rs` <- `crates/lajjzy-tui/src/mouse.spec.md` (fresh, generated 2026-03-25)
   Intent: Mouse event mapper — pure stateless MouseEvent to Action mapping
+- `crates/lajjzy-tui/src/dispatch/mod.rs` <- `crates/lajjzy-tui/src/dispatch/dispatch.spec.md` (fresh, generated 2026-03-25)
+  Intent: Pure dispatch state machine — processes all actions, returns effects
+- `crates/lajjzy-tui/src/dispatch/omnibar.rs` <- `crates/lajjzy-tui/src/dispatch/omnibar.spec.md` (fresh, generated 2026-03-25)
+  Intent: Revset completion engine for omnibar — function/bookmark/change-ID ranking
