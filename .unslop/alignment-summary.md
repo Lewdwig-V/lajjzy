@@ -9,3 +9,11 @@
   Intent: Core domain types shared across the crate boundary (GraphData, ChangeDetail, diffs, conflicts)
 - `crates/lajjzy-core/src/forge.rs` <- `crates/lajjzy-core/src/forge.spec.md` (fresh, generated 2026-03-25)
   Intent: ForgeBackend trait and PR/review types for forge integration
+- `crates/lajjzy-tui/src/app.rs` <- `crates/lajjzy-tui/src/app.spec.md` (fresh, generated 2026-03-25)
+  Intent: AppState central state atom, LayoutRects, ConflictView with parallel-array invariant
+- `crates/lajjzy-tui/src/action.rs` <- `crates/lajjzy-tui/src/action.spec.md` (fresh, generated 2026-03-25)
+  Intent: Action enum — every user intent and async result for dispatch
+- `crates/lajjzy-tui/src/effect.rs` <- `crates/lajjzy-tui/src/effect.spec.md` (fresh, generated 2026-03-25)
+  Intent: Effect enum — backend operations and suspensions emitted by dispatch
+- `crates/lajjzy-tui/src/modal.rs` <- `crates/lajjzy-tui/src/modal.spec.md` (fresh, generated 2026-03-25)
+  Intent: Modal dialog state variants and HelpContext with line counts
