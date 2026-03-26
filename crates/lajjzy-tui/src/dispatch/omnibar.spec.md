@@ -24,7 +24,7 @@ revset function names, bookmark names, and change IDs. Pure functions, no I/O.
 ### `REVSET_FUNCTIONS: &[(&str, Arity)]`
 
 Static table of jj revset function names with their arity. Sorted alphabetically.
-25 entries covering: all, ancestors, author, bookmarks, committer, conflicts,
+24 entries covering: all, ancestors, author, bookmarks, committer, conflicts,
 connected, descendants, description, diff_contains, empty, file, fork_point,
 heads, immutable, mine, none, present, remote_bookmarks, root, roots, tags,
 trunk, visible_heads.

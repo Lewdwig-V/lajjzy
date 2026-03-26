@@ -36,7 +36,7 @@ place, returns effects for I/O. No backend calls, no subprocess spawning.
 ## Module structure
 
 ```rust
-mod omnibar;  // re-exported via use, not pub
+mod omnibar;  // items imported via private use, not pub mod
 ```
 
 ## Public API

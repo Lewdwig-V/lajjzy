@@ -180,3 +180,17 @@ Test `GraphData` via a `sample_graph()` helper building a 5-line graph (3 nodes,
 2. `detail_at_returns_detail_for_node_line` — index 0 returns the correct author
 3. `detail_at_returns_none_for_connector_line` — index 1 returns `None`
 4. `detail_at_returns_none_for_out_of_bounds` — index 99 returns `None`
+
+Test `FileStatus::Display` for all variants:
+
+5. `file_status_display_added` — "A"
+6. `file_status_display_modified` — "M"
+7. `file_status_display_deleted` — "D"
+8. `file_status_display_renamed` — "R"
+9. `file_status_display_conflicted` — "C"
+10. `file_status_display_unknown` — Unknown('X') → "X"
+
+Test `GraphData::new` constructor pass-through:
+
+11. `graph_constructor_stores_working_copy_index_some` — Some(2) preserved
+12. `graph_constructor_stores_working_copy_index_none` — None preserved

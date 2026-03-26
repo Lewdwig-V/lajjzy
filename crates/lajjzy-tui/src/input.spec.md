@@ -125,7 +125,7 @@ Test helpers:
 - `key_mod(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent`
 - `map_graph`, `map_file_list`, `map_diff_view`, `map_hunk_picker`, `map_conflict_view` — convenience wrappers
 
-Test coverage (33 tests):
+Test coverage (42 tests):
 1. `global_quit_keys_work_in_any_focus` — q and Ctrl-C across graph/file_list/diff_view
 2. `tab_cycles_focus` — Tab and BackTab
 3. `refresh_and_at_are_global` — R and @ across all focus modes

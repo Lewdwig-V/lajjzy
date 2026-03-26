@@ -312,6 +312,11 @@ mod tests {
     }
 
     #[test]
+    fn file_status_display_unknown() {
+        assert_eq!(FileStatus::Unknown('X').to_string(), "X");
+    }
+
+    #[test]
     fn graph_constructor_stores_working_copy_index_some() {
         let graph = GraphData::new(vec![], HashMap::new(), Some(2), String::new());
         assert_eq!(graph.working_copy_index, Some(2));

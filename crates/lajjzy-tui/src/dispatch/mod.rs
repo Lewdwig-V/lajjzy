@@ -178,7 +178,7 @@ fn snap_to_node(graph: &GraphData, line_index: usize) -> Option<usize> {
 }
 
 /// Check if a change matches a filter query (case-insensitive substring match
-/// against change ID, author, and description).
+/// against change ID, author, description, and bookmarks).
 fn change_matches_filter(cid: &str, graph: &GraphData, query: &str) -> bool {
     let query_lower = query.to_lowercase();
     if cid.to_lowercase().contains(&query_lower) {

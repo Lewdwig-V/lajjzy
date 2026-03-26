@@ -81,7 +81,7 @@ Test helpers:
 - `make_event(kind, col, row)` — MouseEvent with NONE modifiers
 - `make_state_with_layout(layout)` — AppState with given layout
 
-Test coverage (22 tests):
+Test coverage (25 tests):
 1. `click_graph_inner_emits_click_node` — (5,1) → ClickGraphNode { line_index: 0 }
 2. `click_graph_with_scroll_offset` — offset=10, (5,1) → line_index: 10
 3. `click_detail_when_graph_focused_selects_item` — (45,5) → ClickDetailItem { index: 4 }
