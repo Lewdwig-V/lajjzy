@@ -1,0 +1,95 @@
+file: crates/lajjzy-core/src/types.rs
+spec: crates/lajjzy-core/src/types.spec.md
+version: 1
+
+constraints:
+  - id: graph-constructor-caches-nodes
+    type: invariant
+    description: >
+      GraphData::new computes cached_node_indices from lines where change_id.is_some().
+      The cached indices must exactly match a manual scan of the lines vec.
+    given: A vec of GraphLines with mixed node and connector lines
+    when: GraphData::new is called
+    then: node_indices() returns only the indices where change_id is Some
+
+  - id: graph-node-indices-empty
+    type: invariant
+    description: An empty lines vec produces empty node_indices
+    given: An empty lines vec
+    when: GraphData::new is called
+    then: node_indices() returns an empty slice
+
+  - id: detail-at-node-line
+    type: given_when_then
+    given: A GraphData with a node line at index 0
+    when: detail_at(0) is called
+    then: Returns Some with the matching ChangeDetail
+
+  - id: detail-at-connector-line
+    type: given_when_then
+    given: A GraphData with a connector line at index 1
+    when: detail_at(1) is called
+    then: Returns None
+
+  - id: detail-at-out-of-bounds
+    type: given_when_then
+    given: A GraphData with 5 lines
+    when: detail_at(99) is called
+    then: Returns None
+
+  - id: detail-at-missing-detail
+    type: given_when_then
+    description: >
+      A node line with a change_id that has no entry in the details map
+      should return None, not panic.
+    given: A GraphData with a node line whose change_id is not in details
+    when: detail_at is called for that index
+    then: Returns None
+
+  - id: file-status-display-added
+    type: given_when_then
+    given: FileStatus::Added
+    when: Display::fmt is called
+    then: Outputs "A"
+
+  - id: file-status-display-modified
+    type: given_when_then
+    given: FileStatus::Modified
+    when: Display::fmt is called
+    then: Outputs "M"
+
+  - id: file-status-display-deleted
+    type: given_when_then
+    given: FileStatus::Deleted
+    when: Display::fmt is called
+    then: Outputs "D"
+
+  - id: file-status-display-renamed
+    type: given_when_then
+    given: FileStatus::Renamed
+    when: Display::fmt is called
+    then: Outputs "R"
+
+  - id: file-status-display-conflicted
+    type: given_when_then
+    given: FileStatus::Conflicted
+    when: Display::fmt is called
+    then: Outputs "C"
+
+  - id: file-status-display-unknown
+    type: given_when_then
+    given: FileStatus::Unknown('X')
+    when: Display::fmt is called
+    then: Outputs "X"
+
+  - id: graph-constructor-stores-working-copy-index
+    type: given_when_then
+    given: A working_copy_index of Some(2) is passed to GraphData::new
+    when: The returned GraphData is inspected
+    then: working_copy_index equals Some(2)
+
+  - id: graph-constructor-stores-working-copy-index-none
+    type: given_when_then
+    given: A working_copy_index of None is passed to GraphData::new
+    when: The returned GraphData is inspected
+    then: working_copy_index equals None

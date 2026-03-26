@@ -285,4 +285,41 @@ mod tests {
         let graph = sample_graph();
         assert!(graph.detail_at(99).is_none());
     }
+
+    #[test]
+    fn file_status_display_added() {
+        assert_eq!(FileStatus::Added.to_string(), "A");
+    }
+
+    #[test]
+    fn file_status_display_modified() {
+        assert_eq!(FileStatus::Modified.to_string(), "M");
+    }
+
+    #[test]
+    fn file_status_display_deleted() {
+        assert_eq!(FileStatus::Deleted.to_string(), "D");
+    }
+
+    #[test]
+    fn file_status_display_renamed() {
+        assert_eq!(FileStatus::Renamed.to_string(), "R");
+    }
+
+    #[test]
+    fn file_status_display_conflicted() {
+        assert_eq!(FileStatus::Conflicted.to_string(), "C");
+    }
+
+    #[test]
+    fn graph_constructor_stores_working_copy_index_some() {
+        let graph = GraphData::new(vec![], HashMap::new(), Some(2), String::new());
+        assert_eq!(graph.working_copy_index, Some(2));
+    }
+
+    #[test]
+    fn graph_constructor_stores_working_copy_index_none() {
+        let graph = GraphData::new(vec![], HashMap::new(), None, String::new());
+        assert_eq!(graph.working_copy_index, None);
+    }
 }

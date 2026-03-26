@@ -5,7 +5,7 @@
     "architect": "opus",
     "builder": "sonnet",
     "archaeologist": "sonnet",
-    "mason": "haiku",
+    "mason": "sonnet",
     "saboteur": "haiku",
     "prosecutor": "sonnet"
   },

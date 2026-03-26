@@ -43,6 +43,8 @@ Derives: `Debug, Clone, PartialEq`
 **Constructor invariant:** `GraphData::new(lines, details, working_copy_index, op_id)` computes
 `cached_node_indices` by collecting indices of all `lines` where `change_id.is_some()`.
 This is the only way to construct a `GraphData` — the field is private.
+All parameters are stored as-is — in particular, `working_copy_index` must be passed through,
+not discarded or defaulted.
 
 **Accessors:**
 - `node_indices(&self) -> &[usize]` — returns the cached indices
