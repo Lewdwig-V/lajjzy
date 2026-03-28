@@ -25,3 +25,5 @@
   Intent: Pure dispatch state machine — processes all actions, returns effects
 - `crates/lajjzy-tui/src/dispatch/omnibar.rs` <- `crates/lajjzy-tui/src/dispatch/omnibar.spec.md` (fresh, generated 2026-03-25)
   Intent: Revset completion engine for omnibar — function/bookmark/change-ID ranking
+- `crates/lajjzy-tui/src/widgets/status_bar.rs` <- `crates/lajjzy-tui/src/widgets/status_bar.spec.md` (fresh, generated 2026-03-28)
+  Intent: Priority-ordered status bar widget — contextual TUI state display
