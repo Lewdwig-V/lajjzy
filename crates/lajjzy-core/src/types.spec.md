@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-core/src/types.rs
+managed-file: crates/lajjzy-core/src/types.rs
 version: 1
 test_policy: "Write or extend tests for GraphData accessors and Display impls"
 ---

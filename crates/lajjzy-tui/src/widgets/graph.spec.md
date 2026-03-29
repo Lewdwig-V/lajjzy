@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/graph.rs
+managed-file: crates/lajjzy-tui/src/widgets/graph.rs
 intent: >
   Render the jj change graph with per-node coloring (yellow change ID, blue author, cyan timestamp, magenta bookmarks), REVERSED highlight for the cursor block (change node + its connector lines), DarkGray for connector-only lines and excluded nodes in picking mode, bold+green glyph for the working-copy node, PR status indicators per bookmark, and a ⚠N conflict indicator. Scroll offset is computed to keep the cursor block plus scrolloff padding visible.
 intent-approved: false

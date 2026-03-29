@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/hunk_picker.rs
+managed-file: crates/lajjzy-tui/src/widgets/hunk_picker.rs
 intent: >
   Renders a scrollable, flat list of files and their hunks for interactive hunk selection. Each file shows a header with path and selected/total hunk count. Each hunk shows a checkbox reflecting selection state, its diff-range header, and all constituent diff lines with per-line-kind foreground coloring. The cursor position and hunk selection state drive background tinting and REVERSED modifier highlighting. When no files are present, renders a single empty-state message.
 intent-approved: false

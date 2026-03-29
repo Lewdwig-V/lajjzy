@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-core/src/gh.rs
+managed-file: crates/lajjzy-core/src/gh.rs
 intent: >
   Implements ForgeBackend for GitHub by shelling out to the gh CLI. On
   construction, probes gh --version to record availability. forge_kind()

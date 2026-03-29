@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/app.rs
+managed-file: crates/lajjzy-tui/src/app.rs
 version: 1
 test_policy: "No tests — state struct, tested via dispatch tests"
 ---

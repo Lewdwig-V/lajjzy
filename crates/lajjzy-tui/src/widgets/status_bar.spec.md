@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/status_bar.rs
+managed-file: crates/lajjzy-tui/src/widgets/status_bar.rs
 intent: >
   Render a priority-ordered status bar showing the most important contextual
   information for the current TUI state: hunk picker status, rebase picking

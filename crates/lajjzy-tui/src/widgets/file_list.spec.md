@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/file_list.rs
+managed-file: crates/lajjzy-tui/src/widgets/file_list.rs
 intent: >
   Renders a scrollable list of file changes for a jj change, displaying each
   file with a status indicator and path. Highlights the cursor row with

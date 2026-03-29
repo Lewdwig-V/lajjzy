@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/conflict_view.rs
+managed-file: crates/lajjzy-tui/src/widgets/conflict_view.rs
 intent: >
   Render a scrollable conflict resolution viewer showing jj conflict regions as base/left/right panels separated by styled ─── separator lines, with color-coded sides (DarkGray base, Blue left, Green right), dimming of the rejected side when a resolution is chosen, bold separators for the current hunk, a resolution status footer per conflict block, and collapsed '··· N lines ···' summaries for resolved regions.
 intent-approved: false

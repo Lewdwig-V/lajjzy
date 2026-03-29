@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/action.rs
+managed-file: crates/lajjzy-tui/src/action.rs
 version: 1
 test_policy: "No tests — enum definitions only"
 ---

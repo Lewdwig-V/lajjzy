@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/effect.rs
+managed-file: crates/lajjzy-tui/src/effect.rs
 version: 1
 test_policy: "No tests — enum definition only"
 ---

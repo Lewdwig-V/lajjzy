@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/bookmark_input.rs
+managed-file: crates/lajjzy-tui/src/widgets/bookmark_input.rs
 intent: >
   Renders a bordered single-input overlay widget for naming or selecting a bookmark. Displays the current text input with a trailing cursor indicator on the first inner line. On the second inner line, renders a filtered list of matching completions (case-insensitive substring match against the input) drawn from a caller-supplied list, capped to fit available width. The widget is stateless and read-only: it renders what it receives and owns no input state.
 intent-approved: false

@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/describe.rs
+managed-file: crates/lajjzy-tui/src/widgets/describe.rs
 intent: >
   Renders a bordered, yellow-outlined modal editor pane that displays multi-line commit-message text from a tui_textarea::TextArea, draws a cursor highlight at the active cursor position, and shows keybinding hints (Alt-Enter/Ctrl-S save, Esc cancel, Shift-E editor) in the border title.
 intent-approved: false

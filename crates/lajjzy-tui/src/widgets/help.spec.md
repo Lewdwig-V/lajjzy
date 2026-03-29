@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/help.rs
+managed-file: crates/lajjzy-tui/src/widgets/help.rs
 intent: >
   Renders a context-sensitive, scrollable keyboard-shortcut reference overlay for the active UI panel (Graph, File List, Diff View, or Conflict View). Displays a bordered panel titled "Help — <Context>" with key bindings rendered as right-aligned yellow-bold key labels paired with plain-text descriptions, clipped to the visible area starting at the given scroll offset.
 intent-approved: false

@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/bookmark_picker.rs
+managed-file: crates/lajjzy-tui/src/widgets/bookmark_picker.rs
 intent: >
   Renders a scrollable, bordered list of bookmarks (name + change description) inside a blue-bordered "Bookmarks" panel. Each row shows the bookmark name in magenta alongside the associated change description in dark gray. The cursor row is highlighted with reversed video. When the list is empty, displays a "(no bookmarks)" placeholder. Auto-scrolls the viewport so the cursor row is always visible.
 intent-approved: false

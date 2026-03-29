@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-cli/src/main.rs
+managed-file: crates/lajjzy-cli/src/main.rs
 intent: >
   Binary entry point that initialises a jj workspace backend and forge,
   bootstraps AppState with the initial graph, installs a panic handler that

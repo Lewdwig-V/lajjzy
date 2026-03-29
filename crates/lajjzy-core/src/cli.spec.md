@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-core/src/cli.rs
+managed-file: crates/lajjzy-core/src/cli.rs
 intent: >
   JjCliBackend implements the RepoBackend trait by shelling out to the jj CLI (and selectively using jj-lib for in-process operations). It validates the workspace on construction, loads the full change graph with per-change metadata and file summaries in a single jj log invocation, lazily computes file-level and change-level diffs, reads structured conflict data via jj-lib, and executes all repository mutations (describe, new, edit, abandon, undo, redo, bookmark set/delete, git push/fetch, rebase single, rebase with descendants, split, squash-partial, absorb, duplicate, revert, and resolve-file) returning human-readable confirmation strings. All errors propagate as Err; the backend never panics on repository operations.
 intent-approved: false

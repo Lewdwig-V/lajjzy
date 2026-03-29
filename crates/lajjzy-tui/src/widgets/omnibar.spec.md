@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/omnibar.rs
+managed-file: crates/lajjzy-tui/src/widgets/omnibar.rs
 intent: >
   A ratatui widget that renders the omnibar overlay: a bordered, titled input panel showing the current query string and, below it, either a scrollable list of inline completion items (when completions are present) or a scrollable list of fuzzy-matched graph changes (change ID, author, description). The title adapts to four states: idle, typing-search, active-revset, and completing. The selected row is highlighted with a REVERSED style. When no matches exist, a context-sensitive empty-state message is shown. Completions whose insert_text ends with '(' are styled in cyan to indicate revset functions.
 intent-approved: false

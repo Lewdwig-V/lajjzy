@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/op_log.rs
+managed-file: crates/lajjzy-tui/src/widgets/op_log.rs
 intent: >
   Renders a scrollable, cursor-tracked list of jj operation log entries inside a titled, blue-bordered box. Each entry displays its operation ID (yellow), timestamp (cyan), and description. Highlights the cursor row with REVERSED style. Auto-scrolls the viewport to keep the cursor visible. Renders a "(no operations)" placeholder when the entry list is empty.
 intent-approved: false

@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/widgets/diff_view.rs
+managed-file: crates/lajjzy-tui/src/widgets/diff_view.rs
 intent: >
   Renders a scrollable unified-diff view as a ratatui widget. Given a slice of
   DiffHunk values and a scroll offset, it flattens all hunk headers and diff

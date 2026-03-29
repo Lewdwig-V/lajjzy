@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/panels/detail.rs
+managed-file: crates/lajjzy-tui/src/panels/detail.rs
 intent: >
   Renders the detail panel, a bordered region that switches its title and inner widget based on the current DetailMode (FileList, DiffView, HunkPicker, ConflictView). When focused, the border is Blue; when unfocused, DarkGray. Each mode composes a context-aware title from AppState (change description, file path, hunk operation source/destination, conflict path and hunk progress) and delegates content rendering to the appropriate sub-widget (FileListWidget, DiffViewWidget, HunkPickerWidget, ConflictViewWidget).
 intent-approved: false

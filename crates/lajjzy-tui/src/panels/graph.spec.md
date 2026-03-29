@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/panels/graph.rs
+managed-file: crates/lajjzy-tui/src/panels/graph.rs
 intent: >
   Renders the commit-graph panel: wraps GraphWidget in a titled border whose colour reflects focus state, computes and stores the scroll offset into AppState.layout, and delegates all graph content rendering to the widget.
 intent-approved: false
