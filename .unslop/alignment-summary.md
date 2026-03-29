@@ -49,3 +49,15 @@
   Intent: Bordered input overlay for bookmark naming
 - `crates/lajjzy-tui/src/widgets/describe.rs` <- `crates/lajjzy-tui/src/widgets/describe.spec.md` (fresh, generated 2026-03-29)
   Intent: Modal editor pane for commit messages
+- `crates/lajjzy-core/src/cli.rs` <- `crates/lajjzy-core/src/cli.spec.md` (fresh, generated 2026-03-29)
+  Intent: JjCliBackend — RepoBackend impl via jj CLI subprocess calls
+- `crates/lajjzy-core/src/gh.rs` <- `crates/lajjzy-core/src/gh.spec.md` (fresh, generated 2026-03-29)
+  Intent: GhCliForge — ForgeBackend impl via gh CLI subprocess calls
+- `crates/lajjzy-tui/src/render.rs` <- `crates/lajjzy-tui/src/render.spec.md` (fresh, generated 2026-03-29)
+  Intent: Full-frame ratatui render orchestration — layout, panels, modals, status bar
+- `crates/lajjzy-tui/src/panels/detail.rs` <- `crates/lajjzy-tui/src/panels/detail.spec.md` (fresh, generated 2026-03-29)
+  Intent: Detail panel renderer — mode-switched inner widget dispatch
+- `crates/lajjzy-tui/src/panels/graph.rs` <- `crates/lajjzy-tui/src/panels/graph.spec.md` (fresh, generated 2026-03-29)
+  Intent: Graph panel renderer — bordered GraphWidget with scroll offset caching
+- `crates/lajjzy-cli/src/main.rs` <- `crates/lajjzy-cli/src/main.spec.md` (fresh, generated 2026-03-29)
+  Intent: Binary entry point — terminal lifecycle, event loop, effect executor
