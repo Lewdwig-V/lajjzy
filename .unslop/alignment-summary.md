@@ -27,3 +27,25 @@
   Intent: Revset completion engine for omnibar — function/bookmark/change-ID ranking
 - `crates/lajjzy-tui/src/widgets/status_bar.rs` <- `crates/lajjzy-tui/src/widgets/status_bar.spec.md` (fresh, generated 2026-03-28)
   Intent: Priority-ordered status bar widget — contextual TUI state display
+- `crates/lajjzy-tui/src/widgets/graph.rs` <- `crates/lajjzy-tui/src/widgets/graph.spec.md` (fresh, generated 2026-03-29)
+  Intent: Change graph with per-node coloring, cursor highlight, scroll offset
+- `crates/lajjzy-tui/src/widgets/conflict_view.rs` <- `crates/lajjzy-tui/src/widgets/conflict_view.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable conflict resolution viewer with base/left/right panels
+- `crates/lajjzy-tui/src/widgets/omnibar.rs` <- `crates/lajjzy-tui/src/widgets/omnibar.spec.md` (fresh, generated 2026-03-29)
+  Intent: Bordered omnibar overlay with query, matches, completions
+- `crates/lajjzy-tui/src/widgets/hunk_picker.rs` <- `crates/lajjzy-tui/src/widgets/hunk_picker.spec.md` (fresh, generated 2026-03-29)
+  Intent: Interactive hunk selection with file headers and diff lines
+- `crates/lajjzy-tui/src/widgets/file_list.rs` <- `crates/lajjzy-tui/src/widgets/file_list.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable file change list with status indicators
+- `crates/lajjzy-tui/src/widgets/help.rs` <- `crates/lajjzy-tui/src/widgets/help.spec.md` (fresh, generated 2026-03-29)
+  Intent: Context-sensitive keyboard shortcut reference overlay
+- `crates/lajjzy-tui/src/widgets/bookmark_picker.rs` <- `crates/lajjzy-tui/src/widgets/bookmark_picker.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable bookmark list with cursor and auto-scroll
+- `crates/lajjzy-tui/src/widgets/op_log.rs` <- `crates/lajjzy-tui/src/widgets/op_log.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable operation log entry list
+- `crates/lajjzy-tui/src/widgets/diff_view.rs` <- `crates/lajjzy-tui/src/widgets/diff_view.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable unified-diff view
+- `crates/lajjzy-tui/src/widgets/bookmark_input.rs` <- `crates/lajjzy-tui/src/widgets/bookmark_input.spec.md` (fresh, generated 2026-03-29)
+  Intent: Bordered input overlay for bookmark naming
+- `crates/lajjzy-tui/src/widgets/describe.rs` <- `crates/lajjzy-tui/src/widgets/describe.spec.md` (fresh, generated 2026-03-29)
+  Intent: Modal editor pane for commit messages
