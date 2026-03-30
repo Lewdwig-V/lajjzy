@@ -1,29 +1,43 @@
 ---
 managed-file: crates/lajjzy-core/src/cli.rs
 intent: >
-  JjCliBackend implements the RepoBackend trait by shelling out to the jj CLI (and selectively using jj-lib for in-process operations). It validates the workspace on construction, loads the full change graph with per-change metadata and file summaries in a single jj log invocation, lazily computes file-level and change-level diffs, reads structured conflict data via jj-lib, and executes all repository mutations (describe, new, edit, abandon, undo, redo, bookmark set/delete, git push/fetch, rebase single, rebase with descendants, split, squash-partial, absorb, duplicate, revert, and resolve-file) returning human-readable confirmation strings. All errors propagate as Err; the backend never panics on repository operations.
+  JjCliBackend implements the RepoBackend trait by shelling out to the jj CLI
+  for all repository operations. It validates the workspace on construction,
+  loads the full change graph via jj log with a custom template, lazily
+  computes diffs via jj diff, reads structured conflict data by parsing jj
+  conflict markers from jj file show, and executes all mutations (describe,
+  new, edit, abandon, undo, redo, bookmark, push, fetch, rebase, split,
+  squash, absorb, duplicate, revert, resolve-file) via jj CLI subcommands.
+  All errors propagate as Err; the backend never panics on repository
+  operations.
 intent-approved: false
-intent-hash: 140f85271d86
+intent-hash: 2d8330845aba
 distilled-from:
   - path: crates/lajjzy-core/src/cli.rs
     hash: 851d5ba6fda7
 non-goals:
-  - Does not cache jj subprocess output between calls — every method re-opens the workspace or re-shells out
+  - Does not use jj-lib for any operations — all jj interaction is through the CLI subprocess interface
+  - Does not cache jj subprocess output between calls — every method re-shells out
   - Does not perform partial-hunk selection at the diff-line level — split and squash operate on whole files, not individual diff hunks
   - Does not manage terminal state, process lifecycle, or git remotes — those are the responsibility of lajjzy-cli and the user's jj config
 depends-on:
   - crates/lajjzy-core/src/backend.spec.md
   - crates/lajjzy-core/src/types.spec.md
+spec-changelog:
+  - intent-hash: 2d8330845aba
+    timestamp: 2026-03-31T00:00:00Z
+    operation: elicit-amend
+    prior-intent-hash: 140f85271d86
 ---
 
 ## Purpose
 
-`JjCliBackend` is the production implementation of `RepoBackend`. Callers obtain
-a `GraphData` snapshot (change graph, per-change metadata, file lists) from
-`load_graph`, lazily drill into diffs via `file_diff` / `change_diff`, inspect
-conflicts via `conflict_sides`, and mutate the repository through a set of
-typed methods that each return a human-readable `String` on success or an
-`Err` on failure.
+`JjCliBackend` is the production implementation of `RepoBackend`. All jj
+interaction goes through CLI subprocess calls — no jj-lib dependency.
+Callers obtain a `GraphData` snapshot from `load_graph`, lazily drill into
+diffs via `file_diff` / `change_diff`, inspect conflicts via `conflict_sides`,
+and mutate the repository through typed methods that each return a
+human-readable `String` on success or an `Err` on failure.
 
 ## Behavior
 
@@ -31,8 +45,9 @@ typed methods that each return a human-readable `String` on success or an
 
 - `JjCliBackend::new(path)` runs `jj root` in `path`; returns `Err` if `jj` is
   not installed or if `path` is not inside a jj workspace.
-- On success the resolved workspace root (as reported by `jj root`) is stored.
-  Subsequent subprocess calls use this root as `current_dir`.
+- On success the resolved workspace root (as reported by `jj root`) is stored
+  as a `PathBuf`. Subsequent subprocess calls use this root as `current_dir`.
+- No jj-lib workspace or repo handle is opened.
 
 ### Graph loading — `load_graph(revset)`
 
@@ -128,32 +143,32 @@ typed methods that each return a human-readable `String` on success or an
 - Returns `Err("No files selected for squash")` if no file has selected hunks.
 - Uses `-u` (`--use-destination-message`) to suppress `$EDITOR`.
 
-### `duplicate(change_id)` — uses jj-lib in-process
+### `duplicate(change_id)` — CLI subprocess
 
-- Opens the jj-lib workspace at head (re-opened per call).
-- Resolves the short change id via `resolve_change` (reverse-hex prefix lookup,
-  fails if not found, ambiguous, or divergent).
-- Creates a transaction, calls `duplicate_commits_onto_parents`, commits.
-- Returns `Duplicated <change_id> → <new_change_id>` (new id in full hex).
+- Invokes `jj duplicate <change_id>`.
+- Parses jj's output to extract the new change ID.
+- Returns `Duplicated <change_id>` on success.
 
-### `revert(change_id)` — uses jj-lib in-process
+### `revert(change_id)` — CLI subprocess
 
-- Opens the jj-lib workspace at head.
-- Computes `merge(wc_tree, parent_tree, commit_tree)` (inverse-apply semantics).
-- Creates a new commit as a child of `@` with description `revert <change_id>`.
-- If the resulting tree has conflicts, the return string includes
+- Invokes `jj revert --revisions <change_id> --onto @`.
+- Returns `Reverted <change_id>` on success.
+- If the resulting commit has conflicts, the return string includes
   `(new commit has conflicts)`.
 
-### `conflict_sides(change_id, path)` — uses jj-lib in-process
+### `conflict_sides(change_id, path)` — parses jj conflict markers
 
-- Opens the jj-lib repo at head; resolves the change id.
-- Returns `Err` if the file is not conflicted, is an n-way conflict (> 2
-  sides), or is a non-file entry.
-- Returns `Err` with a user-facing message advising an external tool for
-  binary / non-UTF-8 files.
-- Returns `ConflictData` with `ConflictRegion::Resolved` and
-  `ConflictRegion::Conflict { base, left, right }` regions interleaved in
-  file order.
+- Invokes `jj file show -r <change_id> <path>`.
+- If the file is not conflicted (no conflict markers in output), returns `Err`.
+- Parses jj's conflict marker format to extract structured regions:
+  - `<<<<<<<` opens a conflict block
+  - `%%%%%%%` introduces a diff-style section (base with +/- patches for left side)
+  - `+++++++` introduces the right side verbatim content
+  - `>>>>>>>` closes the conflict block
+  - Content between conflict blocks is `ConflictRegion::Resolved`
+  - Each conflict block produces `ConflictRegion::Conflict { base, left, right }`
+- Returns `Err` for n-way conflicts (> 2 sides) or binary/non-UTF-8 files.
+- Returns `ConflictData` with regions interleaved in file order.
 
 ### `resolve_file(change_id, path, content)`
 
@@ -168,9 +183,7 @@ typed methods that each return a human-readable `String` on success or an
 - `JjCliBackend` does not implement caching — each call reflects the current
   repo state.
 - Short change ids from `change_id.short()` are in jj's reverse-hex alphabet
-  (k–z + a–j); internal resolution uses `try_from_reverse_hex`.
-- The jj-lib workspace is re-opened from disk on every call that uses it
-  (`duplicate`, `revert`, `conflict_sides`) to pick up CLI mutation effects.
+  (k–z + a–j).
 - `first_line_preview` truncates descriptions to 50 characters using
   `char_indices` (safe for multibyte UTF-8); truncated strings are suffixed
   with `...`.
@@ -179,15 +192,13 @@ typed methods that each return a human-readable `String` on success or an
 
 ## Dependencies
 
-- `jj` CLI binary in `PATH` — required at construction time and for all CLI
-  mutations and graph/diff loading.
-- `jj-lib` crate — used in-process for `duplicate`, `revert`,
-  `conflict_sides`; loaded with user config from
-  `~/.config/jj/config.toml` when present.
-- `pollster` — blocks async jj-lib futures synchronously.
-- `dirs` — resolves user config directory for jj-lib user settings.
+- `jj` CLI binary in `PATH` — required at construction time and for all operations.
 - `crate::backend::RepoBackend` — trait being implemented.
 - `crate::types::{GraphData, GraphLine, ChangeDetail, FileChange, FileStatus,
   DiffHunk, DiffLine, DiffLineKind, FileDiff, OpLogEntry, ConflictData,
   ConflictRegion, FileHunkSelection}` — all domain types.
 - `anyhow` — error propagation.
+
+## Changelog
+
+- **2026-03-31 elicit-amend** — M8: migrate duplicate, revert, conflict_sides from jj-lib to pure CLI. Drop jj-lib dependency. Constructor simplified to store PathBuf only.
