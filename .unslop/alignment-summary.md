@@ -25,3 +25,39 @@
   Intent: Pure dispatch state machine — processes all actions, returns effects
 - `crates/lajjzy-tui/src/dispatch/omnibar.rs` <- `crates/lajjzy-tui/src/dispatch/omnibar.spec.md` (fresh, generated 2026-03-25)
   Intent: Revset completion engine for omnibar — function/bookmark/change-ID ranking
+- `crates/lajjzy-tui/src/widgets/status_bar.rs` <- `crates/lajjzy-tui/src/widgets/status_bar.spec.md` (fresh, generated 2026-03-28)
+  Intent: Priority-ordered status bar widget — contextual TUI state display
+- `crates/lajjzy-tui/src/widgets/graph.rs` <- `crates/lajjzy-tui/src/widgets/graph.spec.md` (fresh, generated 2026-03-29)
+  Intent: Change graph with per-node coloring, cursor highlight, scroll offset
+- `crates/lajjzy-tui/src/widgets/conflict_view.rs` <- `crates/lajjzy-tui/src/widgets/conflict_view.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable conflict resolution viewer with base/left/right panels
+- `crates/lajjzy-tui/src/widgets/omnibar.rs` <- `crates/lajjzy-tui/src/widgets/omnibar.spec.md` (fresh, generated 2026-03-29)
+  Intent: Bordered omnibar overlay with query, matches, completions
+- `crates/lajjzy-tui/src/widgets/hunk_picker.rs` <- `crates/lajjzy-tui/src/widgets/hunk_picker.spec.md` (fresh, generated 2026-03-29)
+  Intent: Interactive hunk selection with file headers and diff lines
+- `crates/lajjzy-tui/src/widgets/file_list.rs` <- `crates/lajjzy-tui/src/widgets/file_list.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable file change list with status indicators
+- `crates/lajjzy-tui/src/widgets/help.rs` <- `crates/lajjzy-tui/src/widgets/help.spec.md` (fresh, generated 2026-03-29)
+  Intent: Context-sensitive keyboard shortcut reference overlay
+- `crates/lajjzy-tui/src/widgets/bookmark_picker.rs` <- `crates/lajjzy-tui/src/widgets/bookmark_picker.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable bookmark list with cursor and auto-scroll
+- `crates/lajjzy-tui/src/widgets/op_log.rs` <- `crates/lajjzy-tui/src/widgets/op_log.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable operation log entry list
+- `crates/lajjzy-tui/src/widgets/diff_view.rs` <- `crates/lajjzy-tui/src/widgets/diff_view.spec.md` (fresh, generated 2026-03-29)
+  Intent: Scrollable unified-diff view
+- `crates/lajjzy-tui/src/widgets/bookmark_input.rs` <- `crates/lajjzy-tui/src/widgets/bookmark_input.spec.md` (fresh, generated 2026-03-29)
+  Intent: Bordered input overlay for bookmark naming
+- `crates/lajjzy-tui/src/widgets/describe.rs` <- `crates/lajjzy-tui/src/widgets/describe.spec.md` (fresh, generated 2026-03-29)
+  Intent: Modal editor pane for commit messages
+- `crates/lajjzy-core/src/cli.rs` <- `crates/lajjzy-core/src/cli.spec.md` (fresh, generated 2026-03-29)
+  Intent: JjCliBackend — RepoBackend impl via jj CLI subprocess calls
+- `crates/lajjzy-core/src/gh.rs` <- `crates/lajjzy-core/src/gh.spec.md` (fresh, generated 2026-03-29)
+  Intent: GhCliForge — ForgeBackend impl via gh CLI subprocess calls
+- `crates/lajjzy-tui/src/render.rs` <- `crates/lajjzy-tui/src/render.spec.md` (fresh, generated 2026-03-29)
+  Intent: Full-frame ratatui render orchestration — layout, panels, modals, status bar
+- `crates/lajjzy-tui/src/panels/detail.rs` <- `crates/lajjzy-tui/src/panels/detail.spec.md` (fresh, generated 2026-03-29)
+  Intent: Detail panel renderer — mode-switched inner widget dispatch
+- `crates/lajjzy-tui/src/panels/graph.rs` <- `crates/lajjzy-tui/src/panels/graph.spec.md` (fresh, generated 2026-03-29)
+  Intent: Graph panel renderer — bordered GraphWidget with scroll offset caching
+- `crates/lajjzy-cli/src/main.rs` <- `crates/lajjzy-cli/src/main.spec.md` (fresh, generated 2026-03-29)
+  Intent: Binary entry point — terminal lifecycle, event loop, effect executor

@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/dispatch/omnibar.rs
+managed-file: crates/lajjzy-tui/src/dispatch/omnibar.rs
 version: 1
 test_policy: "Tests live in dispatch/mod.rs protected region — not in this file"
 depends-on:

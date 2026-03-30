@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/dispatch/mod.rs
+managed-file: crates/lajjzy-tui/src/dispatch/mod.rs
 version: 1
 test_policy: "Tests exist in protected #[cfg(test)] region — Builder must preserve verbatim"
 depends-on:

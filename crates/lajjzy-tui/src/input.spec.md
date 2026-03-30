@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-tui/src/input.rs
+managed-file: crates/lajjzy-tui/src/input.rs
 version: 1
 test_policy: "Write or extend tests for all key mapping functions"
 ---

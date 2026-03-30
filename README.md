@@ -256,14 +256,11 @@ See `CLAUDE.md` for architectural constraints and crate structure.
 
 ## Roadmap
 
-- **M8 — jj-lib Backend Migration**: incremental migration from CLI shelling to jj-lib. M4 established read path (conflict_sides), M7 established write path (transactions). Remaining methods migrate by value:
-  - **M8a**: `load_graph` — eliminates jj log output parsing, structured revset evaluation
-  - **M8b**: `file_diff` / `change_diff` — structured hunks without parsing unified diff
-  - **M8c**: `split` / `squash_partial` — direct tree construction
-  - **M8d**: `resolve_file` — upgrade from `fs::write` to jj-lib tree mutation
-  - **M8e**: `rebase_single` / `rebase_with_descendants` — structured error reporting
-  - **M8f**: simple mutations (`describe`, `new_change`, `edit_change`, `abandon`, `undo`, `redo`, `bookmark_*`)
-  - **M8g**: `git_push` / `git_fetch` — may stay CLI-backed long-term
+- **M8 — Drop jj-lib, go pure CLI**: migrate the remaining jj-lib call sites (`duplicate`, `revert`, `conflict_sides`, `resolve_file`) to jj CLI with template output parsing. jj's CLI is the stable scriptable interface; jj-lib is an internal API with no stability guarantees.
+  - **M8a**: `duplicate` / `revert` — replace jj-lib transactions with `jj duplicate` and `jj revert` CLI calls
+  - **M8b**: `conflict_sides` — parse jj conflict markers from `jj file show` output instead of using `jj_lib::conflicts`
+  - **M8c**: `resolve_file` — write resolved content and let jj snapshot, or use `jj file` subcommands
+  - **M8d**: drop `jj-lib` dependency from Cargo.toml, remove workspace/repo loading from constructor
 - **M9a — Polish**: configurable keymaps
 - **M9b — Polish**: theming support, colour sets, nerd font support, noto emoji, statusline fonts
 - **M9d — Polish**: collapsible jj oplog pane with command-equivalent observations (jj op log/jj op diff/jj op show), restoration (jj op restore --to/jj abandon), a filter toggle to hide automatic snapshots and only show manual commands.

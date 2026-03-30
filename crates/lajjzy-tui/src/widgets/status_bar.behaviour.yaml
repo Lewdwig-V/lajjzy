@@ -1,0 +1,240 @@
+file: crates/lajjzy-tui/src/widgets/status_bar.rs
+spec: crates/lajjzy-tui/src/widgets/status_bar.spec.md
+version: 1
+
+constraints:
+
+  # ── Zero-height guard ──────────────────────────────────────────────────────
+
+  - id: zero_height_early_return
+    type: given_when_then
+    given: area.height == 0
+    when: render is called with any widget state
+    then: the method returns immediately and nothing is written to the buffer
+
+  # ── Priority 1: Hunk picker ────────────────────────────────────────────────
+
+  - id: hunk_picker_renders_magenta
+    type: given_when_then
+    given: hunk_picker is Some
+    when: render is called
+    then: line 1 is rendered in Color::Magenta and the method returns without rendering any lower-priority content
+
+  - id: hunk_picker_split_format
+    type: given_when_then
+    given: hunk_picker is Some with op == HunkPickerOp::Split
+    when: render is called
+    then: line 1 text begins with "Split:" and includes the selected/total hunk counts and the source change id
+
+  - id: hunk_picker_squash_format
+    type: given_when_then
+    given: hunk_picker is Some with op == HunkPickerOp::Squash
+    when: render is called
+    then: line 1 text begins with "Squash:" and includes source and destination change ids and hunk counts
+
+  # ── Priority 2: Picking mode ───────────────────────────────────────────────
+
+  - id: picking_mode_renders_yellow
+    type: given_when_then
+    given: hunk_picker is None and picking_mode is Some
+    when: render is called
+    then: line 1 is rendered in Color::Yellow and the method returns without rendering any lower-priority content
+
+  - id: picking_mode_with_descendants_includes_count
+    type: given_when_then
+    given: picking_mode is Some(PickingMode::PickWithDescendants) and hunk_picker is None
+    when: render is called
+    then: line 1 text includes the descendant count
+
+  - id: picking_mode_filtering_shows_query
+    type: given_when_then
+    given: picking_mode is Some(PickingMode::Filtering) and hunk_picker is None
+    when: render is called
+    then: line 1 text includes the filter query string
+
+  # ── Priority 3: Error ─────────────────────────────────────────────────────
+
+  - id: error_renders_red
+    type: given_when_then
+    given: hunk_picker is None, picking_mode is None, and error is Some
+    when: render is called
+    then: line 1 is rendered in Color::Red containing the error message text, and the method returns
+
+  - id: error_priority_over_status_message
+    type: given_when_then
+    given: error is Some and status_message is Some and hunk_picker/picking_mode are None
+    when: render is called
+    then: only the error is rendered; the status message is not visible
+
+  # ── Priority 4: Status message ─────────────────────────────────────────────
+
+  - id: status_message_renders_green
+    type: given_when_then
+    given: hunk_picker, picking_mode, and error are all None, and status_message is Some
+    when: render is called
+    then: line 1 is rendered in Color::Green containing the status message, and the method returns
+
+  # ── Priority 5: Conflict view ──────────────────────────────────────────────
+
+  - id: conflict_view_renders_yellow
+    type: given_when_then
+    given: hunk_picker, picking_mode, error, and status_message are all None, and conflict_view is Some
+    when: render is called
+    then: line 1 is rendered in Color::Yellow with the hunk index, total, state, and key hint text
+
+  - id: conflict_view_format
+    type: given_when_then
+    given: conflict_view is Some(cv) and all higher-priority fields are None
+    when: render is called
+    then: >
+      line 1 matches the pattern
+      "Hunk {current}/{total}: {state} | 1: left | 2: right | n: next | m: merge tool"
+
+  # ── Priority 6: Active revset ──────────────────────────────────────────────
+
+  - id: active_revset_renders_cyan
+    type: given_when_then
+    given: priorities 1-5 are all None and active_revset is Some
+    when: render is called
+    then: 'line 1 is rendered in Cyan with text "revset: {query}" and the method returns'
+
+  # ── Priority 7: Background operations ──────────────────────────────────────
+
+  - id: background_ops_render_cyan
+    type: given_when_then
+    given: priorities 1-6 are all None and at least one of is_pushing or is_fetching is true
+    when: render is called
+    then: line 1 is rendered in Color::Cyan with the active operation labels joined by a space
+
+  - id: background_ops_pushing_label
+    type: given_when_then
+    given: is_pushing is true and all higher-priority fields are None
+    when: render is called
+    then: line 1 contains the text "Pushing..."
+
+  - id: background_ops_fetching_label
+    type: given_when_then
+    given: is_fetching is true and all higher-priority fields are None
+    when: render is called
+    then: line 1 contains the text "Fetching..."
+
+  - id: background_ops_fall_through_to_line2
+    type: given_when_then
+    given: a background operation is active, area.height > 1, and change_detail is Some
+    when: render is called
+    then: >
+      line 2 is also rendered with the change detail description and bookmarks —
+      background operations do NOT early-return before rendering line 2
+
+  - id: background_ops_no_line2_when_single_row
+    type: given_when_then
+    given: a background operation is active, area.height == 1, and change_detail is Some
+    when: render is called
+    then: only line 1 (the operation label) is written; line 2 is not written
+
+  - id: background_ops_no_line2_when_no_detail
+    type: given_when_then
+    given: a background operation is active, area.height > 1, and change_detail is None
+    when: render is called
+    then: only line 1 (the operation label) is written; line 2 is not written
+
+  # ── Priority 8: Change detail ──────────────────────────────────────────────
+
+  - id: change_detail_line1_format
+    type: given_when_then
+    given: priorities 1-7 are all inactive and change_detail is Some
+    when: render is called
+    then: >
+      line 1 text is "{change_id} {commit_id}  {author} <{email}>"
+      rendered with default (unstyled) color
+
+  - id: change_detail_line2_rendered_when_tall
+    type: given_when_then
+    given: priorities 1-7 are all inactive, change_detail is Some, and area.height > 1
+    when: render is called
+    then: >
+      line 2 text is "{description}  [{bookmarks}]" when bookmarks is non-empty,
+      or just "{description}" when bookmarks is empty, rendered with default color
+
+  - id: change_detail_line2_omitted_when_single_row
+    type: given_when_then
+    given: priorities 1-7 are all inactive, change_detail is Some, and area.height == 1
+    when: render is called
+    then: only line 1 is written; no write to area.y + 1
+
+  # ── Priority 9: Nothing ────────────────────────────────────────────────────
+
+  - id: empty_buffer_when_no_state
+    type: given_when_then
+    given: all optional fields are None and both is_pushing and is_fetching are false
+    when: render is called
+    then: no bytes are written to the buffer and no panic occurs
+
+  # ── Priority ordering ──────────────────────────────────────────────────────
+
+  - id: priority_order_hunk_picker_beats_all
+    type: given_when_then
+    given: hunk_picker is Some AND all other fields are also populated
+    when: render is called
+    then: only hunk_picker content appears; all lower-priority content is suppressed
+
+  - id: priority_order_picking_beats_error
+    type: given_when_then
+    given: picking_mode is Some and error is Some and hunk_picker is None
+    when: render is called
+    then: picking mode content appears; error text does not appear
+
+  - id: priority_order_error_beats_status
+    type: given_when_then
+    given: error is Some and status_message is Some and priorities 1-2 are None
+    when: render is called
+    then: error content appears; status message does not appear
+
+  - id: priority_order_status_beats_conflict
+    type: given_when_then
+    given: status_message is Some and conflict_view is Some and priorities 1-3 are None
+    when: render is called
+    then: status message appears; conflict view does not appear
+
+  - id: priority_order_conflict_beats_revset
+    type: given_when_then
+    given: conflict_view is Some and active_revset is Some and priorities 1-4 are None
+    when: render is called
+    then: conflict view appears; revset text does not appear
+
+  - id: priority_order_revset_beats_background
+    type: given_when_then
+    given: active_revset is Some and is_pushing is true and priorities 1-5 are None
+    when: render is called
+    then: revset text appears; "Pushing..." does not appear
+
+  - id: priority_order_background_beats_change_detail_on_line1
+    type: given_when_then
+    given: is_pushing is true and change_detail is Some and priorities 1-6 are None
+    when: render is called
+    then: line 1 shows the operation label, not the change_id/commit_id line
+
+  # ── Non-goals (negative constraints) ──────────────────────────────────────
+
+  - id: must_not_handle_input
+    type: given_when_then
+    given: any keyboard or mouse event occurs
+    when: render is called
+    then: the widget does not consume, process, or respond to input events — it is display only
+
+  - id: must_not_own_state
+    type: given_when_then
+    given: StatusBarWidget is constructed
+    when: any field is examined
+    then: >
+      all data fields are references or Copy primitives borrowed from the caller;
+      the widget owns no heap-allocated state beyond transient format strings
+      produced inside the render body
+
+  - id: must_not_wrap_or_truncate
+    type: given_when_then
+    given: a rendered string is wider than area.width
+    when: render is called
+    then: >
+      the widget does not wrap text to a second line nor truncate the string itself;
+      overflow is handled entirely by ratatui's buffer width clipping on buf.set_line

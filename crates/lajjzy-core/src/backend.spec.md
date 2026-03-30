@@ -1,5 +1,5 @@
 ---
-managed_file: crates/lajjzy-core/src/backend.rs
+managed-file: crates/lajjzy-core/src/backend.rs
 version: 1
 test_policy: "No tests — trait definition only, tested via implementors"
 ---
