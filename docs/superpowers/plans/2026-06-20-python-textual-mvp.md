@@ -1200,7 +1200,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `change_diff` from `backend.jj`.
-- Produces: `DetailPanel` gains a `file_cursor` reactive + a `mode` ("files" | "diff"); App actions `detail_down/up`, `detail_open` (Enter → load diff via `@work(group="diff", exclusive=True)`), `detail_back` (Esc). The loaded diff is stored on the panel and rendered.
+- Produces: `DetailPanel` gains a `file_cursor` reactive + a `mode` ("files" | "diff") and **its own focus-scoped `BINDINGS`** for file navigation (`j`/`k`), open-diff (`enter`), and back (`escape`) — these fire only when the panel is focused. The app exposes `open_diff(path)` as `@work(group="diff", exclusive=True)`; the panel calls it. The app keeps only `tab` → `focus_detail`. No app-level `enter` binding is introduced here — that keeps `enter` free of double duty (see Task 15).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1226,7 +1226,11 @@ async def test_enter_opens_diff_then_esc_returns(temp_repo: Path):
 Run: `uv run pytest tests/test_app.py -k diff_then_esc -v`
 Expected: FAIL — `panel.mode` attribute does not exist.
 
-- [ ] **Step 3: Implement the drill-down**
+- [ ] **Step 3: Implement the drill-down (focus-scoped bindings on the widget)**
+
+All file-list interaction lives on the `DetailPanel` widget, so its keys only
+fire while it is focused — `j`/`k`, `enter`, and `escape` never collide with the
+graph's bindings.
 
 ```python
 # replace src/lajjzy/widgets/detail.py
@@ -1241,6 +1245,16 @@ from lajjzy.backend.types import FileDiff
 
 class DetailPanel(Widget):
     can_focus = True
+
+    # Focus-scoped: these fire ONLY when the DetailPanel has focus.
+    BINDINGS = [
+        ("j", "file_down", "Next file"),
+        ("down", "file_down", "Next file"),
+        ("k", "file_up", "Prev file"),
+        ("up", "file_up", "Prev file"),
+        ("enter", "open_file", "Open diff"),
+        ("escape", "back", "Back"),
+    ]
 
     file_cursor: reactive[int] = reactive(0)
     mode: reactive[str] = reactive("files")  # "files" | "diff"
@@ -1266,6 +1280,32 @@ class DetailPanel(Widget):
             return []
         detail = graph.details.get(change_id)
         return detail.files if detail else []
+
+    def action_file_down(self) -> None:
+        if self.mode != "files":
+            return
+        files = self.current_files()
+        if files:
+            self.file_cursor = min(len(files) - 1, self.file_cursor + 1)
+            self.refresh()
+
+    def action_file_up(self) -> None:
+        if self.mode != "files":
+            return
+        self.file_cursor = max(0, self.file_cursor - 1)
+        self.refresh()
+
+    def action_open_file(self) -> None:
+        if self.mode != "files":
+            return
+        files = self.current_files()
+        if files:
+            self.app.open_diff(files[self.file_cursor].path)
+
+    def action_back(self) -> None:
+        if self.mode == "diff":
+            self.mode = "files"
+            self.refresh()
 
     def render(self) -> Text:
         if self.mode == "diff":
@@ -1296,33 +1336,17 @@ class DetailPanel(Widget):
 ```
 
 ```python
-# add to src/lajjzy/app.py — bindings + actions + diff worker
-# extend BINDINGS with:
+# add to src/lajjzy/app.py — ONLY a focus action + the diff worker.
+# extend BINDINGS with exactly:
 #   ("tab", "focus_detail", "Detail"),
-#   ("enter", "detail_open", "Open"),
-#   ("escape", "detail_back", "Back"),
+# (No app-level enter/escape here — DetailPanel owns those while focused.)
 
     def action_focus_detail(self) -> None:
         from lajjzy.widgets import DetailPanel
         self.query_one(DetailPanel).focus()
 
-    def action_detail_open(self) -> None:
-        from lajjzy.widgets import DetailPanel
-        panel = self.query_one(DetailPanel)
-        files = panel.current_files()
-        if not files:
-            return
-        self._open_diff(files[panel.file_cursor].path)
-
-    def action_detail_back(self) -> None:
-        from lajjzy.widgets import DetailPanel
-        panel = self.query_one(DetailPanel)
-        if panel.mode == "diff":
-            panel.mode = "files"
-            panel.refresh()
-
     @work(group="diff", exclusive=True)
-    async def _open_diff(self, path: str) -> None:
+    async def open_diff(self, path: str) -> None:
         from lajjzy.backend.jj import change_diff
         from lajjzy.widgets import DetailPanel
         change_id = self.selected_change_id()
@@ -1339,10 +1363,11 @@ class DetailPanel(Widget):
         panel.refresh()
 ```
 
-> Note: file-list `j`/`k` should move `DetailPanel.file_cursor` when the panel
-> is focused. Implement `action_detail_down/up` guarded by
-> `self.focused is panel`, or use Textual focus-scoped bindings on the widget.
-> Keep the graph `j`/`k` working when the graph is focused.
+> Why this shape: by putting `enter`/`escape`/`j`/`k` on the widget rather than
+> the app, each key has exactly one meaning per focus context. `enter` opens a
+> diff only when the detail panel is focused; the app never needs an `enter`
+> binding that branches on hidden state. This is the principle-of-least-surprise
+> fix that Task 15 depends on.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1756,7 +1781,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Modify: `tests/backend/test_jj.py`, `tests/test_app.py`
 
 **Interfaces:**
-- Produces: backend `async def rebase_single(cwd, source, destination) -> str` (`jj rebase -r <source> --onto <destination>`) and `async def rebase_with_descendants(cwd, source, destination) -> str` (`jj rebase -s <source> --onto <destination>`). App enters a `rebase` picking mode: `r` arms rebase-single, `ctrl+r` arms rebase-with-descendants; subsequent navigation chooses a destination; Enter confirms (mutation lane), Esc cancels.
+- Produces: backend `async def rebase_single(cwd, source, destination) -> str` (`jj rebase -r <source> --onto <destination>`) and `async def rebase_with_descendants(cwd, source, destination) -> str` (`jj rebase -s <source> --onto <destination>`). App enters a **visibly-signposted** rebase picking mode: `r` arms rebase-single, `ctrl+r` arms rebase-with-descendants; the status bar shows a prompt and the source is dimmed; navigation chooses a destination. App-level `enter` → `action_rebase_confirm` and `escape` → `action_rebase_cancel` are each **single-purpose** — `enter` is a no-op outside rebase mode, so it never does double duty with the detail panel's focus-scoped `enter`.
 
 - [ ] **Step 1: Write the failing backend test**
 
@@ -1803,9 +1828,15 @@ async def rebase_with_descendants(cwd: Path, source: str, destination: str) -> s
 
 ```python
 # add to src/lajjzy/app.py
-# extend BINDINGS with ("r", "rebase", "Rebase"), ("ctrl+r", "rebase_descendants", "Rebase+desc")
-# add a reactive: rebase_source: reactive[str | None] = reactive(None)
-#                 rebase_descendants: reactive[bool] = reactive(False)
+# extend BINDINGS with:
+#   ("r", "rebase", "Rebase"),
+#   ("ctrl+r", "rebase_descendants", "Rebase+desc"),
+#   ("enter", "rebase_confirm", "Confirm rebase"),
+#   ("escape", "rebase_cancel", "Cancel"),
+# These app-level enter/escape are single-purpose: they act only while
+# rebase mode is armed. When the DetailPanel is focused, ITS focus-scoped
+# enter/escape (Task 10) handle the key first and these never fire — so no
+# key ever branches on hidden state.
 
     rebase_source: reactive[str | None] = reactive(None)
     rebase_descendants_flag: reactive[bool] = reactive(False)
@@ -1814,37 +1845,42 @@ async def rebase_with_descendants(cwd: Path, source: str, destination: str) -> s
         self.rebase_source = self.selected_change_id()
         self.rebase_descendants_flag = False
         if self.rebase_source:
-            self.error = "Pick a destination, Enter to confirm, Esc to cancel"
+            self.error = "Rebase: pick a destination, Enter to confirm, Esc to cancel"
 
     def action_rebase_descendants(self) -> None:
         self.rebase_source = self.selected_change_id()
         self.rebase_descendants_flag = True
         if self.rebase_source:
-            self.error = "Pick a destination (+desc), Enter to confirm, Esc to cancel"
+            self.error = "Rebase +desc: pick a destination, Enter to confirm, Esc to cancel"
 
-    # In action_detail_back / a global escape handler, clear rebase_source.
-    # Override Enter so that, when rebase_source is set, it confirms the rebase
-    # instead of opening a diff:
-    def action_confirm(self) -> None:
+    def action_rebase_confirm(self) -> None:
+        # No-op unless rebase mode is armed — Enter does exactly one thing.
+        if self.rebase_source is None:
+            return
+        dest = self.selected_change_id()
+        src = self.rebase_source
+        descend = self.rebase_descendants_flag
+        self.rebase_source = None
+        if dest is None or dest == src:
+            self.error = "Rebase cancelled (invalid destination)"
+            return
+        from lajjzy.backend.jj import rebase_single, rebase_with_descendants
+        op = rebase_with_descendants if descend else rebase_single
+        self._mutate(lambda: op(self.repo_path, src, dest))
+
+    def action_rebase_cancel(self) -> None:
+        # No-op unless rebase mode is armed.
         if self.rebase_source is not None:
-            dest = self.selected_change_id()
-            src = self.rebase_source
-            descend = self.rebase_descendants_flag
             self.rebase_source = None
-            if dest is None or dest == src:
-                self.error = "Rebase cancelled (invalid destination)"
-                return
-            from lajjzy.backend.jj import rebase_single, rebase_with_descendants
-            op = rebase_with_descendants if descend else rebase_single
-            self._mutate(lambda: op(self.repo_path, src, dest))
-        else:
-            self.action_detail_open()
+            self.error = "Rebase cancelled"
 ```
 
-> Note: rebind Enter to `action_confirm` in BINDINGS (replace the earlier
-> `("enter", "detail_open", ...)` with `("enter", "confirm", "Confirm")`) so a
-> single key both confirms a rebase target and opens a diff depending on mode.
-> Bind `escape` to also clear `rebase_source`.
+> Why no double duty: app-level `enter` maps to `action_rebase_confirm`, which
+> returns immediately unless `rebase_source` is set. Diff-opening `enter` lives
+> on the focused `DetailPanel` (Task 10) and is resolved before the key bubbles
+> to the app. Each binding has one meaning; neither inspects the other's state.
+> The GraphView should dim `rebase_source` and its descendants while armed so
+> the mode is visible, not hidden.
 
 - [ ] **Step 4: Run tests**
 
@@ -2161,8 +2197,18 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Burn-the-boats (deferred to parity) → Task 18. ✔
 - Distribution via `uv tool`/`pipx` → Tasks 1 (`[project.scripts]`) + 17 (install docs). ✔
 
-**Placeholder scan:** no TBD/TODO; every code step carries real code. The two "Note" blocks (Task 10 file-cursor focus scoping; Task 15 Enter rebinding) describe concrete required wiring, not deferred work — acceptable as implementer guidance, but the implementer must complete them within the task.
+**Placeholder scan:** no TBD/TODO; every code step carries real code. Both
+former soft spots are now resolved in-plan, not deferred: file-list navigation
+and diff-open are **focus-scoped `BINDINGS` on `DetailPanel`** (Task 10), and
+rebase confirm/cancel are **single-purpose app-level actions** that no-op
+outside the armed mode (Task 15). No key branches on hidden state.
 
-**Type consistency:** dataclass field names (`change_id`, `glyph_prefix`, `working_copy_index`, `node_indices`, `conflict_count`) are used identically across Tasks 2, 4, 7, 8, 16. Backend function names (`load_graph`, `change_diff`, `new_change`, `abandon`, `edit_change`, `describe`, `squash`, `rebase_single`, `rebase_with_descendants`) match between their defining task and their app-layer callers. Worker group names (`load`, `diff`, `mutation`) are consistent.
+**Principle of least surprise (explicit check):** `enter` has exactly one
+meaning per focus context — open-diff while `DetailPanel` is focused, confirm
+rebase while rebase mode is armed (graph focus). The two bindings live in
+different scopes and never inspect each other's state. `escape` likewise:
+back-out a diff (panel-scoped) or cancel a rebase (app-level no-op otherwise).
+The rebase mode is visibly signposted (status prompt + dimmed source), so its
+`enter` semantics are never a surprise.
 
-**Known follow-ups folded into tasks, not gaps:** focus-scoped `j/k` for the file list (Task 10 note); single Enter handling confirm-vs-open (Task 15 note). Both are required to be finished inside their task before its commit.
+**Type consistency:** dataclass field names (`change_id`, `glyph_prefix`, `working_copy_index`, `node_indices`, `conflict_count`) are used identically across Tasks 2, 4, 7, 8, 16. Backend function names (`load_graph`, `change_diff`, `new_change`, `abandon`, `edit_change`, `describe`, `squash`, `rebase_single`, `rebase_with_descendants`) match between their defining task and their app-layer callers. The diff worker is `App.open_diff` (called from `DetailPanel.action_open_file`). Worker group names (`load`, `diff`, `mutation`) are consistent.
