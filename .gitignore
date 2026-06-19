@@ -27,3 +27,8 @@ target
 .worktrees/
 .jj/
 .superpowers/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
