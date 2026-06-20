@@ -71,3 +71,96 @@ async def test_press_n_creates_change(temp_repo: Path):
         await pilot.press("n")
         await app.workers.wait_for_complete()
         assert len(app.graph.details) == before + 1
+
+
+@jj_required
+async def test_ensure_working_copy_already_at_target_is_noop(temp_repo: Path):
+    """Calling ensure_working_copy with the current @ change_id returns True
+    without moving the working copy (the no-op fast-path)."""
+    import subprocess
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        # The working-copy index and its change_id as known by the loaded graph.
+        wc_index = app.graph.working_copy_index
+        assert wc_index is not None
+        target = app.graph.lines[wc_index].change_id
+        assert target is not None
+
+        result = await app.ensure_working_copy(target)
+
+        assert result is True
+        # Working copy must not have moved: ask jj directly.
+        out = subprocess.run(
+            ["jj", "log", "--no-graph", "-r", "@", "-T", "change_id.short()"],
+            cwd=temp_repo, check=True, capture_output=True, text=True,
+        )
+        actual_wc = out.stdout.strip()
+        assert actual_wc == target, (
+            f"Working copy moved from {target!r} to {actual_wc!r} — "
+            "ensure_working_copy called jj edit when it should have been a no-op"
+        )
+
+
+@jj_required
+async def test_ensure_working_copy_switches_to_target(temp_repo: Path):
+    """ensure_working_copy with a non-@ change_id runs jj edit and returns True."""
+    import subprocess
+
+    # Create a second change so there is a non-@ change to switch to.
+    subprocess.run(
+        ["jj", "new", "-m", "second"], cwd=temp_repo, check=True, capture_output=True
+    )
+    # Now @ is the new empty change; the original "first change" is the parent.
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+
+        # Identify a change that is NOT the working copy.
+        wc_index = app.graph.working_copy_index
+        assert wc_index is not None
+        wc_change_id = app.graph.lines[wc_index].change_id
+
+        non_wc = next(
+            (
+                app.graph.lines[i].change_id
+                for i in app.graph.node_indices
+                if i != wc_index and app.graph.lines[i].change_id is not None
+            ),
+            None,
+        )
+        assert non_wc is not None, "Expected at least one non-@ change in the graph"
+        assert non_wc != wc_change_id
+
+        result = await app.ensure_working_copy(non_wc)
+
+        assert result is True
+        # Verify via jj that @ actually moved.
+        out = subprocess.run(
+            ["jj", "log", "--no-graph", "-r", "@", "-T", "change_id.short()"],
+            cwd=temp_repo, check=True, capture_output=True, text=True,
+        )
+        actual_wc = out.stdout.strip()
+        assert actual_wc == non_wc, (
+            f"Expected working copy to be {non_wc!r} after ensure_working_copy, "
+            f"but jj reports {actual_wc!r}"
+        )
+
+
+@jj_required
+async def test_ensure_working_copy_bad_change_returns_false(temp_repo: Path):
+    """ensure_working_copy with an invalid change_id catches JjError, sets
+    app.error, and returns False."""
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        assert app.error is None  # clean slate after mount
+
+        result = await app.ensure_working_copy("zzzzzzzzzzzz")
+
+        assert result is False, "Expected False for an invalid change_id"
+        assert app.error is not None, (
+            "Expected app.error to be set after a failed ensure_working_copy"
+        )
