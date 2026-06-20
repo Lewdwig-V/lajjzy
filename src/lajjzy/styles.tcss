@@ -3,3 +3,4 @@ Screen {
 }
 
 GraphView { width: 1fr; height: 1fr; }
+DetailPanel { width: 2fr; height: 1fr; border-left: solid $panel; }

@@ -32,3 +32,15 @@ async def test_j_k_move_over_nodes_only(temp_repo: Path):
         assert app.cursor != start
         await pilot.press("k")
         assert app.cursor == start
+
+
+@jj_required
+async def test_detail_panel_shows_selected_change_files(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        from lajjzy.widgets.detail import DetailPanel
+        panel = app.query_one(DetailPanel)
+        rendered = panel.render()
+        # working copy has a.txt added/modified in the fixture
+        assert "a.txt" in str(rendered)

@@ -14,14 +14,19 @@ _STATUS_MAP = {
 
 
 def parse_file_line(line: str) -> FileChange | None:
-    """Parse a `jj log --summary` file line like 'M path/to/file'."""
-    if len(line) < 2 or line[1] != " ":
+    """Parse a `jj log --summary` file line like 'M path/to/file'.
+
+    The line may be prefixed by graph-drawing characters (e.g. '│  A path'),
+    so we skip to the first ASCII letter before checking the status code.
+    """
+    start = _first_alnum(line)
+    stripped = line[start:]
+    if len(stripped) < 2 or stripped[1] != " ":
         return None
-    code = line[0]
-    if code not in _STATUS_MAP and code not in {"A", "M", "D", "R", "C"}:
+    code = stripped[0]
+    if code not in _STATUS_MAP:
         return None
-    status = _STATUS_MAP.get(code, FileStatus.UNKNOWN)
-    return FileChange(path=line[2:].strip(), status=status)
+    return FileChange(path=stripped[2:].strip(), status=_STATUS_MAP[code])
 
 
 def _first_alnum(s: str) -> int:

@@ -35,8 +35,9 @@ class LajjzyApp(App[None]):
         self.repo_path = repo_path or Path.cwd()
 
     def compose(self) -> ComposeResult:
-        from lajjzy.widgets import GraphView
+        from lajjzy.widgets import DetailPanel, GraphView
         yield GraphView()
+        yield DetailPanel()
 
     def on_mount(self) -> None:
         self.reload()
