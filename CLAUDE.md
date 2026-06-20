@@ -51,8 +51,10 @@ src/lajjzy/
   - `group="mutation", exclusive=True` — the single-mutation gate; at most one mutation
     runs at a time. All write operations (`new`, `abandon`, `describe`, `squash`, `rebase`,
     `edit`) run in this group.
-  - `group="load"` — graph reloads. Runs independently of mutations.
-  - `group="diff"` — diff fetches for the detail pane. Runs independently.
+  - `group="load", exclusive=True` — graph reloads. At most one in flight; a new
+    reload cancels any running reload. Runs independently of mutations.
+  - `group="diff", exclusive=True` — diff fetches for the detail pane. A new fetch
+    cancels any in-flight diff fetch. Runs independently.
 
 - **Editor suspend in app layer only:** `$EDITOR` is launched via `self.suspend()` in
   `LajjzyApp._edit_message_in_editor`. Widget code never suspends the terminal.

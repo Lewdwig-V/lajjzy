@@ -115,6 +115,12 @@ Press `S` to squash the selected change into its parent. This is a whole-change 
 
 > **Status:** planned — not yet in the Python reboot.
 
+### Op Log
+
+> **Status:** planned — not yet in the Python reboot.
+
+Browse jj's operation history and restore to a previous operation.
+
 ### Mouse Support
 
 > **Status:** planned — not yet in the Python reboot.
