@@ -18,7 +18,7 @@ def _make_detail() -> ChangeDetail:
         description="d",
         bookmarks=[],
         is_empty=False,
-        conflict_count=0,
+        has_conflict=False,
         files=[FileChange(path="x.py", status=FileStatus.MODIFIED)],
         parents=[],
     )

@@ -153,6 +153,7 @@ class LajjzyApp(App[None]):
 
         target = self.selected_change_id()
         if target is None:
+            self.error = "No change selected"
             return
         self._mutate(lambda: new_change(self.repo_path, target))
 
@@ -161,6 +162,7 @@ class LajjzyApp(App[None]):
 
         target = self.selected_change_id()
         if target is None:
+            self.error = "No change selected"
             return
         self._mutate(lambda: abandon(self.repo_path, target))
 
@@ -169,6 +171,7 @@ class LajjzyApp(App[None]):
 
         target = self.selected_change_id()
         if target is None:
+            self.error = "No change selected"
             return
         self._mutate(lambda: edit_change(self.repo_path, target))
 
@@ -177,12 +180,14 @@ class LajjzyApp(App[None]):
 
         target = self.selected_change_id()
         if target is None:
+            self.error = "No change selected"
             return
         self._mutate(lambda: squash(self.repo_path, target))
 
     def action_describe(self) -> None:
         target = self.selected_change_id()
         if target is None or self.graph is None:
+            self.error = "No change selected"
             return
         detail = self.graph.details.get(target)
         if detail is None:
@@ -200,12 +205,16 @@ class LajjzyApp(App[None]):
         self.rebase_descendants_flag = False
         if self.rebase_source:
             self.error = "Rebase: pick a destination, Enter to confirm, Esc to cancel"
+        else:
+            self.error = "No change selected"
 
     def action_rebase_descendants(self) -> None:
         self.rebase_source = self.selected_change_id()
         self.rebase_descendants_flag = True
         if self.rebase_source:
             self.error = "Rebase +desc: pick a destination, Enter to confirm, Esc to cancel"
+        else:
+            self.error = "No change selected"
 
     def action_rebase_confirm(self) -> None:
         # No-op unless rebase mode is armed — Enter does exactly one thing.

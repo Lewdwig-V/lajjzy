@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Literal
 
 
 class JjError(Exception):
@@ -28,11 +29,13 @@ class ChangeDetail:
     commit_id: str
     author: str
     email: str
+    # Holds jj's RELATIVE time string from committer.timestamp().ago()
+    # (e.g. "2 hours ago") — not an absolute timestamp; do not parse as datetime.
     timestamp: str
     description: str
     bookmarks: list[str]
     is_empty: bool
-    conflict_count: int
+    has_conflict: bool
     files: list[FileChange]
     parents: list[str]
 
@@ -46,7 +49,7 @@ class GraphLine:
 
 @dataclass
 class DiffLine:
-    kind: str  # "context" | "add" | "remove"
+    kind: Literal["context", "add", "remove"]
     text: str
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from rich.text import Text
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -21,7 +23,7 @@ class DetailPanel(Widget):
     ]
 
     file_cursor: reactive[int] = reactive(0)
-    mode: reactive[str] = reactive("files")  # "files" | "diff"
+    mode: reactive[Literal["files", "diff"]] = reactive("files")
 
     def __init__(self) -> None:
         super().__init__()
@@ -87,6 +89,8 @@ class DetailPanel(Widget):
         return text
 
     def _render_diff(self) -> Text:
+        if not self.diff:
+            return Text("(no diff)", style="dim")
         text = Text()
         for fd in self.diff:
             text.append(f"{fd.path}\n", style="bold")

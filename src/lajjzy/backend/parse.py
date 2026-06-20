@@ -76,11 +76,11 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
                 email=fields[3],
                 timestamp=fields[4],
                 description=fields[5],
-                bookmarks=fields[6].split(" ") if fields[6] else [],
+                bookmarks=fields[6].split() if fields[6] else [],
                 is_empty=fields[7] == "true",
-                conflict_count=1 if fields[8] == "true" else 0,
+                has_conflict=fields[8] == "true",
                 files=[],
-                parents=fields[10].split(" ") if fields[10] else [],
+                parents=fields[10].split() if fields[10] else [],
             )
             glyph_end = _first_alnum(display)
             lines.append(

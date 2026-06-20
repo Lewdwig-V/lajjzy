@@ -11,7 +11,7 @@ class StatusBar(Widget):
     ephemeral prompts such as rebase mode instructions, which are surfaced via
     app.error rather than a separate rendering path.  Otherwise renders
     selected-change metadata: change id, author, timestamp, bookmarks (if any),
-    and a CONFLICT marker when conflict_count is non-zero.
+    and a CONFLICT marker when has_conflict is True.
     """
 
     def on_mount(self) -> None:
@@ -32,6 +32,6 @@ class StatusBar(Widget):
         parts = [change_id, d.author, d.timestamp]
         if d.bookmarks:
             parts.append("bookmarks: " + ", ".join(d.bookmarks))
-        if d.conflict_count:
+        if d.has_conflict:
             parts.append("CONFLICT")
         return Text("  |  ".join(parts))
