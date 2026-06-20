@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from lajjzy.backend.types import (
-    ChangeDetail, FileChange, FileStatus, GraphData, GraphLine,
+    ChangeDetail, DiffHunk, DiffLine, FileDiff, FileChange, FileStatus, GraphData, GraphLine,
 )
 
 UNIT_SEP = "\x1f"
@@ -85,3 +85,31 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
 
     return GraphData(lines=lines, details=details,
                      working_copy_index=working_copy_index, op_id=op_id)
+
+
+def parse_file_diffs(output: str) -> list[FileDiff]:
+    files: list[FileDiff] = []
+    current: FileDiff | None = None
+    hunk: DiffHunk | None = None
+
+    for line in output.splitlines():
+        if line.startswith("diff --git "):
+            # "diff --git a/<path> b/<path>" → take the b-side path.
+            b = line.split(" b/", 1)
+            path = b[1] if len(b) == 2 else line
+            current = FileDiff(path=path, hunks=[])
+            files.append(current)
+            hunk = None
+        elif line.startswith("@@"):
+            hunk = DiffHunk(header=line, lines=[])
+            if current is not None:
+                current.hunks.append(hunk)
+        elif hunk is not None:
+            if line.startswith("+"):
+                hunk.lines.append(DiffLine(kind="add", text=line[1:]))
+            elif line.startswith("-"):
+                hunk.lines.append(DiffLine(kind="remove", text=line[1:]))
+            elif line.startswith(" "):
+                hunk.lines.append(DiffLine(kind="context", text=line[1:]))
+            # ignore "index", "---", "+++", "\ No newline" lines
+    return files

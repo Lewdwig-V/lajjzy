@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from lajjzy.backend.parse import parse_graph_output
-from lajjzy.backend.types import GraphData, JjError
+from lajjzy.backend.parse import parse_file_diffs, parse_graph_output
+from lajjzy.backend.types import FileDiff, GraphData, JjError
 
 
 async def run_jj(args: list[str], cwd: Path) -> str:
@@ -50,6 +50,13 @@ async def _op_id(cwd: Path) -> str:
         return out.strip() or "unknown"
     except JjError:
         return "unknown"
+
+
+async def change_diff(cwd: Path, change_id: str) -> list[FileDiff]:
+    stdout = await run_jj(
+        ["diff", "-r", change_id, "--git", "--color=never"], cwd
+    )
+    return parse_file_diffs(stdout)
 
 
 async def load_graph(cwd: Path, revset: str | None = None) -> GraphData:

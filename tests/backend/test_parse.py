@@ -1,4 +1,4 @@
-from lajjzy.backend.parse import RECORD_SEP, UNIT_SEP, parse_graph_output
+from lajjzy.backend.parse import RECORD_SEP, UNIT_SEP, parse_file_diffs, parse_graph_output
 from lajjzy.backend.types import FileStatus
 
 
@@ -55,3 +55,22 @@ def test_parse_trailing_newline_no_phantom_line():
 
     assert g.lines[0].change_id == "abc"
     assert g.lines[0].raw == "◉ abc Alice 1h"
+
+
+def test_parse_git_diff_one_file_one_hunk():
+    diff = (
+        "diff --git a/a.txt b/a.txt\n"
+        "index 111..222 100644\n"
+        "--- a/a.txt\n"
+        "+++ b/a.txt\n"
+        "@@ -1,2 +1,2 @@\n"
+        " context\n"
+        "-old\n"
+        "+new\n"
+    )
+    files = parse_file_diffs(diff)
+    assert len(files) == 1
+    assert files[0].path == "a.txt"
+    assert len(files[0].hunks) == 1
+    kinds = [ln.kind for ln in files[0].hunks[0].lines]
+    assert kinds == ["context", "remove", "add"]

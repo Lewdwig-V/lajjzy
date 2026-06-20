@@ -1,6 +1,6 @@
 import pytest
 
-from lajjzy.backend.jj import load_graph, run_jj
+from lajjzy.backend.jj import change_diff, load_graph, run_jj
 from lajjzy.backend.types import JjError
 from tests.conftest import jj_required
 
@@ -30,3 +30,11 @@ async def test_load_graph_has_working_copy_and_details(temp_repo):
 async def test_load_graph_revset_filters(temp_repo):
     g = await load_graph(temp_repo, revset="root()")
     assert len(g.details) == 1
+
+
+@jj_required
+async def test_change_diff_returns_files(temp_repo):
+    g = await load_graph(temp_repo)
+    wc = g.lines[g.working_copy_index].change_id
+    files = await change_diff(temp_repo, wc)
+    assert isinstance(files, list)
