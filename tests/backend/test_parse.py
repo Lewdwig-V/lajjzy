@@ -1,4 +1,4 @@
-from lajjzy.backend.parse import RECORD_SEP, UNIT_SEP, parse_file_diffs, parse_graph_output
+from lajjzy.backend.parse import RECORD_SEP, UNIT_SEP, parse_file_diffs, parse_file_line, parse_graph_output
 from lajjzy.backend.types import FileStatus
 
 
@@ -74,3 +74,21 @@ def test_parse_git_diff_one_file_one_hunk():
     assert len(files[0].hunks) == 1
     kinds = [ln.kind for ln in files[0].hunks[0].lines]
     assert kinds == ["context", "remove", "add"]
+
+
+def test_parse_file_line_strips_graph_prefix():
+    fc = parse_file_line("│  M a.txt")
+    assert fc is not None
+    assert fc.status.value == "M"
+    assert fc.path == "a.txt"
+
+
+def test_parse_file_line_connector_only_returns_none():
+    assert parse_file_line("│") is None
+    assert parse_file_line("~") is None
+    assert parse_file_line("(elided revisions)") is None
+
+
+def test_parse_file_line_plain_no_prefix_still_works():
+    fc = parse_file_line("M a.txt")
+    assert fc is not None and fc.path == "a.txt"
