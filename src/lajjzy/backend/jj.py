@@ -13,8 +13,11 @@ async def run_jj(args: list[str], cwd: Path) -> str:
     This is the ONLY place in the codebase that spawns a jj subprocess.
     """
     proc = await asyncio.create_subprocess_exec(
-        "jj", *args, cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        "jj",
+        *args,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
@@ -53,10 +56,11 @@ async def _op_id(cwd: Path) -> str:
 
 
 async def change_diff(cwd: Path, change_id: str) -> list[FileDiff]:
-    stdout = await run_jj(
-        ["diff", "-r", change_id, "--git", "--color=never"], cwd
-    )
-    return parse_file_diffs(stdout)
+    stdout = await run_jj(["diff", "-r", change_id, "--git", "--color=never"], cwd)
+    try:
+        return parse_file_diffs(stdout)
+    except ValueError as exc:
+        raise JjError(str(exc)) from exc
 
 
 async def load_graph(cwd: Path, revset: str | None = None) -> GraphData:
@@ -65,7 +69,10 @@ async def load_graph(cwd: Path, revset: str | None = None) -> GraphData:
     if revset is not None:
         args += ["-r", revset]
     stdout = await run_jj(args, cwd)
-    return parse_graph_output(stdout, op_id)
+    try:
+        return parse_graph_output(stdout, op_id)
+    except ValueError as exc:
+        raise JjError(str(exc)) from exc
 
 
 async def new_change(cwd: Path, after: str) -> str:

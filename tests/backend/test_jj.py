@@ -1,8 +1,34 @@
 import pytest
 
-from lajjzy.backend.jj import abandon, change_diff, describe, edit_change, load_graph, new_change, rebase_single, rebase_with_descendants, run_jj, squash
+from lajjzy.backend.jj import (
+    abandon,
+    change_diff,
+    describe,
+    edit_change,
+    load_graph,
+    new_change,
+    rebase_single,
+    rebase_with_descendants,
+    run_jj,
+    squash,
+)
 from lajjzy.backend.types import JjError
 from tests.conftest import jj_required
+
+
+async def test_load_graph_wraps_parser_error_as_jjerror(monkeypatch, tmp_path):
+    from lajjzy.backend import jj as jjmod
+    from lajjzy.backend.types import JjError
+
+    async def fake_run_jj(args, cwd):
+        # op-id call returns something harmless; the log call returns malformed output
+        if args and args[0] == "op":
+            return "opid\n"
+        return "node\x1ftoo\x1efew\x1efields\n"  # <11 records → parser ValueError
+
+    monkeypatch.setattr(jjmod, "run_jj", fake_run_jj)
+    with pytest.raises(JjError):
+        await jjmod.load_graph(tmp_path)
 
 
 @jj_required
@@ -43,8 +69,11 @@ async def test_change_diff_returns_files(temp_repo):
 @jj_required
 async def test_new_change_adds_node(temp_repo):
     before = len((await load_graph(temp_repo)).details)
-    wc = (await load_graph(temp_repo)).lines[
-        (await load_graph(temp_repo)).working_copy_index].change_id
+    wc = (
+        (await load_graph(temp_repo))
+        .lines[(await load_graph(temp_repo)).working_copy_index]
+        .change_id
+    )
     await new_change(temp_repo, wc)
     after = len((await load_graph(temp_repo)).details)
     assert after == before + 1
@@ -53,8 +82,8 @@ async def test_new_change_adds_node(temp_repo):
 @jj_required
 async def test_edit_moves_working_copy(temp_repo):
     import subprocess
-    subprocess.run(["jj", "new", "-m", "child"], cwd=temp_repo, check=True,
-                   capture_output=True)
+
+    subprocess.run(["jj", "new", "-m", "child"], cwd=temp_repo, check=True, capture_output=True)
     g = await load_graph(temp_repo)
     # pick a non-@ node (the parent)
     parents = g.details[g.lines[g.working_copy_index].change_id].parents
@@ -76,18 +105,19 @@ async def test_describe_sets_message(temp_repo):
 @jj_required
 async def test_squash_collapses_into_parent(temp_repo):
     import subprocess
+
     # Create a child with content, then switch @ to a new grandchild so the
     # child is no longer the working copy.  Squashing a non-@ change lets jj
     # truly abandon it (squashing @ replaces it with a new empty commit, which
     # keeps the count stable — not a bug, just jj semantics on 0.42).
-    subprocess.run(["jj", "new", "-m", "child"], cwd=temp_repo, check=True,
-                   capture_output=True)
+    subprocess.run(["jj", "new", "-m", "child"], cwd=temp_repo, check=True, capture_output=True)
     (temp_repo / "b.txt").write_text("more\n")
     g = await load_graph(temp_repo)
     child = g.lines[g.working_copy_index].change_id
     # Move @ to a grandchild so child becomes a non-@ intermediate commit.
-    subprocess.run(["jj", "new", "-m", "grandchild"], cwd=temp_repo, check=True,
-                   capture_output=True)
+    subprocess.run(
+        ["jj", "new", "-m", "grandchild"], cwd=temp_repo, check=True, capture_output=True
+    )
     g2 = await load_graph(temp_repo)
     before = len(g2.details)
     await squash(temp_repo, child)
@@ -98,13 +128,14 @@ async def test_squash_collapses_into_parent(temp_repo):
 @jj_required
 async def test_rebase_single_reparents(temp_repo):
     import subprocess
+
     # root → A; create sibling B off root; rebase B onto A
-    subprocess.run(["jj", "new", "-m", "A"], cwd=temp_repo, check=True,
-                   capture_output=True)
+    subprocess.run(["jj", "new", "-m", "A"], cwd=temp_repo, check=True, capture_output=True)
     g = await load_graph(temp_repo)
     a = g.lines[g.working_copy_index].change_id
-    subprocess.run(["jj", "new", "root()", "-m", "B"], cwd=temp_repo,
-                   check=True, capture_output=True)
+    subprocess.run(
+        ["jj", "new", "root()", "-m", "B"], cwd=temp_repo, check=True, capture_output=True
+    )
     g = await load_graph(temp_repo)
     b = g.lines[g.working_copy_index].change_id
     await rebase_single(temp_repo, b, a)
@@ -115,20 +146,18 @@ async def test_rebase_single_reparents(temp_repo):
 @jj_required
 async def test_abandon_removes_node(temp_repo):
     import subprocess
+
     # Create a child so "first change" is a non-WC parent — abandoning it is safe.
-    subprocess.run(["jj", "new", "-m", "child"], cwd=temp_repo, check=True,
-                   capture_output=True)
+    subprocess.run(["jj", "new", "-m", "child"], cwd=temp_repo, check=True, capture_output=True)
     g = await load_graph(temp_repo)
     # Find a non-WC, non-root change to abandon ("first change").
     wc_id = g.lines[g.working_copy_index].change_id
     root_id = next(
-        cid for cid, det in g.details.items()
+        cid
+        for cid, det in g.details.items()
         if not det.parents  # root has no parents
     )
-    target = next(
-        cid for cid in g.details
-        if cid != wc_id and cid != root_id
-    )
+    target = next(cid for cid in g.details if cid != wc_id and cid != root_id)
     before = len(g.details)
     await abandon(temp_repo, target)
     after = len((await load_graph(temp_repo)).details)
@@ -142,20 +171,19 @@ async def test_rebase_with_descendants_carries_children(temp_repo):
     # Rebase B + descendants onto A, verify B_child follows B (not left behind).
 
     # Create change A off root
-    subprocess.run(["jj", "new", "-m", "A"], cwd=temp_repo, check=True,
-                   capture_output=True)
+    subprocess.run(["jj", "new", "-m", "A"], cwd=temp_repo, check=True, capture_output=True)
     g = await load_graph(temp_repo)
     a = g.lines[g.working_copy_index].change_id
 
     # Create sibling B off root
-    subprocess.run(["jj", "new", "root()", "-m", "B"], cwd=temp_repo,
-                   check=True, capture_output=True)
+    subprocess.run(
+        ["jj", "new", "root()", "-m", "B"], cwd=temp_repo, check=True, capture_output=True
+    )
     g = await load_graph(temp_repo)
     b = g.lines[g.working_copy_index].change_id
 
     # Create B_child off B (current @)
-    subprocess.run(["jj", "new", "-m", "B_child"], cwd=temp_repo, check=True,
-                   capture_output=True)
+    subprocess.run(["jj", "new", "-m", "B_child"], cwd=temp_repo, check=True, capture_output=True)
     g = await load_graph(temp_repo)
     b_child = g.lines[g.working_copy_index].change_id
 
@@ -166,5 +194,9 @@ async def test_rebase_with_descendants_carries_children(temp_repo):
     # 1. B's parent now includes A (B reparented onto A)
     # 2. B_child's parent still includes B (child followed B, not left behind)
     g2 = await load_graph(temp_repo)
-    assert a in g2.details[b].parents, f"B should have A as parent after rebase; got {g2.details[b].parents}"
-    assert b in g2.details[b_child].parents, f"B_child should still have B as parent; got {g2.details[b_child].parents}"
+    assert a in g2.details[b].parents, (
+        f"B should have A as parent after rebase; got {g2.details[b].parents}"
+    )
+    assert b in g2.details[b_child].parents, (
+        f"B_child should still have B as parent; got {g2.details[b_child].parents}"
+    )

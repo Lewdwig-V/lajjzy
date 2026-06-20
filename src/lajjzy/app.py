@@ -134,6 +134,8 @@ class LajjzyApp(App[None]):
             return
         if self.graph.working_copy_index is not None:
             self.cursor = self.graph.working_copy_index
+        elif self.graph.node_indices:
+            self.cursor = self.graph.node_indices[0]
 
     def action_new(self) -> None:
         from lajjzy.backend.jj import new_change
@@ -176,6 +178,7 @@ class LajjzyApp(App[None]):
         if message is None:
             return  # user aborted / editor unavailable
         from lajjzy.backend.jj import describe
+
         self._mutate(lambda: describe(self.repo_path, target, message))
 
     def action_rebase(self) -> None:
@@ -202,6 +205,7 @@ class LajjzyApp(App[None]):
             self.error = "Rebase cancelled (invalid destination)"
             return
         from lajjzy.backend.jj import rebase_single, rebase_with_descendants
+
         op = rebase_with_descendants if descend else rebase_single
         self._mutate(lambda: op(self.repo_path, src, dest))
 
@@ -216,9 +220,7 @@ class LajjzyApp(App[None]):
         if not editor:
             self.error = "No $EDITOR set"
             return None
-        with tempfile.NamedTemporaryFile(
-            "w+", suffix=".jjdescribe", delete=False
-        ) as tf:
+        with tempfile.NamedTemporaryFile("w+", suffix=".jjdescribe", delete=False) as tf:
             tf.write(seed)
             path = tf.name
         try:
