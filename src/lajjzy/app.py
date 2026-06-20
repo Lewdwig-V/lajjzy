@@ -388,8 +388,8 @@ def main() -> None:
     # Re-raise any InvariantError captured via _handle_exception (raised from a
     # worker, where Textual swallows the exception and does not propagate it out
     # of run()).
-    if app._invariant_error is not None:
-        exc = app._invariant_error
-        print(f"lajjzy: internal invariant violated: {exc}", file=sys.stderr)
+    worker_invariant_error = app._invariant_error
+    if worker_invariant_error is not None:
+        print(f"lajjzy: internal invariant violated: {worker_invariant_error}", file=sys.stderr)
         print("This is a bug — please report it.", file=sys.stderr)
         sys.exit(70)
