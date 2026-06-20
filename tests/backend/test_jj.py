@@ -1,6 +1,6 @@
 import pytest
 
-from lajjzy.backend.jj import abandon, change_diff, describe, edit_change, load_graph, new_change, rebase_single, run_jj, squash
+from lajjzy.backend.jj import abandon, change_diff, describe, edit_change, load_graph, new_change, rebase_single, rebase_with_descendants, run_jj, squash
 from lajjzy.backend.types import JjError
 from tests.conftest import jj_required
 
@@ -133,3 +133,38 @@ async def test_abandon_removes_node(temp_repo):
     await abandon(temp_repo, target)
     after = len((await load_graph(temp_repo)).details)
     assert after == before - 1
+
+
+@jj_required
+async def test_rebase_with_descendants_carries_children(temp_repo):
+    import subprocess
+    # Build structure: root → A; sibling B off root → B_child.
+    # Rebase B + descendants onto A, verify B_child follows B (not left behind).
+
+    # Create change A off root
+    subprocess.run(["jj", "new", "-m", "A"], cwd=temp_repo, check=True,
+                   capture_output=True)
+    g = await load_graph(temp_repo)
+    a = g.lines[g.working_copy_index].change_id
+
+    # Create sibling B off root
+    subprocess.run(["jj", "new", "root()", "-m", "B"], cwd=temp_repo,
+                   check=True, capture_output=True)
+    g = await load_graph(temp_repo)
+    b = g.lines[g.working_copy_index].change_id
+
+    # Create B_child off B (current @)
+    subprocess.run(["jj", "new", "-m", "B_child"], cwd=temp_repo, check=True,
+                   capture_output=True)
+    g = await load_graph(temp_repo)
+    b_child = g.lines[g.working_copy_index].change_id
+
+    # Rebase B + descendants onto A (using -s flag, which is what we're testing)
+    await rebase_with_descendants(temp_repo, b, a)
+
+    # Reload graph and verify:
+    # 1. B's parent now includes A (B reparented onto A)
+    # 2. B_child's parent still includes B (child followed B, not left behind)
+    g2 = await load_graph(temp_repo)
+    assert a in g2.details[b].parents, f"B should have A as parent after rebase; got {g2.details[b].parents}"
+    assert b in g2.details[b_child].parents, f"B_child should still have B as parent; got {g2.details[b_child].parents}"
