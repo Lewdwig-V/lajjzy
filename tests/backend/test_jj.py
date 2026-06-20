@@ -1,6 +1,6 @@
 import pytest
 
-from lajjzy.backend.jj import abandon, change_diff, describe, edit_change, load_graph, new_change, run_jj
+from lajjzy.backend.jj import abandon, change_diff, describe, edit_change, load_graph, new_change, run_jj, squash
 from lajjzy.backend.types import JjError
 from tests.conftest import jj_required
 
@@ -71,6 +71,28 @@ async def test_describe_sets_message(temp_repo):
     await describe(temp_repo, wc, "a brand new message")
     g2 = await load_graph(temp_repo)
     assert g2.details[wc].description == "a brand new message"
+
+
+@jj_required
+async def test_squash_collapses_into_parent(temp_repo):
+    import subprocess
+    # Create a child with content, then switch @ to a new grandchild so the
+    # child is no longer the working copy.  Squashing a non-@ change lets jj
+    # truly abandon it (squashing @ replaces it with a new empty commit, which
+    # keeps the count stable — not a bug, just jj semantics on 0.42).
+    subprocess.run(["jj", "new", "-m", "child"], cwd=temp_repo, check=True,
+                   capture_output=True)
+    (temp_repo / "b.txt").write_text("more\n")
+    g = await load_graph(temp_repo)
+    child = g.lines[g.working_copy_index].change_id
+    # Move @ to a grandchild so child becomes a non-@ intermediate commit.
+    subprocess.run(["jj", "new", "-m", "grandchild"], cwd=temp_repo, check=True,
+                   capture_output=True)
+    g2 = await load_graph(temp_repo)
+    before = len(g2.details)
+    await squash(temp_repo, child)
+    after = len((await load_graph(temp_repo)).details)
+    assert after == before - 1
 
 
 @jj_required

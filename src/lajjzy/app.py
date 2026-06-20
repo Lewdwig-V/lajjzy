@@ -33,6 +33,7 @@ class LajjzyApp(App[None]):
         ("d", "abandon", "Abandon"),
         ("ctrl+e", "edit", "Edit @"),
         ("e", "describe", "Describe"),
+        ("S", "squash", "Squash"),
     ]
 
     graph: reactive[GraphData | None] = reactive(None)
@@ -148,6 +149,14 @@ class LajjzyApp(App[None]):
         if target is None:
             return
         self._mutate(lambda: edit_change(self.repo_path, target))
+
+    def action_squash(self) -> None:
+        from lajjzy.backend.jj import squash
+
+        target = self.selected_change_id()
+        if target is None:
+            return
+        self._mutate(lambda: squash(self.repo_path, target))
 
     def action_describe(self) -> None:
         target = self.selected_change_id()

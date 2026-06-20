@@ -87,3 +87,11 @@ async def describe(cwd: Path, change_id: str, text: str) -> str:
     await run_jj(["describe", change_id, "-m", text], cwd)
     first_line = text.splitlines()[0] if text.strip() else "(no message)"
     return f'Described {change_id}: "{first_line}"'
+
+
+async def squash(cwd: Path, change_id: str) -> str:
+    # jj squash -r <id> moves <id>'s contents into its parent and abandons <id>.
+    # --use-destination-message keeps the parent's description non-interactively
+    # (--from <id> would move contents INTO @ instead, not into the parent).
+    await run_jj(["squash", "-r", change_id, "--use-destination-message"], cwd)
+    return f"Squashed {change_id} into its parent"
