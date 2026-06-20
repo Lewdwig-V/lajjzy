@@ -170,9 +170,9 @@ class LajjzyApp(App[None]):
         ) as tf:
             tf.write(seed)
             path = tf.name
-        with self.suspend():  # hand the terminal to $EDITOR
-            subprocess.run([*editor.split(), path], check=False)
         try:
+            with self.suspend():  # hand the terminal to $EDITOR
+                subprocess.run([*editor.split(), path], check=False)
             with open(path, encoding="utf-8") as fh:
                 return fh.read().strip()
         finally:
