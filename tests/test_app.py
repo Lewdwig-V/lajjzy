@@ -471,3 +471,49 @@ async def test_assign_if_current_discards_stale(temp_repo: Path):
         current = app._graph_epoch
         assert app._assign_if_current(current, other) is True
         assert app.graph is other  # current result assigned
+
+
+# ---------------------------------------------------------------------------
+# Worker-path InvariantError capture (regression test for WorkerFailed.error)
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_worker_invariant_error_captured_via_workerfailed(temp_repo: Path, monkeypatch):
+    """I1/I3 invariants fire inside @work workers. Textual wraps the exception
+    in WorkerFailed and stores it in WorkerFailed.error (NOT __cause__).
+    _handle_exception must unwrap via .error so _invariant_error is captured
+    and main() can exit 70.
+
+    This test fails against the buggy __cause__ path and passes after the .error fix.
+    """
+    import lajjzy.app as app_mod
+    from lajjzy.invariants import InvariantError
+
+    sentinel = InvariantError("worker-path invariant breach")
+
+    async def boom(_path):
+        raise sentinel
+
+    # load_graph is imported at module level in app.py — patch it there.
+    monkeypatch.setattr(app_mod, "load_graph", boom)
+
+    app = LajjzyApp(repo_path=temp_repo)
+    # run_test() re-raises the WorkerFailed on exit when _exception is set —
+    # absorb it here since we are intentionally crashing the worker.
+    try:
+        async with app.run_test():
+            # reload() is called on_mount; wait for the worker to finish
+            # (it will fail, but workers.wait_for_complete() returns regardless).
+            try:
+                await app.workers.wait_for_complete()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # After the app exits, _invariant_error must have been captured.
+    assert app._invariant_error is not None, (
+        "_invariant_error was not captured — WorkerFailed.error unwrap is missing"
+    )
+    assert isinstance(app._invariant_error, InvariantError)

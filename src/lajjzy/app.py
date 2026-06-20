@@ -66,11 +66,9 @@ class LajjzyApp(App[None]):
         """
         from textual.worker import WorkerFailed
 
-        cause = error
-        if isinstance(error, WorkerFailed) and isinstance(error.__cause__, InvariantError):
-            cause = error.__cause__
-        if isinstance(cause, InvariantError):
-            self._invariant_error = cause
+        inner = error.error if isinstance(error, WorkerFailed) else error
+        if isinstance(inner, InvariantError):
+            self._invariant_error = inner
         super()._handle_exception(error)
 
     def compose(self) -> ComposeResult:

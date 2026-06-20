@@ -40,7 +40,7 @@ def test_only_backend_jj_spawns_subprocesses():
 
 
 def test_mutation_worker_is_not_exclusive():
-    # I6 (the test that would have caught Codex P1): _run_mutation must not be
+    # I1 (the test that would have caught Codex P1): _run_mutation must not be
     # decorated @work(..., exclusive=True).
     tree = _tree(SRC / "app.py")
     found = False
