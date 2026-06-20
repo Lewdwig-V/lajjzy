@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -13,6 +14,7 @@ from textual.reactive import reactive
 
 from lajjzy.backend.jj import load_graph
 from lajjzy.backend.types import GraphData, JjError
+from lajjzy.invariants import InvariantError
 
 
 class LajjzyApp(App[None]):
@@ -52,6 +54,24 @@ class LajjzyApp(App[None]):
         self.repo_path = repo_path or Path.cwd()
         self.pending_mutation = False
         self._graph_epoch = 0
+        self._invariant_error: InvariantError | None = None
+
+    def _handle_exception(self, error: Exception) -> None:
+        """Intercept InvariantError before Textual's default handler.
+
+        Textual 8.x stores exceptions in `self._exception` and exits the app
+        but does NOT re-raise them out of `run()`.  We capture any
+        `InvariantError` (including ones wrapped in `WorkerFailed`) here so
+        that `main()` can re-raise it after the app shuts down.
+        """
+        from textual.worker import WorkerFailed
+
+        cause = error
+        if isinstance(error, WorkerFailed) and isinstance(error.__cause__, InvariantError):
+            cause = error.__cause__
+        if isinstance(cause, InvariantError):
+            self._invariant_error = cause
+        super()._handle_exception(error)
 
     def compose(self) -> ComposeResult:
         from lajjzy.widgets import DetailPanel, GraphView, StatusBar
@@ -76,6 +96,8 @@ class LajjzyApp(App[None]):
         except JjError as exc:
             self.error = str(exc)
             return
+        except InvariantError:
+            raise
         except Exception as exc:
             self.error = f"Unexpected error: {exc}"
             return
@@ -151,6 +173,8 @@ class LajjzyApp(App[None]):
             except JjError as exc:
                 self.error = str(exc)
                 return
+            except InvariantError:
+                raise
             except Exception as exc:
                 self.error = f"Unexpected error: {exc}"
                 return
@@ -165,6 +189,8 @@ class LajjzyApp(App[None]):
             except JjError as exc:
                 self.error = str(exc)
                 return
+            except InvariantError:
+                raise
             except Exception as exc:
                 self.error = f"Unexpected error: {exc}"
                 return
@@ -329,6 +355,8 @@ class LajjzyApp(App[None]):
         except JjError as exc:
             self.error = str(exc)
             return
+        except InvariantError:
+            raise
         except Exception as exc:
             self.error = f"Unexpected error: {exc}"
             return
@@ -339,4 +367,20 @@ class LajjzyApp(App[None]):
 
 
 def main() -> None:
-    LajjzyApp().run()
+    app = LajjzyApp()
+    try:
+        app.run()
+    except InvariantError as exc:
+        # Crash policy: a broken internal model. Textual restores the terminal
+        # on app teardown; surface the breach loudly and exit non-zero.
+        print(f"lajjzy: internal invariant violated: {exc}", file=sys.stderr)
+        print("This is a bug — please report it.", file=sys.stderr)
+        sys.exit(70)
+    # Re-raise any InvariantError captured via _handle_exception (raised from a
+    # worker, where Textual swallows the exception and does not propagate it out
+    # of run()).
+    if app._invariant_error is not None:
+        exc = app._invariant_error
+        print(f"lajjzy: internal invariant violated: {exc}", file=sys.stderr)
+        print("This is a bug — please report it.", file=sys.stderr)
+        sys.exit(70)

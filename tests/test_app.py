@@ -356,3 +356,33 @@ async def test_mutation_gate_clears_after_completion(temp_repo: Path, monkeypatc
         await app.workers.wait_for_complete()
         assert "abandon" in calls, "second mutation was rejected after first completed"
         assert app.pending_mutation is False
+
+
+# ---------------------------------------------------------------------------
+# InvariantError crash wiring tests
+# ---------------------------------------------------------------------------
+
+
+import pytest  # noqa: E402
+
+from lajjzy.invariants import InvariantError  # noqa: E402
+
+
+def test_main_exits_70_on_invariant_error(monkeypatch):
+    import lajjzy.app as appmod
+
+    def boom(self):
+        raise InvariantError("model broken")
+
+    monkeypatch.setattr(appmod.LajjzyApp, "run", boom)
+    with pytest.raises(SystemExit) as exc:
+        appmod.main()
+    assert exc.value.code == 70
+
+
+def test_main_does_not_intercept_normal_exit(monkeypatch):
+    import lajjzy.app as appmod
+
+    monkeypatch.setattr(appmod.LajjzyApp, "run", lambda self: None)
+    # Should return normally, no SystemExit.
+    appmod.main()
