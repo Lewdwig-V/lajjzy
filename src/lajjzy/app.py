@@ -174,7 +174,10 @@ class LajjzyApp(App[None]):
 
     @work(group="mutation")
     async def _run_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
-        await self._do_mutation(op)
+        try:
+            await self._do_mutation(op)
+        except InvariantError:
+            raise
 
     async def _do_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
         # I1: this coroutine must only run behind the gate.
