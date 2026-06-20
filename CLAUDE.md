@@ -10,14 +10,30 @@ A keyboard-driven, lazygit-style TUI for Jujutsu (jj).
 ## Dev Commands
 
 ```bash
-uv sync                 # create / sync the environment
-uv run lajjzy           # run the TUI
-uv run pytest           # run tests (jj in PATH required for integration tests)
-uv run ruff check .     # lint
-uv run ruff format .    # format
-uv build                # build wheel + sdist
-uv publish              # publish to PyPI
+uv sync                      # create / sync the environment
+uv run lajjzy                # run the TUI
+uv run pytest                # run tests (jj in PATH required for integration tests)
+uv run ruff check .          # lint
+uv run ruff format .         # format
+uv run ruff format --check . # CI format gate (don't write, just check)
+uv build                     # build wheel + sdist
+uv publish                   # publish to PyPI
 ```
+
+CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`, and
+`pytest` (with `jj` installed) on PRs and pushes to `main`. Keep these green.
+
+## Feature parity & the Rust reference
+
+This Python implementation is **not yet at feature parity** with the original
+Rust prototype. The Rust tree was removed in the `reboot/python-textual` cut-over
+and lives in **git history** (commits up to `731edd1`, under `crates/`) — it is
+the behavioural reference when porting a feature. The README's
+*Feature status & gaps* table is the authoritative inventory of what's shipped,
+partial, and not yet ported; the *Roadmap* orders the work. When porting a Rust
+feature, read its old widget/backend code for the exact behaviour, but build it
+the Python/Textual way (reactive state + workers), not as a literal translation
+of the Elm `dispatch`/`Effect` machine.
 
 ## Source Layout
 

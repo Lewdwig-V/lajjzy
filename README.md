@@ -2,7 +2,12 @@
 
 A keyboard-driven, lazygit-style TUI for [Jujutsu (jj)](https://github.com/jj-vcs/jj).
 
-Built for jj's data model: immutable changes, automatic rebasing, first-class conflicts, and an operation log that makes every action reversible.
+Built for jj's data model: immutable changes, automatic rebasing, first-class conflicts, and an operation log that makes every action reversible. Built on [Textual](https://textual.textualize.io/) with a reactive, keyboard-first UI.
+
+[![CI](https://github.com/Lewdwig-V/lajjzy/actions/workflows/ci.yml/badge.svg)](https://github.com/Lewdwig-V/lajjzy/actions/workflows/ci.yml)
+
+> **Status:** early — the Python/Textual implementation is **not yet at feature
+> parity** with the original Rust prototype. See [Feature status & gaps](#feature-status--gaps).
 
 ## Install
 
@@ -95,39 +100,67 @@ Press `r` to rebase the selected change, or `Ctrl-R` to rebase with all descenda
 
 ### Squash
 
-Press `S` to squash the selected change into its parent. This is a whole-change squash (no hunk picker in the MVP). The parent's description is kept.
+Press `S` to squash the selected change into its parent. This is a whole-change squash (no hunk picker yet). The parent's description is kept.
 
-> **Status:** Partial squash / hunk picker — planned, not yet in the Python reboot.
+## Feature status & gaps
 
-### Omnibar (Revset Search & Filter)
+The Python/Textual implementation does **not yet have feature parity** with the
+original Rust prototype. The MVP covers the core read-and-mutate loop; the tables
+below track what's shipped (✅), partial (🚧), and not yet ported (❌). The
+[roadmap](#roadmap) orders the remaining work — and the Rust prototype lives in
+git history (pre-`reboot/python-textual`) as the behavioural reference for ports.
 
-> **Status:** planned — not yet in the Python reboot.
+### Navigation & views
 
-### Split & Partial Squash (Hunk Picker)
+| Feature | Status | Notes |
+|---|:--:|---|
+| Graph navigation (`j`/`k`/`g`/`G`) | ✅ | cursor lands only on change nodes |
+| Refresh (`R`), quit (`q`) | ✅ | |
+| Focus graph ↔ detail (`Tab`) | ✅ | reverse-focus (`Shift-Tab`) not bound |
+| Jump to working copy (`@`) | ❌ | |
+| Detail file list + diff drill-down | ✅ | |
+| Diff hunk jump (`n`/`N`) | ❌ | Textual scrolls the pane; no hunk-to-hunk jumps |
+| Help overlay (`?`) | ❌ | |
+| Mouse support | ❌ | click-to-select, scroll, click-to-focus |
 
-> **Status:** planned — not yet in the Python reboot.
+### Mutations
 
-### Conflict View
+| Feature | Status | Notes |
+|---|:--:|---|
+| New (`n`), abandon (`d`) | ✅ | |
+| Switch working copy / edit (`Ctrl-E`) | ✅ | |
+| Describe (`e`) | 🚧 | opens `$EDITOR`; no inline editor (Rust used `tui-textarea`) |
+| Squash into parent (`S`) | 🚧 | whole-change only; no interactive hunk selection |
+| Rebase (`r`) / with descendants (`Ctrl-R`) | 🚧 | target-picking works; no fuzzy filter or source-dimming |
+| **Undo (`u`) / redo** | ❌ | **highest-value gap** — jj makes every op reversible |
+| Split (`s`) | ❌ | needs the hunk picker |
+| Partial squash | ❌ | needs the hunk picker |
+| Set / delete bookmark (`B` / `b`) | ❌ | |
+| Git push (`P`) / fetch (`f`) | ❌ | also no background push/fetch worker lanes |
+| Absorb (`a`), duplicate (`D`), revert (`x`) | ❌ | |
 
-> **Status:** planned — not yet in the Python reboot.
+### Panels & integrations
 
-### Bookmark Management
+| Feature | Status | Notes |
+|---|:--:|---|
+| Status bar (change info, errors) | ✅ | |
+| Omnibar — revset search + completion | ❌ | functions, bookmarks, change-IDs |
+| Hunk picker (split / partial squash) | ❌ | |
+| Conflict view (base / left / right) | ❌ | |
+| Bookmark picker / input | ❌ | |
+| Operation log (browse / restore) | ❌ | |
+| GitHub / forge integration | ❌ | PR status, open / create via `gh` |
 
-> **Status:** planned — not yet in the Python reboot.
+### Architecture deltas from the Rust version
 
-### Op Log
-
-> **Status:** planned — not yet in the Python reboot.
-
-Browse jj's operation history and restore to a previous operation.
-
-### Mouse Support
-
-> **Status:** planned — not yet in the Python reboot.
-
-### GitHub Integration
-
-> **Status:** planned — not yet in the Python reboot.
+- **Concurrency lanes:** Rust ran three independent lanes (local mutation, push,
+  fetch). Python currently has `mutation` (exclusive), `load`, and `diff`; the
+  push and fetch lanes arrive with bookmark / forge work.
+- **Describe editor:** Rust embedded a `tui-textarea` inline editor; Python hands
+  the terminal to `$EDITOR` via suspend. An inline editor may return as a Textual
+  `TextArea`.
+- **Spec management:** the Rust tree was unslop-managed; the Python line is
+  hand-written for now (unslop may return once the architecture settles).
 
 ## Architecture
 
@@ -148,12 +181,16 @@ reactive state, and the affected widgets re-render automatically.
 ## Development
 
 ```bash
-uv sync                 # create the environment
-uv run lajjzy           # run the TUI
-uv run pytest           # run tests (jj in PATH required for integration tests)
-uv run ruff check .     # lint
-uv run ruff format .    # format
+uv sync                      # create the environment
+uv run lajjzy                # run the TUI
+uv run pytest                # run tests (jj in PATH required for integration tests)
+uv run ruff check .          # lint
+uv run ruff format .         # format (use --check in CI)
 ```
+
+CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`, and
+`pytest` on every pull request and on pushes to `main` (installing `jj` so the
+integration tests actually run).
 
 ## Releasing
 
@@ -164,28 +201,47 @@ uv run ruff format .    # format
 
 ## Roadmap
 
-### Reboot R1 — MVP core (complete)
+Roughly priority-ordered: first close the gaps that make lajjzy a viable daily
+driver, then add depth, then explore what the Textual stack newly makes possible.
+See [Feature status & gaps](#feature-status--gaps) for the full inventory.
 
-Graph + navigation, detail/diff panel, core mutations (`new`, `describe`, `edit`,
-`abandon`, `squash`, `rebase`), status bar + error reactivity.
+### Shipped
 
-### Feature-port backlog (port from the Rust reference, incrementally)
+Graph navigation, detail + diff drill-down, core mutations (`new`, `abandon`,
+`edit`, `describe`, `squash`, `rebase` / `rebase --descendants`), reactive status
+bar, and CI (ruff + pytest).
 
-- **P1 — Omnibar:** revset search + completion (functions, bookmarks, change IDs).
-- **P2 — Hunk picker:** interactive split & partial squash.
-- **P3 — Conflict view:** base/left/right resolution panes.
-- **P4 — Bookmark UI:** picker + set/delete.
-- **P5 — Op log:** browse + restore.
-- **P6 — Mouse support:** lazygit-style click/scroll.
-- **P7 — GitHub integration:** `gh`-backed PR status + open/create.
+### Next — the daily-driver essentials
 
-### Future features (post-parity)
+1. **Undo / redo** (`jj undo` / `jj redo`) — the single most-felt gap; jj's whole
+   selling point is reversibility, and the TUI can't yet undo.
+2. **Omnibar** — revset search & filter with completion (functions, bookmarks,
+   change-IDs).
+3. **Bookmark management** — set / delete / move, plus a picker to jump.
+4. **Operation log** — browse `jj op log` and restore to a previous operation.
+5. **Conflict view** — base / left / right resolution panes.
+6. **Hunk picker** — interactive `split` and partial `squash` (upgrades the
+   current whole-change squash).
 
-- **F1 — Configurable keymaps**
-- **F2 — Theming:** colour sets, nerd-font / emoji support.
-- **F3 — Blame / annotate**
-- **F4 — Parallel-branch lane view**
-- **F5 — Stacked-PR management**
+### Then — depth & ergonomics
+
+- **Mouse support** — click-to-select, scroll, click-to-focus.
+- **Remaining mutations** — absorb, duplicate, revert; push / fetch on their own
+  background worker lanes.
+- **Inline describe editor** — a Textual `TextArea` alternative to `$EDITOR`.
+- **Configurable keymaps.**
+- **Theming** — Textual CSS themes, colour sets, nerd-font / emoji support.
+- **Forge integration** — `gh`-backed PR status, open / create (and beyond GitHub).
+
+### Exploration — what Textual unlocks
+
+The move off ratatui makes a few things newly cheap:
+
+- **Run in the browser** — `textual serve` can host the same app over the web with
+  no separate UI code.
+- **Blame / annotate** — a gutter that drills into the originating change.
+- **Parallel-branch lane view** for concurrent work.
+- **Stacked-PR management** (Graphite-style).
 
 ## License
 
