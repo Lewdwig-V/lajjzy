@@ -30,3 +30,28 @@ def test_parse_two_nodes_with_working_copy_and_files():
     assert g.details["abc"].bookmarks == ["main"]
     assert g.details["abc"].files[0].status == FileStatus.MODIFIED
     assert g.details["def"].parents == ["abc"]
+
+
+def test_parse_trailing_newline_no_phantom_line():
+    """Regression test: trailing newline should not create a phantom GraphLine.
+
+    jj output always ends with a newline. When split("\n"), this creates
+    a final empty-string element. This test ensures that empty line is skipped,
+    not appended as a phantom GraphLine(raw="", change_id=None, glyph_prefix="").
+    """
+    fields = ["abc", "commitA", "Alice", "a@x", "1h", "first", "",
+              "false", "false", "@", ""]
+    output = _node("◉ abc Alice 1h", fields) + "\n"
+
+    g = parse_graph_output(output, op_id="op1")
+
+    # Verify no phantom line: every GraphLine has non-empty raw
+    assert all(line.raw for line in g.lines), \
+        f"Found phantom line with empty raw: {g.lines}"
+
+    # Should have exactly one line: the node itself
+    assert len(g.lines) == 1, \
+        f"Expected 1 line, got {len(g.lines)}: {[line.raw for line in g.lines]}"
+
+    assert g.lines[0].change_id == "abc"
+    assert g.lines[0].raw == "◉ abc Alice 1h"

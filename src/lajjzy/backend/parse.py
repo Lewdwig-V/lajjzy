@@ -38,6 +38,8 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
     current_change_id: str | None = None
 
     for raw in output.split("\n"):
+        if not raw:
+            continue
         sep = raw.find(UNIT_SEP)
         if sep != -1:
             display = raw[:sep]
