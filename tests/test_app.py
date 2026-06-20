@@ -258,3 +258,101 @@ async def test_file_up_noop_in_diff_mode(temp_repo: Path):
             "while in diff mode — mode guard missing from action_file_up"
         )
         assert panel.mode == "diff"
+
+
+# ---------------------------------------------------------------------------
+# P1 mutation gate tests
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_mutation_gate_rejects_concurrent(temp_repo: Path, monkeypatch):
+    """A second mutation key while one is in flight must be rejected, not cancel."""
+    import asyncio
+
+    import lajjzy.backend.jj as jjmod
+
+    gate = asyncio.Event()
+    calls: list[str] = []
+
+    async def slow_new(cwd, after):
+        calls.append("new")
+        await gate.wait()
+        return "Created"
+
+    async def quick_abandon(cwd, change_id):
+        calls.append("abandon")
+        return "Abandoned"
+
+    monkeypatch.setattr(jjmod, "new_change", slow_new)
+    monkeypatch.setattr(jjmod, "abandon", quick_abandon)
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+
+        # Press "n" — slow_new starts, pending_mutation=True
+        await pilot.press("n")
+        await pilot.pause()
+        # Give the worker a chance to enter slow_new and set calls
+        await asyncio.sleep(0)
+        assert "new" in calls, "slow_new should have been called"
+        assert app.pending_mutation is True
+
+        # Press "d" while slow_new is still blocked — should be rejected
+        await pilot.press("d")
+        await pilot.pause()
+        assert "abandon" not in calls, "abandon must NOT run while mutation is in flight"
+
+        # Unblock slow_new and let everything finish
+        gate.set()
+        await app.workers.wait_for_complete()
+        assert app.pending_mutation is False
+
+
+@jj_required
+async def test_mutation_gate_clears_after_completion(temp_repo: Path, monkeypatch):
+    """After a successful mutation, pending_mutation is False and a second one is accepted."""
+    import lajjzy.backend.jj as jjmod
+
+    calls: list[str] = []
+
+    async def fast_new(cwd, after):
+        calls.append("new")
+        return "Created"
+
+    async def fast_abandon(cwd, change_id):
+        calls.append("abandon")
+        return "Abandoned"
+
+    monkeypatch.setattr(jjmod, "new_change", fast_new)
+    monkeypatch.setattr(jjmod, "abandon", fast_abandon)
+    # Patch load_graph to return the existing graph immediately so the worker
+    # finishes quickly without spawning jj.
+    original_load = jjmod.load_graph
+
+    async def instant_load(cwd):
+        return await original_load(cwd)
+
+    monkeypatch.setattr(jjmod, "load_graph", instant_load)
+
+    # Also patch the import inside app.py (load_graph is imported at module level)
+    import lajjzy.app as app_mod
+
+    monkeypatch.setattr(app_mod, "load_graph", instant_load)
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+
+        # First mutation
+        await pilot.press("n")
+        await app.workers.wait_for_complete()
+        assert app.pending_mutation is False, "pending_mutation must clear after first mutation"
+        assert "new" in calls
+
+        # Second mutation — must be accepted now
+        await pilot.press("d")
+        await app.workers.wait_for_complete()
+        assert "abandon" in calls, "second mutation was rejected after first completed"
+        assert app.pending_mutation is False

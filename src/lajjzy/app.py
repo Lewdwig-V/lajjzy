@@ -50,6 +50,8 @@ class LajjzyApp(App[None]):
     def __init__(self, repo_path: Path | None = None) -> None:
         super().__init__()
         self.repo_path = repo_path or Path.cwd()
+        self.pending_mutation = False
+        self._graph_epoch = 0
 
     def compose(self) -> ComposeResult:
         from lajjzy.widgets import DetailPanel, GraphView, StatusBar
@@ -67,6 +69,8 @@ class LajjzyApp(App[None]):
 
     @work(group="load", exclusive=True)
     async def reload(self) -> None:
+        self._graph_epoch += 1
+        epoch = self._graph_epoch
         try:
             new_graph = await load_graph(self.repo_path)
         except JjError as exc:
@@ -74,6 +78,10 @@ class LajjzyApp(App[None]):
             return
         except Exception as exc:
             self.error = f"Unexpected error: {exc}"
+            return
+        # Discard this result if a newer graph-producing op has superseded us.
+        # Also do NOT clear error or touch state for a stale load.
+        if epoch != self._graph_epoch:
             return
         self.error = None
         self.graph = new_graph
@@ -123,30 +131,52 @@ class LajjzyApp(App[None]):
 
         self.query_one(DetailPanel).focus()
 
-    @work(group="mutation", exclusive=True)
-    async def _mutate(self, op: Callable[[], Awaitable[str]]) -> None:
+    def _dispatch_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
+        """Synchronous gate: reject (not cancel) a second mutation while one is in flight.
+
+        Textual processes each key action to completion before the next, so the
+        check-and-set here is atomic with respect to other key events — no race.
+        """
+        if self.pending_mutation:
+            self.error = "A mutation is already in progress"
+            return
+        self.pending_mutation = True
+        self._run_mutation(op)
+
+    @work(group="mutation")
+    async def _run_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
         try:
-            message = await op()
-        except JjError as exc:
-            self.error = str(exc)
-            return
-        except Exception as exc:
-            self.error = f"Unexpected error: {exc}"
-            return
-        self.error = message
-        # Reload synchronously inside this worker so the graph reflects the result.
-        try:
-            self.graph = await load_graph(self.repo_path)
-        except JjError as exc:
-            self.error = str(exc)
-            return
-        except Exception as exc:
-            self.error = f"Unexpected error: {exc}"
-            return
-        if self.graph.working_copy_index is not None:
-            self.cursor = self.graph.working_copy_index
-        elif self.graph.node_indices:
-            self.cursor = self.graph.node_indices[0]
+            try:
+                message = await op()
+            except JjError as exc:
+                self.error = str(exc)
+                return
+            except Exception as exc:
+                self.error = f"Unexpected error: {exc}"
+                return
+            self.error = message
+            # Reload synchronously inside this worker so the graph reflects the result.
+            # Use the epoch guard so a racing manual reload cannot overwrite us, and
+            # so we do not overwrite a reload that started after us.
+            self._graph_epoch += 1
+            epoch = self._graph_epoch
+            try:
+                new_graph = await load_graph(self.repo_path)
+            except JjError as exc:
+                self.error = str(exc)
+                return
+            except Exception as exc:
+                self.error = f"Unexpected error: {exc}"
+                return
+            if epoch != self._graph_epoch:
+                return  # a newer graph-producing op superseded this load; discard
+            self.graph = new_graph
+            if self.graph.working_copy_index is not None:
+                self.cursor = self.graph.working_copy_index
+            elif self.graph.node_indices:
+                self.cursor = self.graph.node_indices[0]
+        finally:
+            self.pending_mutation = False
 
     def action_new(self) -> None:
         from lajjzy.backend.jj import new_change
@@ -155,7 +185,7 @@ class LajjzyApp(App[None]):
         if target is None:
             self.error = "No change selected"
             return
-        self._mutate(lambda: new_change(self.repo_path, target))
+        self._dispatch_mutation(lambda: new_change(self.repo_path, target))
 
     def action_abandon(self) -> None:
         from lajjzy.backend.jj import abandon
@@ -164,7 +194,7 @@ class LajjzyApp(App[None]):
         if target is None:
             self.error = "No change selected"
             return
-        self._mutate(lambda: abandon(self.repo_path, target))
+        self._dispatch_mutation(lambda: abandon(self.repo_path, target))
 
     def action_edit(self) -> None:
         from lajjzy.backend.jj import edit_change
@@ -173,7 +203,7 @@ class LajjzyApp(App[None]):
         if target is None:
             self.error = "No change selected"
             return
-        self._mutate(lambda: edit_change(self.repo_path, target))
+        self._dispatch_mutation(lambda: edit_change(self.repo_path, target))
 
     def action_squash(self) -> None:
         from lajjzy.backend.jj import squash
@@ -182,7 +212,7 @@ class LajjzyApp(App[None]):
         if target is None:
             self.error = "No change selected"
             return
-        self._mutate(lambda: squash(self.repo_path, target))
+        self._dispatch_mutation(lambda: squash(self.repo_path, target))
 
     def action_describe(self) -> None:
         target = self.selected_change_id()
@@ -198,7 +228,7 @@ class LajjzyApp(App[None]):
             return  # user aborted / editor unavailable
         from lajjzy.backend.jj import describe
 
-        self._mutate(lambda: describe(self.repo_path, target, message))
+        self._dispatch_mutation(lambda: describe(self.repo_path, target, message))
 
     def action_rebase(self) -> None:
         self.rebase_source = self.selected_change_id()
@@ -230,7 +260,7 @@ class LajjzyApp(App[None]):
         from lajjzy.backend.jj import rebase_single, rebase_with_descendants
 
         op = rebase_with_descendants if descend else rebase_single
-        self._mutate(lambda: op(self.repo_path, src, dest))
+        self._dispatch_mutation(lambda: op(self.repo_path, src, dest))
 
     def action_rebase_cancel(self) -> None:
         # No-op unless rebase mode is armed.
