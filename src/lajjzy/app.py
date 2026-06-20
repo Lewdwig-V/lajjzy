@@ -87,6 +87,19 @@ class LajjzyApp(App[None]):
         self.query_one(GraphView).focus()
         self.reload()
 
+    def _assign_if_current(self, epoch: int, new_graph: GraphData) -> bool:
+        """Assign new_graph only if no newer graph-producing op has run since
+        `epoch` was captured. Returns True if assigned, False if discarded as stale."""
+        if epoch != self._graph_epoch:
+            return False
+        self.graph = new_graph
+        # Land the cursor on the working copy if known, else the first node.
+        if new_graph.working_copy_index is not None:
+            self.cursor = new_graph.working_copy_index
+        elif new_graph.node_indices:
+            self.cursor = new_graph.node_indices[0]
+        return True
+
     @work(group="load", exclusive=True)
     async def reload(self) -> None:
         self._graph_epoch += 1
@@ -103,15 +116,8 @@ class LajjzyApp(App[None]):
             return
         # Discard this result if a newer graph-producing op has superseded us.
         # Also do NOT clear error or touch state for a stale load.
-        if epoch != self._graph_epoch:
-            return
-        self.error = None
-        self.graph = new_graph
-        # Land the cursor on the working copy if known, else the first node.
-        if new_graph.working_copy_index is not None:
-            self.cursor = new_graph.working_copy_index
-        elif new_graph.node_indices:
-            self.cursor = new_graph.node_indices[0]
+        if self._assign_if_current(epoch, new_graph):
+            self.error = None
 
     def selected_change_id(self) -> str | None:
         if self.graph is None:
@@ -200,13 +206,7 @@ class LajjzyApp(App[None]):
             except Exception as exc:
                 self.error = f"Unexpected error: {exc}"
                 return
-            if epoch != self._graph_epoch:
-                return  # a newer graph-producing op superseded this load; discard
-            self.graph = new_graph
-            if self.graph.working_copy_index is not None:
-                self.cursor = self.graph.working_copy_index
-            elif self.graph.node_indices:
-                self.cursor = self.graph.node_indices[0]
+            self._assign_if_current(epoch, new_graph)
         finally:
             self.pending_mutation = False
 
