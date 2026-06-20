@@ -28,6 +28,7 @@ class LajjzyApp(App[None]):
         ("tab", "focus_detail", "Detail"),
         ("n", "new", "New"),
         ("d", "abandon", "Abandon"),
+        ("ctrl+e", "edit", "Edit @"),
     ]
 
     graph: reactive[GraphData | None] = reactive(None)
@@ -135,6 +136,31 @@ class LajjzyApp(App[None]):
         if target is None:
             return
         self._mutate(lambda: abandon(self.repo_path, target))
+
+    def action_edit(self) -> None:
+        from lajjzy.backend.jj import edit_change
+
+        target = self.selected_change_id()
+        if target is None:
+            return
+        self._mutate(lambda: edit_change(self.repo_path, target))
+
+    async def ensure_working_copy(self, change_id: str) -> bool:
+        """Working-copy gate: make `change_id` the @ commit before any
+        filesystem-touching op. Returns True if @ is (now) the target.
+        Used by deferred hunk-picker / conflict features."""
+        from lajjzy.backend.jj import edit_change
+
+        if self.graph and self.graph.working_copy_index is not None:
+            current = self.graph.lines[self.graph.working_copy_index].change_id
+            if current == change_id:
+                return True
+        try:
+            await edit_change(self.repo_path, change_id)
+        except JjError as exc:
+            self.error = str(exc)
+            return False
+        return True
 
     @work(group="diff", exclusive=True)
     async def open_diff(self, path: str) -> None:

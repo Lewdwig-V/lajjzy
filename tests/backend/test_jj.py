@@ -1,6 +1,6 @@
 import pytest
 
-from lajjzy.backend.jj import abandon, change_diff, load_graph, new_change, run_jj
+from lajjzy.backend.jj import abandon, change_diff, edit_change, load_graph, new_change, run_jj
 from lajjzy.backend.types import JjError
 from tests.conftest import jj_required
 
@@ -48,6 +48,20 @@ async def test_new_change_adds_node(temp_repo):
     await new_change(temp_repo, wc)
     after = len((await load_graph(temp_repo)).details)
     assert after == before + 1
+
+
+@jj_required
+async def test_edit_moves_working_copy(temp_repo):
+    import subprocess
+    subprocess.run(["jj", "new", "-m", "child"], cwd=temp_repo, check=True,
+                   capture_output=True)
+    g = await load_graph(temp_repo)
+    # pick a non-@ node (the parent)
+    parents = g.details[g.lines[g.working_copy_index].change_id].parents
+    assert parents
+    await edit_change(temp_repo, parents[0])
+    g2 = await load_graph(temp_repo)
+    assert g2.lines[g2.working_copy_index].change_id == parents[0]
 
 
 @jj_required

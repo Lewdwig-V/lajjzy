@@ -76,3 +76,8 @@ async def new_change(cwd: Path, after: str) -> str:
 async def abandon(cwd: Path, change_id: str) -> str:
     await run_jj(["abandon", change_id], cwd)
     return f"Abandoned {change_id}"
+
+
+async def edit_change(cwd: Path, change_id: str) -> str:
+    await run_jj(["edit", change_id], cwd)
+    return f"Now editing {change_id}"
