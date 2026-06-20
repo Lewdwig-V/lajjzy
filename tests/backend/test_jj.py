@@ -1,6 +1,6 @@
 import pytest
 
-from lajjzy.backend.jj import abandon, change_diff, describe, edit_change, load_graph, new_change, run_jj, squash
+from lajjzy.backend.jj import abandon, change_diff, describe, edit_change, load_graph, new_change, rebase_single, run_jj, squash
 from lajjzy.backend.types import JjError
 from tests.conftest import jj_required
 
@@ -93,6 +93,23 @@ async def test_squash_collapses_into_parent(temp_repo):
     await squash(temp_repo, child)
     after = len((await load_graph(temp_repo)).details)
     assert after == before - 1
+
+
+@jj_required
+async def test_rebase_single_reparents(temp_repo):
+    import subprocess
+    # root → A; create sibling B off root; rebase B onto A
+    subprocess.run(["jj", "new", "-m", "A"], cwd=temp_repo, check=True,
+                   capture_output=True)
+    g = await load_graph(temp_repo)
+    a = g.lines[g.working_copy_index].change_id
+    subprocess.run(["jj", "new", "root()", "-m", "B"], cwd=temp_repo,
+                   check=True, capture_output=True)
+    g = await load_graph(temp_repo)
+    b = g.lines[g.working_copy_index].change_id
+    await rebase_single(temp_repo, b, a)
+    g2 = await load_graph(temp_repo)
+    assert a in g2.details[b].parents
 
 
 @jj_required

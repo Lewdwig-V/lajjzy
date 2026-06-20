@@ -34,11 +34,17 @@ class LajjzyApp(App[None]):
         ("ctrl+e", "edit", "Edit @"),
         ("e", "describe", "Describe"),
         ("S", "squash", "Squash"),
+        ("r", "rebase", "Rebase"),
+        ("ctrl+r", "rebase_descendants", "Rebase+desc"),
+        ("enter", "rebase_confirm", "Confirm rebase"),
+        ("escape", "rebase_cancel", "Cancel"),
     ]
 
     graph: reactive[GraphData | None] = reactive(None)
     cursor: reactive[int] = reactive(0)
     error: reactive[str | None] = reactive(None)
+    rebase_source: reactive[str | None] = reactive(None)
+    rebase_descendants_flag: reactive[bool] = reactive(False)
 
     def __init__(self, repo_path: Path | None = None) -> None:
         super().__init__()
@@ -168,6 +174,39 @@ class LajjzyApp(App[None]):
             return  # user aborted / editor unavailable
         from lajjzy.backend.jj import describe
         self._mutate(lambda: describe(self.repo_path, target, message))
+
+    def action_rebase(self) -> None:
+        self.rebase_source = self.selected_change_id()
+        self.rebase_descendants_flag = False
+        if self.rebase_source:
+            self.error = "Rebase: pick a destination, Enter to confirm, Esc to cancel"
+
+    def action_rebase_descendants(self) -> None:
+        self.rebase_source = self.selected_change_id()
+        self.rebase_descendants_flag = True
+        if self.rebase_source:
+            self.error = "Rebase +desc: pick a destination, Enter to confirm, Esc to cancel"
+
+    def action_rebase_confirm(self) -> None:
+        # No-op unless rebase mode is armed — Enter does exactly one thing.
+        if self.rebase_source is None:
+            return
+        dest = self.selected_change_id()
+        src = self.rebase_source
+        descend = self.rebase_descendants_flag
+        self.rebase_source = None
+        if dest is None or dest == src:
+            self.error = "Rebase cancelled (invalid destination)"
+            return
+        from lajjzy.backend.jj import rebase_single, rebase_with_descendants
+        op = rebase_with_descendants if descend else rebase_single
+        self._mutate(lambda: op(self.repo_path, src, dest))
+
+    def action_rebase_cancel(self) -> None:
+        # No-op unless rebase mode is armed.
+        if self.rebase_source is not None:
+            self.rebase_source = None
+            self.error = "Rebase cancelled"
 
     def _edit_message_in_editor(self, seed: str) -> str | None:
         editor = os.environ.get("EDITOR")

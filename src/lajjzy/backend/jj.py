@@ -95,3 +95,13 @@ async def squash(cwd: Path, change_id: str) -> str:
     # (--from <id> would move contents INTO @ instead, not into the parent).
     await run_jj(["squash", "-r", change_id, "--use-destination-message"], cwd)
     return f"Squashed {change_id} into its parent"
+
+
+async def rebase_single(cwd: Path, source: str, destination: str) -> str:
+    await run_jj(["rebase", "-r", source, "--onto", destination], cwd)
+    return f"Rebased {source} onto {destination}"
+
+
+async def rebase_with_descendants(cwd: Path, source: str, destination: str) -> str:
+    await run_jj(["rebase", "-s", source, "--onto", destination], cwd)
+    return f"Rebased {source} + descendants onto {destination}"
