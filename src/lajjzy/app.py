@@ -89,6 +89,8 @@ class LajjzyApp(App[None]):
         return self.graph.change_id_at(self.cursor)
 
     def _node_index_offset(self, delta: int) -> None:
+        # self.cursor is an index into graph.lines (not an ordinal into node_indices);
+        # navigation steps between node_indices entries, skipping connector lines.
         if self.graph is None or not self.graph.node_indices:
             return
         nodes = self.graph.node_indices

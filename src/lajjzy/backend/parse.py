@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 from lajjzy.backend.types import (
-    ChangeDetail, DiffHunk, DiffLine, FileDiff, FileChange, FileStatus, GraphData, GraphLine,
+    ChangeDetail,
+    DiffHunk,
+    DiffLine,
+    FileDiff,
+    FileChange,
+    FileStatus,
+    GraphData,
+    GraphLine,
 )
 
 UNIT_SEP = "\x1f"
 RECORD_SEP = "\x1e"
 
 _STATUS_MAP = {
-    "A": FileStatus.ADDED, "M": FileStatus.MODIFIED, "D": FileStatus.DELETED,
-    "R": FileStatus.RENAMED, "C": FileStatus.CONFLICTED,
+    "A": FileStatus.ADDED,
+    "M": FileStatus.MODIFIED,
+    "D": FileStatus.DELETED,
+    "R": FileStatus.RENAMED,
+    "C": FileStatus.CONFLICTED,
 }
 
 
@@ -30,6 +40,8 @@ def parse_file_line(line: str) -> FileChange | None:
 
 
 def _first_alnum(s: str) -> int:
+    """Return index of first alphanumeric character; used to skip jj graph-drawing
+    prefixes (e.g. '│  ') before the status code or change-id. Returns 0 if none."""
     for i, ch in enumerate(s):
         if ch.isalnum():
             return i
@@ -48,22 +60,22 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
         sep = raw.find(UNIT_SEP)
         if sep != -1:
             display = raw[:sep]
-            fields = raw[sep + 1:].split(RECORD_SEP)
+            fields = raw[sep + 1 :].split(RECORD_SEP)
+            # 11 fields must match the _GRAPH_TEMPLATE field order defined in jj.py.
             if len(fields) < 11:
-                raise ValueError(
-                    f"Expected 11 metadata fields, got {len(fields)}: {fields!r}"
-                )
+                raise ValueError(f"Expected 11 metadata fields, got {len(fields)}: {fields!r}")
             change_id = fields[0]
             current_change_id = change_id
             if change_id in details:
-                raise ValueError(
-                    f"Duplicate short change ID {change_id!r} (truncation collision)."
-                )
+                raise ValueError(f"Duplicate short change ID {change_id!r} (truncation collision).")
             if fields[9]:  # working-copy marker "@"
                 working_copy_index = len(lines)
             details[change_id] = ChangeDetail(
-                commit_id=fields[1], author=fields[2], email=fields[3],
-                timestamp=fields[4], description=fields[5],
+                commit_id=fields[1],
+                author=fields[2],
+                email=fields[3],
+                timestamp=fields[4],
+                description=fields[5],
                 bookmarks=fields[6].split(" ") if fields[6] else [],
                 is_empty=fields[7] == "true",
                 conflict_count=1 if fields[8] == "true" else 0,
@@ -71,25 +83,28 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
                 parents=fields[10].split(" ") if fields[10] else [],
             )
             glyph_end = _first_alnum(display)
-            lines.append(GraphLine(
-                raw=display, change_id=change_id,
-                glyph_prefix=display[:glyph_end],
-            ))
+            lines.append(
+                GraphLine(
+                    raw=display,
+                    change_id=change_id,
+                    glyph_prefix=display[:glyph_end],
+                )
+            )
             continue
 
         file_change = parse_file_line(raw)
         if file_change is not None and current_change_id is not None:
             details[current_change_id].files.append(file_change)
         else:
+            # Connector / non-file line (graph art only): store as GraphLine with change_id=None.
             lines.append(GraphLine(raw=raw, change_id=None, glyph_prefix=raw))
 
     if output.strip() and not details:
-        raise ValueError(
-            "Parsed jj output but found zero change nodes; template may have changed."
-        )
+        raise ValueError("Parsed jj output but found zero change nodes; template may have changed.")
 
-    return GraphData(lines=lines, details=details,
-                     working_copy_index=working_copy_index, op_id=op_id)
+    return GraphData(
+        lines=lines, details=details, working_copy_index=working_copy_index, op_id=op_id
+    )
 
 
 def parse_file_diffs(output: str) -> list[FileDiff]:

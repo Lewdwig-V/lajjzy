@@ -60,10 +60,18 @@ async def test_load_graph_revset_filters(temp_repo):
 
 @jj_required
 async def test_change_diff_returns_files(temp_repo):
+    # Ensure a.txt has an uncommitted diff so change_diff returns non-empty results.
+    (temp_repo / "a.txt").write_text("hello\nextra line\n")
     g = await load_graph(temp_repo)
     wc = g.lines[g.working_copy_index].change_id
     files = await change_diff(temp_repo, wc)
     assert isinstance(files, list)
+    assert len(files) > 0, "Expected at least one FileDiff for a.txt"
+    paths = [fd.path for fd in files]
+    assert "a.txt" in paths, f"Expected a.txt in diff paths, got {paths!r}"
+    for fd in files:
+        assert hasattr(fd, "path"), f"FileDiff missing .path: {fd!r}"
+        assert hasattr(fd, "hunks"), f"FileDiff missing .hunks: {fd!r}"
 
 
 @jj_required

@@ -236,3 +236,25 @@ async def test_rebase_confirm_same_dest_cancels(temp_repo: Path):
         assert app.rebase_source is None
         assert app.error is not None
         assert "cancelled" in app.error.lower()
+
+
+@jj_required
+async def test_file_up_noop_in_diff_mode(temp_repo: Path):
+    """k must not mutate file_cursor when DetailPanel is in diff mode."""
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        from lajjzy.widgets.detail import DetailPanel
+
+        panel = app.query_one(DetailPanel)
+        await pilot.press("tab")  # focus detail panel
+        await pilot.press("enter")  # open diff for first file (a.txt)
+        await app.workers.wait_for_complete()
+        assert panel.mode == "diff", f"expected diff mode, got {panel.mode!r}"
+        cursor_before = panel.file_cursor
+        await pilot.press("k")
+        assert panel.file_cursor == cursor_before, (
+            f"file_cursor changed from {cursor_before} to {panel.file_cursor} "
+            "while in diff mode — mode guard missing from action_file_up"
+        )
+        assert panel.mode == "diff"

@@ -4,7 +4,7 @@ from rich.text import Text
 from textual.reactive import reactive
 from textual.widget import Widget
 
-from lajjzy.backend.types import FileDiff
+from lajjzy.backend.types import FileDiff, FileChange
 
 
 class DetailPanel(Widget):
@@ -37,7 +37,7 @@ class DetailPanel(Widget):
         self.diff = []
         self.refresh()
 
-    def current_files(self) -> list:
+    def current_files(self) -> list[FileChange]:
         change_id = self.app.selected_change_id()
         graph = self.app.graph
         if change_id is None or graph is None:

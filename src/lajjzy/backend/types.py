@@ -71,10 +71,14 @@ class GraphData:
     node_indices: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if not self.node_indices:
-            self.node_indices = [
-                i for i, line in enumerate(self.lines) if line.change_id is not None
-            ]
+        # Always derive node_indices from lines — never trust a caller-supplied value.
+        self.node_indices = [i for i, line in enumerate(self.lines) if line.change_id is not None]
+        if self.working_copy_index is not None:
+            if (
+                self.working_copy_index >= len(self.lines)
+                or self.lines[self.working_copy_index].change_id is None
+            ):
+                raise ValueError(f"working_copy_index {self.working_copy_index} invalid")
 
     def change_id_at(self, index: int) -> str | None:
         if 0 <= index < len(self.lines):

@@ -5,7 +5,14 @@ from textual.widget import Widget
 
 
 class StatusBar(Widget):
-    """Priority-ordered status line: error > rebase prompt > change metadata."""
+    """Priority-ordered status line.
+
+    Shows app.error (bold red) when set — this covers both hard errors and
+    ephemeral prompts such as rebase mode instructions, which are surfaced via
+    app.error rather than a separate rendering path.  Otherwise renders
+    selected-change metadata: change id, author, timestamp, bookmarks (if any),
+    and a CONFLICT marker when conflict_count is non-zero.
+    """
 
     def on_mount(self) -> None:
         self.watch(self.app, "error", lambda _: self.refresh())
