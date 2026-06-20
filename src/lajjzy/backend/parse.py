@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TypedDict
+
 from lajjzy.backend.types import (
     ChangeDetail,
     DiffHunk,
@@ -21,6 +23,28 @@ _STATUS_MAP = {
     "R": FileStatus.RENAMED,
     "C": FileStatus.CONFLICTED,
 }
+
+
+class _PendingChange(TypedDict):
+    commit_id: str
+    author: str
+    email: str
+    timestamp: str
+    description: str
+    bookmarks: list[str]
+    is_empty: bool
+    has_conflict: bool
+    parents: list[str]
+
+
+class _PendingHunk(TypedDict):
+    header: str
+    lines: list[DiffLine]
+
+
+class _PendingFile(TypedDict):
+    path: str
+    hunks: list[_PendingHunk]
 
 
 def parse_file_line(line: str) -> FileChange | None:
@@ -51,7 +75,7 @@ def _first_alnum(s: str) -> int:
 def parse_graph_output(output: str, op_id: str) -> GraphData:
     lines: list[GraphLine] = []
     # Accumulate scalar fields per change before constructing ChangeDetail.
-    pending: dict[str, dict] = {}
+    pending: dict[str, _PendingChange] = {}
     files_by_change: dict[str, list[FileChange]] = {}
     working_copy_index: int | None = None
     current_change_id: str | None = None
@@ -72,17 +96,17 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
                 raise ValueError(f"Duplicate short change ID {change_id!r} (truncation collision).")
             if fields[9]:  # working-copy marker "@"
                 working_copy_index = len(lines)
-            pending[change_id] = {
-                "commit_id": fields[1],
-                "author": fields[2],
-                "email": fields[3],
-                "timestamp": fields[4],
-                "description": fields[5],
-                "bookmarks": fields[6].split() if fields[6] else [],
-                "is_empty": fields[7] == "true",
-                "has_conflict": fields[8] == "true",
-                "parents": fields[10].split() if fields[10] else [],
-            }
+            pending[change_id] = _PendingChange(
+                commit_id=fields[1],
+                author=fields[2],
+                email=fields[3],
+                timestamp=fields[4],
+                description=fields[5],
+                bookmarks=fields[6].split() if fields[6] else [],
+                is_empty=fields[7] == "true",
+                has_conflict=fields[8] == "true",
+                parents=fields[10].split() if fields[10] else [],
+            )
             files_by_change[change_id] = []
             glyph_end = _first_alnum(display)
             lines.append(
@@ -117,20 +141,20 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
 def parse_file_diffs(output: str) -> list[FileDiff]:
     # Accumulate mutable lists during parsing; construct frozen objects once at the end.
     # Each entry: {"path": str, "hunks": [{"header": str, "lines": [DiffLine]}]}
-    pending_files: list[dict] = []
-    current_file: dict | None = None
-    current_hunk: dict | None = None
+    pending_files: list[_PendingFile] = []
+    current_file: _PendingFile | None = None
+    current_hunk: _PendingHunk | None = None
 
     for line in output.splitlines():
         if line.startswith("diff --git "):
             # "diff --git a/<path> b/<path>" → take the b-side path.
             b = line.split(" b/", 1)
             path = b[1] if len(b) == 2 else line
-            current_file = {"path": path, "hunks": []}
+            current_file = _PendingFile(path=path, hunks=[])
             pending_files.append(current_file)
             current_hunk = None
         elif line.startswith("@@"):
-            current_hunk = {"header": line, "lines": []}
+            current_hunk = _PendingHunk(header=line, lines=[])
             if current_file is not None:
                 current_file["hunks"].append(current_hunk)
         elif current_hunk is not None:
