@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install jj
+        run: |
+          curl -fsSL "https://github.com/jj-vcs/jj/releases/download/v0.42.0/jj-v0.42.0-x86_64-unknown-linux-musl.tar.gz" -o jj.tar.gz
+          tar xzf jj.tar.gz ./jj
+          sudo install -m 0755 jj /usr/local/bin/jj
+          rm -f jj.tar.gz jj
+          jj --version
+          # Integration tests run `jj git init` / `jj describe`; give jj an identity.
+          jj config set --user user.name "CI"
+          jj config set --user user.email "ci@example.com"
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Format check (ruff format)
+        run: uv run ruff format --check .
+
+      - name: Run tests
+        run: uv run pytest
