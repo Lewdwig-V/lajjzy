@@ -1,6 +1,6 @@
 import pytest
 
-from lajjzy.backend.jj import change_diff, load_graph, run_jj
+from lajjzy.backend.jj import abandon, change_diff, load_graph, new_change, run_jj
 from lajjzy.backend.types import JjError
 from tests.conftest import jj_required
 
@@ -38,3 +38,36 @@ async def test_change_diff_returns_files(temp_repo):
     wc = g.lines[g.working_copy_index].change_id
     files = await change_diff(temp_repo, wc)
     assert isinstance(files, list)
+
+
+@jj_required
+async def test_new_change_adds_node(temp_repo):
+    before = len((await load_graph(temp_repo)).details)
+    wc = (await load_graph(temp_repo)).lines[
+        (await load_graph(temp_repo)).working_copy_index].change_id
+    await new_change(temp_repo, wc)
+    after = len((await load_graph(temp_repo)).details)
+    assert after == before + 1
+
+
+@jj_required
+async def test_abandon_removes_node(temp_repo):
+    import subprocess
+    # Create a child so "first change" is a non-WC parent — abandoning it is safe.
+    subprocess.run(["jj", "new", "-m", "child"], cwd=temp_repo, check=True,
+                   capture_output=True)
+    g = await load_graph(temp_repo)
+    # Find a non-WC, non-root change to abandon ("first change").
+    wc_id = g.lines[g.working_copy_index].change_id
+    root_id = next(
+        cid for cid, det in g.details.items()
+        if not det.parents  # root has no parents
+    )
+    target = next(
+        cid for cid in g.details
+        if cid != wc_id and cid != root_id
+    )
+    before = len(g.details)
+    await abandon(temp_repo, target)
+    after = len((await load_graph(temp_repo)).details)
+    assert after == before - 1

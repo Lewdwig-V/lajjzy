@@ -66,3 +66,13 @@ async def load_graph(cwd: Path, revset: str | None = None) -> GraphData:
         args += ["-r", revset]
     stdout = await run_jj(args, cwd)
     return parse_graph_output(stdout, op_id)
+
+
+async def new_change(cwd: Path, after: str) -> str:
+    await run_jj(["new", "--insert-after", after], cwd)
+    return f"Created new change after {after}"
+
+
+async def abandon(cwd: Path, change_id: str) -> str:
+    await run_jj(["abandon", change_id], cwd)
+    return f"Abandoned {change_id}"

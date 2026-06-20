@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from textual import work
@@ -25,6 +26,8 @@ class LajjzyApp(App[None]):
         ("R", "reload_graph", "Refresh"),
         ("q", "quit", "Quit"),
         ("tab", "focus_detail", "Detail"),
+        ("n", "new", "New"),
+        ("d", "abandon", "Abandon"),
     ]
 
     graph: reactive[GraphData | None] = reactive(None)
@@ -99,6 +102,39 @@ class LajjzyApp(App[None]):
         from lajjzy.widgets import DetailPanel
 
         self.query_one(DetailPanel).focus()
+
+    @work(group="mutation", exclusive=True)
+    async def _mutate(self, op: Callable[[], Awaitable[str]]) -> None:
+        try:
+            message = await op()
+        except JjError as exc:
+            self.error = str(exc)
+            return
+        self.error = message
+        # Reload synchronously inside this worker so the graph reflects the result.
+        try:
+            self.graph = await load_graph(self.repo_path)
+        except JjError as exc:
+            self.error = str(exc)
+            return
+        if self.graph.working_copy_index is not None:
+            self.cursor = self.graph.working_copy_index
+
+    def action_new(self) -> None:
+        from lajjzy.backend.jj import new_change
+
+        target = self.selected_change_id()
+        if target is None:
+            return
+        self._mutate(lambda: new_change(self.repo_path, target))
+
+    def action_abandon(self) -> None:
+        from lajjzy.backend.jj import abandon
+
+        target = self.selected_change_id()
+        if target is None:
+            return
+        self._mutate(lambda: abandon(self.repo_path, target))
 
     @work(group="diff", exclusive=True)
     async def open_diff(self, path: str) -> None:

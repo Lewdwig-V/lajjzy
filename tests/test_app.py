@@ -60,3 +60,14 @@ async def test_enter_opens_diff_then_esc_returns(temp_repo: Path):
         assert panel.mode == "diff"
         await pilot.press("escape")
         assert panel.mode == "files"
+
+
+@jj_required
+async def test_press_n_creates_change(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        before = len(app.graph.details)
+        await pilot.press("n")
+        await app.workers.wait_for_complete()
+        assert len(app.graph.details) == before + 1
