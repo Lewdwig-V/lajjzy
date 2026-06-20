@@ -164,3 +164,14 @@ async def test_ensure_working_copy_bad_change_returns_false(temp_repo: Path):
         assert app.error is not None, (
             "Expected app.error to be set after a failed ensure_working_copy"
         )
+
+
+@jj_required
+async def test_status_bar_shows_error(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        from lajjzy.widgets.status_bar import StatusBar
+        app.error = "boom"
+        bar = app.query_one(StatusBar)
+        assert "boom" in str(bar.render())

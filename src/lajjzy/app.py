@@ -8,6 +8,7 @@ from pathlib import Path
 
 from textual import work
 from textual.app import App, ComposeResult
+from textual.containers import Horizontal
 from textual.reactive import reactive
 
 from lajjzy.backend.jj import load_graph
@@ -51,10 +52,12 @@ class LajjzyApp(App[None]):
         self.repo_path = repo_path or Path.cwd()
 
     def compose(self) -> ComposeResult:
-        from lajjzy.widgets import DetailPanel, GraphView
+        from lajjzy.widgets import DetailPanel, GraphView, StatusBar
 
-        yield GraphView()
-        yield DetailPanel()
+        with Horizontal(id="panes"):
+            yield GraphView()
+            yield DetailPanel()
+        yield StatusBar()
 
     def on_mount(self) -> None:
         from lajjzy.widgets import GraphView

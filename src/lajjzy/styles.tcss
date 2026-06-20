@@ -1,6 +1,5 @@
-Screen {
-    layout: horizontal;
-}
-
+Screen { layout: vertical; }
+#panes { height: 1fr; }
 GraphView { width: 1fr; height: 1fr; }
 DetailPanel { width: 2fr; height: 1fr; border-left: solid $panel; }
+StatusBar { height: 1; dock: bottom; background: $panel; }
