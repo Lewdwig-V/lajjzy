@@ -81,3 +81,9 @@ async def abandon(cwd: Path, change_id: str) -> str:
 async def edit_change(cwd: Path, change_id: str) -> str:
     await run_jj(["edit", change_id], cwd)
     return f"Now editing {change_id}"
+
+
+async def describe(cwd: Path, change_id: str, text: str) -> str:
+    await run_jj(["describe", change_id, "-m", text], cwd)
+    first_line = text.splitlines()[0] if text.strip() else "(no message)"
+    return f'Described {change_id}: "{first_line}"'

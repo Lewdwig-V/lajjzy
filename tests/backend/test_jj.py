@@ -1,6 +1,6 @@
 import pytest
 
-from lajjzy.backend.jj import abandon, change_diff, edit_change, load_graph, new_change, run_jj
+from lajjzy.backend.jj import abandon, change_diff, describe, edit_change, load_graph, new_change, run_jj
 from lajjzy.backend.types import JjError
 from tests.conftest import jj_required
 
@@ -62,6 +62,15 @@ async def test_edit_moves_working_copy(temp_repo):
     await edit_change(temp_repo, parents[0])
     g2 = await load_graph(temp_repo)
     assert g2.lines[g2.working_copy_index].change_id == parents[0]
+
+
+@jj_required
+async def test_describe_sets_message(temp_repo):
+    g = await load_graph(temp_repo)
+    wc = g.lines[g.working_copy_index].change_id
+    await describe(temp_repo, wc, "a brand new message")
+    g2 = await load_graph(temp_repo)
+    assert g2.details[wc].description == "a brand new message"
 
 
 @jj_required

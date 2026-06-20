@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -29,6 +32,7 @@ class LajjzyApp(App[None]):
         ("n", "new", "New"),
         ("d", "abandon", "Abandon"),
         ("ctrl+e", "edit", "Edit @"),
+        ("e", "describe", "Describe"),
     ]
 
     graph: reactive[GraphData | None] = reactive(None)
@@ -144,6 +148,35 @@ class LajjzyApp(App[None]):
         if target is None:
             return
         self._mutate(lambda: edit_change(self.repo_path, target))
+
+    def action_describe(self) -> None:
+        target = self.selected_change_id()
+        if target is None or self.graph is None:
+            return
+        seed = self.graph.details[target].description
+        message = self._edit_message_in_editor(seed)
+        if message is None:
+            return  # user aborted / editor unavailable
+        from lajjzy.backend.jj import describe
+        self._mutate(lambda: describe(self.repo_path, target, message))
+
+    def _edit_message_in_editor(self, seed: str) -> str | None:
+        editor = os.environ.get("EDITOR")
+        if not editor:
+            self.error = "No $EDITOR set"
+            return None
+        with tempfile.NamedTemporaryFile(
+            "w+", suffix=".jjdescribe", delete=False
+        ) as tf:
+            tf.write(seed)
+            path = tf.name
+        with self.suspend():  # hand the terminal to $EDITOR
+            subprocess.run([*editor.split(), path], check=False)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return fh.read().strip()
+        finally:
+            os.unlink(path)
 
     async def ensure_working_copy(self, change_id: str) -> bool:
         """Working-copy gate: make `change_id` the @ commit before any
