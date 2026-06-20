@@ -72,6 +72,9 @@ class LajjzyApp(App[None]):
         except JjError as exc:
             self.error = str(exc)
             return
+        except Exception as exc:
+            self.error = f"Unexpected error: {exc}"
+            return
         self.error = None
         self.graph = new_graph
         # Land the cursor on the working copy if known, else the first node.
@@ -125,12 +128,18 @@ class LajjzyApp(App[None]):
         except JjError as exc:
             self.error = str(exc)
             return
+        except Exception as exc:
+            self.error = f"Unexpected error: {exc}"
+            return
         self.error = message
         # Reload synchronously inside this worker so the graph reflects the result.
         try:
             self.graph = await load_graph(self.repo_path)
         except JjError as exc:
             self.error = str(exc)
+            return
+        except Exception as exc:
+            self.error = f"Unexpected error: {exc}"
             return
         if self.graph.working_copy_index is not None:
             self.cursor = self.graph.working_copy_index
@@ -173,7 +182,10 @@ class LajjzyApp(App[None]):
         target = self.selected_change_id()
         if target is None or self.graph is None:
             return
-        seed = self.graph.details[target].description
+        detail = self.graph.details.get(target)
+        if detail is None:
+            return
+        seed = detail.description
         message = self._edit_message_in_editor(seed)
         if message is None:
             return  # user aborted / editor unavailable
@@ -220,16 +232,31 @@ class LajjzyApp(App[None]):
         if not editor:
             self.error = "No $EDITOR set"
             return None
-        with tempfile.NamedTemporaryFile("w+", suffix=".jjdescribe", delete=False) as tf:
+        with tempfile.NamedTemporaryFile(
+            "w+", suffix=".jjdescribe", delete=False, encoding="utf-8"
+        ) as tf:
             tf.write(seed)
             path = tf.name
         try:
-            with self.suspend():  # hand the terminal to $EDITOR
-                subprocess.run([*editor.split(), path], check=False)
-            with open(path, encoding="utf-8") as fh:
-                return fh.read().strip()
+            try:
+                with self.suspend():  # hand the terminal to $EDITOR
+                    result = subprocess.run([*editor.split(), path], check=False)
+                if result.returncode != 0:
+                    self.error = f"Editor exited with code {result.returncode}"
+                    return None
+                with open(path, encoding="utf-8") as fh:
+                    return fh.read().strip()
+            except FileNotFoundError:
+                self.error = f"Editor not found: {editor!r}"
+                return None
+            except OSError as exc:
+                self.error = f"Editor error: {exc}"
+                return None
         finally:
-            os.unlink(path)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     async def ensure_working_copy(self, change_id: str) -> bool:
         """Working-copy gate: make `change_id` the @ commit before any
@@ -260,6 +287,9 @@ class LajjzyApp(App[None]):
             all_files = await change_diff(self.repo_path, change_id)
         except JjError as exc:
             self.error = str(exc)
+            return
+        except Exception as exc:
+            self.error = f"Unexpected error: {exc}"
             return
         panel = self.query_one(DetailPanel)
         panel.diff = [fd for fd in all_files if fd.path == path] or all_files

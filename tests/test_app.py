@@ -94,7 +94,10 @@ async def test_ensure_working_copy_already_at_target_is_noop(temp_repo: Path):
         # Working copy must not have moved: ask jj directly.
         out = subprocess.run(
             ["jj", "log", "--no-graph", "-r", "@", "-T", "change_id.short()"],
-            cwd=temp_repo, check=True, capture_output=True, text=True,
+            cwd=temp_repo,
+            check=True,
+            capture_output=True,
+            text=True,
         )
         actual_wc = out.stdout.strip()
         assert actual_wc == target, (
@@ -109,9 +112,7 @@ async def test_ensure_working_copy_switches_to_target(temp_repo: Path):
     import subprocess
 
     # Create a second change so there is a non-@ change to switch to.
-    subprocess.run(
-        ["jj", "new", "-m", "second"], cwd=temp_repo, check=True, capture_output=True
-    )
+    subprocess.run(["jj", "new", "-m", "second"], cwd=temp_repo, check=True, capture_output=True)
     # Now @ is the new empty change; the original "first change" is the parent.
 
     app = LajjzyApp(repo_path=temp_repo)
@@ -140,7 +141,10 @@ async def test_ensure_working_copy_switches_to_target(temp_repo: Path):
         # Verify via jj that @ actually moved.
         out = subprocess.run(
             ["jj", "log", "--no-graph", "-r", "@", "-T", "change_id.short()"],
-            cwd=temp_repo, check=True, capture_output=True, text=True,
+            cwd=temp_repo,
+            check=True,
+            capture_output=True,
+            text=True,
         )
         actual_wc = out.stdout.strip()
         assert actual_wc == non_wc, (
@@ -172,6 +176,63 @@ async def test_status_bar_shows_error(temp_repo: Path):
     async with app.run_test():
         await app.workers.wait_for_complete()
         from lajjzy.widgets.status_bar import StatusBar
+
         app.error = "boom"
         bar = app.query_one(StatusBar)
         assert "boom" in str(bar.render())
+
+
+@jj_required
+async def test_describe_without_editor_sets_error(temp_repo: Path, monkeypatch):
+    monkeypatch.delenv("EDITOR", raising=False)
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("e")
+        assert app.error == "No $EDITOR set"
+
+
+@jj_required
+async def test_mutation_jjerror_surfaces_to_app_error(temp_repo: Path, monkeypatch):
+    from lajjzy.backend.types import JjError
+    import lajjzy.backend.jj as jj_mod
+
+    async def boom(*args, **kwargs):
+        raise JjError("boom")
+
+    monkeypatch.setattr(jj_mod, "abandon", boom)
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        graph_before = app.graph
+        await pilot.press("d")
+        await app.workers.wait_for_complete()
+        assert app.error == "boom"
+        # Graph must not be corrupted (still the same object or at least valid).
+        assert app.graph is graph_before or app.graph is not None
+
+
+@jj_required
+async def test_rebase_cancel_via_escape_clears_mode(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("r")
+        assert app.rebase_source is not None
+        await pilot.press("escape")
+        assert app.rebase_source is None
+        assert app.error == "Rebase cancelled"
+
+
+@jj_required
+async def test_rebase_confirm_same_dest_cancels(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("r")
+        assert app.rebase_source is not None
+        await pilot.press("enter")
+        assert app.rebase_source is None
+        assert app.error is not None
+        assert "cancelled" in app.error.lower()
