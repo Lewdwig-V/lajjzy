@@ -386,3 +386,35 @@ def test_main_does_not_intercept_normal_exit(monkeypatch):
     monkeypatch.setattr(appmod.LajjzyApp, "run", lambda self: None)
     # Should return normally, no SystemExit.
     appmod.main()
+
+
+# ---------------------------------------------------------------------------
+# Task 5: runtime invariant sites — I1 (mutation gate) + I3 (cursor on node)
+# ---------------------------------------------------------------------------
+
+
+async def _noop() -> str:
+    return "noop"
+
+
+@jj_required
+async def test_do_mutation_requires_gate(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        app.pending_mutation = False  # bypassing the gate is an invariant breach
+        with pytest.raises(InvariantError):
+            await app._do_mutation(lambda: _noop())
+
+
+@jj_required
+async def test_navigation_keeps_cursor_on_node(temp_repo: Path):
+    import subprocess
+
+    subprocess.run(["jj", "new", "-m", "x"], cwd=temp_repo, check=True, capture_output=True)
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        for key in ("j", "k", "g", "G", "j", "j"):
+            await pilot.press(key)
+            assert app.cursor in app.graph.node_indices  # I3 holds after every move

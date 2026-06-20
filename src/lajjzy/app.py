@@ -14,7 +14,7 @@ from textual.reactive import reactive
 
 from lajjzy.backend.jj import load_graph
 from lajjzy.backend.types import GraphData, JjError
-from lajjzy.invariants import InvariantError
+from lajjzy.invariants import InvariantError, invariant
 
 
 class LajjzyApp(App[None]):
@@ -130,6 +130,7 @@ class LajjzyApp(App[None]):
             pos = 0
         pos = max(0, min(len(nodes) - 1, pos + delta))
         self.cursor = nodes[pos]
+        invariant(self.cursor in self.graph.node_indices, "cursor left the set of node lines")
 
     def action_cursor_down(self) -> None:
         self._node_index_offset(1)
@@ -167,6 +168,11 @@ class LajjzyApp(App[None]):
 
     @work(group="mutation")
     async def _run_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
+        await self._do_mutation(op)
+
+    async def _do_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
+        # I1: this coroutine must only run behind the gate.
+        invariant(self.pending_mutation, "mutation ran without the pending_mutation gate set")
         try:
             try:
                 message = await op()
