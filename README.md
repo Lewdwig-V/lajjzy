@@ -2,38 +2,23 @@
 
 A keyboard-driven, lazygit-style TUI for [Jujutsu (jj)](https://github.com/jj-vcs/jj).
 
-Built for jj's data model: immutable changes, automatic rebasing, first-class conflicts, and an operation log that makes every action reversible.
+Built for jj's data model: immutable changes, automatic rebasing, first-class conflicts, and an operation log that makes every action reversible. Built on [Textual](https://textual.textualize.io/) with a reactive, keyboard-first UI.
+
+[![CI](https://github.com/Lewdwig-V/lajjzy/actions/workflows/ci.yml/badge.svg)](https://github.com/Lewdwig-V/lajjzy/actions/workflows/ci.yml)
+
+> **Status:** early — the Python/Textual implementation is **not yet at feature
+> parity** with the original Rust prototype. See [Feature status & gaps](#feature-status--gaps).
 
 ## Install
 
-### Pre-built binaries (recommended)
-
 ```bash
-# Via cargo-binstall (fastest)
-cargo binstall lajjzy
-
-# Via Homebrew (macOS)
-brew tap lewdwig-v/lajjzy && brew install lajjzy
-
-# Via Nix
-nix run github:Lewdwig-V/lajjzy
-# or persistent install:
-nix profile install github:Lewdwig-V/lajjzy
+# Recommended: isolated tool install
+uv tool install lajjzy
+# or
+pipx install lajjzy
 ```
 
-### From source
-
-```bash
-# Via cargo (from crates.io)
-cargo install lajjzy
-
-# Or build locally (requires Rust 1.85+)
-git clone https://github.com/Lewdwig-V/lajjzy
-cd lajjzy
-cargo build --release
-```
-
-**Requirements:** `jj` CLI in PATH (tested with jj 0.39.0).
+**Requirements:** Python 3.11+ and the `jj` CLI in PATH (tested with jj 0.42.0).
 
 ## Usage
 
@@ -60,7 +45,7 @@ lajjzy
 
 - **Graph panel** (1/3 width): Interactive change DAG. Cursor moves between change nodes, skipping connector lines.
 - **Detail panel** (2/3 width): File list → diff view drill-down for the selected change.
-- **Status bar**: Change metadata, active revset filter, operation progress, error messages.
+- **Status bar**: Change metadata, operation progress, error messages.
 
 ## Features
 
@@ -74,205 +59,189 @@ Navigate the change DAG with vim-style keys. The cursor always lands on change n
 | `k` / `↑` | Move to previous change |
 | `g` | Jump to top |
 | `G` | Jump to bottom |
-| `@` | Jump to working copy |
-| `Tab` / `Shift-Tab` | Switch focus between graph and detail pane |
+| `Tab` | Focus detail pane |
 | `R` | Refresh graph from disk |
+| `q` | Quit |
 
 ### Detail Pane
 
-The detail pane shows the file list for the selected change. Press `Enter` to drill into a file's diff, `Esc` to go back.
-
-**File list:**
+The detail pane shows the file list for the selected change. Navigate files with `j`/`k`, press `Enter` to view the diff, `Esc` to go back to the file list.
 
 | Key | Action |
 |-----|--------|
 | `j` / `↓` | Next file |
 | `k` / `↑` | Previous file |
 | `Enter` | Open diff view for file |
-| `Esc` | Back to graph focus |
-
-**Diff view:**
-
-| Key | Action |
-|-----|--------|
-| `j` / `↓` | Scroll down |
-| `k` / `↑` | Scroll up |
-| `n` | Jump to next hunk |
-| `N` | Jump to previous hunk |
 | `Esc` | Back to file list |
 
 ### Mutations
 
-All mutations are performed from the graph panel. Every mutation is reversible via `u` (undo) — no confirmation dialogs.
+All mutations are performed from the graph panel.
 
 | Key | Action |
 |-----|--------|
-| `d` | Abandon selected change |
 | `n` | New change (inserts after selected) |
-| `e` | Edit description (inline editor) |
+| `d` | Abandon selected change |
+| `e` | Describe (opens `$EDITOR` for long-form editing) |
 | `Ctrl-E` | Switch working copy (`@`) to selected change |
-| `s` | Split change (interactive hunk picker) |
-| `S` | Partial squash into parent (interactive hunk picker) |
-| `u` | Undo last operation |
-| `Ctrl-Shift-R` | Redo |
-| `r` | Rebase change onto a new destination |
-| `Ctrl-R` | Rebase change with all descendants |
-| `B` | Set bookmark on selected change |
-| `P` | Git push |
-| `f` | Git fetch |
-| `a` | Absorb changes into ancestor commits |
-| `D` | Duplicate selected change |
-| `x` | Revert (apply reverse after working copy) |
+| `S` | Squash selected change into its parent (whole change; no hunk picker yet) |
+| `r` | Rebase change — navigate to destination, `Enter` to confirm, `Esc` to cancel |
+| `Ctrl-R` | Rebase change with all descendants — same pick-destination flow |
 
-**Concurrency:** Local mutations, push, and fetch run on three independent background lanes. You can push while a fetch is in-flight, or start a new mutation the moment the previous one completes. Each lane has its own gate — no operation blocks another lane.
+**Concurrency:** Load and mutation operations run on independent worker groups. At most one mutation runs at a time (exclusive gate); graph loads run separately without blocking.
 
 ### Describe Editor
 
-An inline multi-line editor for change descriptions, powered by tui-textarea.
-
-| Key | Action |
-|-----|--------|
-| `Ctrl-S` / `Ctrl-Enter` / `Alt-Enter` | Save description |
-| `Escape` | Discard changes |
-| `Shift-E` | Open in `$EDITOR` for long-form editing |
-
-### Omnibar (Revset Search & Filter)
-
-Press `/` to open the omnibar. Type any [jj revset expression](https://jj-vcs.github.io/jj/latest/revsets/) to filter the graph. The omnibar replaces the graph with matching changes when you press Enter.
-
-| Key | Action |
-|-----|--------|
-| `/` | Open omnibar |
-| Type text | Filter by revset expression |
-| `↓` / `↑` / `Ctrl-N` / `Ctrl-P` | Navigate results |
-| `Enter` | Submit revset query (filter graph) |
-| `Tab` | Accept autocomplete suggestion |
-| `Esc` | Dismiss omnibar |
-
-**Autocomplete:** As you type, the omnibar offers prefix-matched suggestions for:
-- **Revset functions** — all 24 built-in jj revset functions (e.g., `ancestors(`, `mine()`, `author(`)
-- **Bookmarks** — all bookmark names in the repo
-- **Change IDs** — short change IDs (after 2+ characters typed)
-
-Nullary functions insert with both parens (`mine()`), functions with arguments insert with an open paren (`author(`). Tab accepts, Enter always submits the full query.
+Press `e` to edit the description of the selected change. The description is opened in your `$EDITOR` via terminal suspend (the TUI hands the terminal to the editor and resumes when the editor exits). `$EDITOR` must be set in your environment.
 
 ### Rebase
 
-Press `r` to rebase the selected change, or `Ctrl-R` to rebase with all descendants. The graph enters **target-picking mode**: navigate to the destination change and press Enter to confirm, or Esc to cancel.
+Press `r` to rebase the selected change, or `Ctrl-R` to rebase with all descendants. The graph enters **target-picking mode**: navigate to the destination change and press `Enter` to confirm, or `Esc` to cancel.
 
-While picking a target, type to filter — an inline fuzzy filter narrows the visible changes. The source change and its descendants are dimmed to prevent invalid rebase targets.
+### Squash
 
-### Split & Partial Squash
+Press `S` to squash the selected change into its parent. This is a whole-change squash (no hunk picker yet). The parent's description is kept.
 
-Press `s` to split a change, or `S` to partially squash into its parent. Both open the **hunk picker** — a single-column scrollable list showing all changed files and their hunks.
+## Feature status & gaps
 
-| Key | Action |
-|-----|--------|
-| `j` / `↓` | Next item |
-| `k` / `↑` | Previous item |
-| `J` | Jump to next file |
-| `K` | Jump to previous file |
-| `Space` | Toggle hunk selection |
-| `a` | Select all hunks |
-| `A` | Deselect all hunks |
-| `Enter` | Confirm selection |
-| `Esc` / `Ctrl-C` | Cancel |
+The Python/Textual implementation does **not yet have feature parity** with the
+original Rust prototype. The MVP covers the core read-and-mutate loop; the tables
+below track what's shipped (✅), partial (🚧), and not yet ported (❌). The
+[roadmap](#roadmap) orders the remaining work — and the Rust prototype lives in
+git history (pre-`reboot/python-textual`) as the behavioural reference for ports.
 
-Selected hunks are tinted cyan. File headers show selection counts (e.g., `[2/5]`).
+### Navigation & views
 
-### Modals
+| Feature | Status | Notes |
+|---|:--:|---|
+| Graph navigation (`j`/`k`/`g`/`G`) | ✅ | cursor lands only on change nodes |
+| Refresh (`R`), quit (`q`) | ✅ | |
+| Focus graph ↔ detail (`Tab`) | ✅ | reverse-focus (`Shift-Tab`) not bound |
+| Jump to working copy (`@`) | ❌ | |
+| Detail file list + diff drill-down | ✅ | |
+| Diff hunk jump (`n`/`N`) | ❌ | Textual scrolls the pane; no hunk-to-hunk jumps |
+| Help overlay (`?`) | ❌ | |
+| Mouse support | ❌ | click-to-select, scroll, click-to-focus |
 
-| Key | Action |
-|-----|--------|
-| `b` | Bookmark picker — jump to a bookmarked change, or `d` to delete a bookmark |
-| `O` | Operation log — browse jj's operation history, Enter to restore |
-| `?` | Context-sensitive help |
+### Mutations
 
-### Mouse Support
+| Feature | Status | Notes |
+|---|:--:|---|
+| New (`n`), abandon (`d`) | ✅ | |
+| Switch working copy / edit (`Ctrl-E`) | ✅ | |
+| Describe (`e`) | 🚧 | opens `$EDITOR`; no inline editor (Rust used `tui-textarea`) |
+| Squash into parent (`S`) | 🚧 | whole-change only; no interactive hunk selection |
+| Rebase (`r`) / with descendants (`Ctrl-R`) | 🚧 | target-picking works; no fuzzy filter or source-dimming |
+| **Undo (`u`) / redo** | ❌ | **highest-value gap** — jj makes every op reversible |
+| Split (`s`) | ❌ | needs the hunk picker |
+| Partial squash | ❌ | needs the hunk picker |
+| Set / delete bookmark (`B` / `b`) | ❌ | |
+| Git push (`P`) / fetch (`f`) | ❌ | also no background push/fetch worker lanes |
+| Absorb (`a`), duplicate (`D`), revert (`x`) | ❌ | |
 
-Basic mouse support follows lazygit conventions:
+### Panels & integrations
 
-| Action | Effect |
-|--------|--------|
-| Left click on graph node | Select that change |
-| Left click on file in detail pane | Select that file |
-| Left click on other panel | Switch focus to that panel |
-| Scroll wheel | Navigate up/down (3 lines per tick) |
-| Click outside modal | Dismiss the modal |
+| Feature | Status | Notes |
+|---|:--:|---|
+| Status bar (change info, errors) | ✅ | |
+| Omnibar — revset search + completion | ❌ | functions, bookmarks, change-IDs |
+| Hunk picker (split / partial squash) | ❌ | |
+| Conflict view (base / left / right) | ❌ | |
+| Bookmark picker / input | ❌ | |
+| Operation log (browse / restore) | ❌ | |
+| GitHub / forge integration | ❌ | PR status, open / create via `gh` |
 
-### Bookmark Management
+### Architecture deltas from the Rust version
 
-| Key | Action |
-|-----|--------|
-| `b` | Open bookmark picker (navigate + jump, `d` to delete) |
-| `B` | Set a new bookmark on the selected change (type name, Enter to confirm) |
-
-### GitHub Integration
-
-Requires `gh` CLI installed and authenticated (`gh auth login`). Features are automatically hidden when `gh` is not available.
-
-| Key | Action |
-|-----|--------|
-| `F` | Fetch PR status from GitHub |
-| `W` | Open PR in browser (or create if none exists) |
-
-After pressing `F`, PR status indicators appear next to bookmarks in the graph:
-- `#42 ✓` approved (green)
-- `#42 ●` review required (yellow)
-- `#42 ✗` changes requested (red)
-
-If the browser can't open (SSH, containers), the PR URL is shown in the status bar as a clickable link.
+- **Concurrency lanes:** Rust ran three independent lanes (local mutation, push,
+  fetch). Python currently has `mutation` (exclusive), `load`, and `diff`; the
+  push and fetch lanes arrive with bookmark / forge work.
+- **Describe editor:** Rust embedded a `tui-textarea` inline editor; Python hands
+  the terminal to `$EDITOR` via suspend. An inline editor may return as a Textual
+  `TextArea`.
+- **Spec management:** the Rust tree was unslop-managed; the Python line is
+  hand-written for now (unslop may return once the architecture settles).
 
 ## Architecture
 
-Three crates with strict dependency boundaries:
+Three layers with a strict facade boundary:
 
-- **`lajjzy-core`** — `RepoBackend` trait and `JjCliBackend` implementation. All jj CLI interaction goes through this crate.
-- **`lajjzy-tui`** — ratatui widgets, input handling, pure Elm-style state machine (`AppState` + `Action` + `dispatch`). Never imports `RepoBackend` or spawns subprocesses.
-- **`lajjzy-cli`** — Binary entry point. Terminal setup, event loop, effect executor. The only crate that performs I/O.
+- **`backend/`** — the only code that shells out to `jj`. Async functions
+  (`asyncio.create_subprocess_exec`) returning typed dataclasses; pure parsers
+  in `parse.py`. No Textual imports.
+- **reactive UI** — Textual `reactive()` attributes on the `App` and widgets,
+  with `watch_*`/`compute_*` for derived state. No central store object.
+- **workers** — every jj call runs in a `@work` worker. Concurrency lanes are
+  worker groups: `group="mutation"` (with `exclusive=True`, the
+  single-mutation gate), `group="load"`, `group="diff"`.
 
-`dispatch()` is a pure function: `fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect>`. All backend calls flow through the effect executor in `lajjzy-cli`.
+There is no `dispatch`/`Effect` machine — actions invoke workers, workers write
+reactive state, and the affected widgets re-render automatically.
 
 ## Development
 
 ```bash
-cargo build                    # build all crates
-cargo test                     # run all tests (requires jj in PATH)
-cargo clippy -- -D warnings    # lint
-cargo fmt --check              # format check
+uv sync                      # create the environment
+uv run lajjzy                # run the TUI
+uv run pytest                # run tests (jj in PATH required for integration tests)
+uv run ruff check .          # lint
+uv run ruff format .         # format (use --check in CI)
 ```
 
-See `CLAUDE.md` for architectural constraints and crate structure.
+CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`, and
+`pytest` on every pull request and on pushes to `main` (installing `jj` so the
+integration tests actually run).
 
 ## Releasing
 
-1. Ensure `Cargo.lock` is up to date and committed
-2. Update version in `Cargo.toml` (`[workspace.package] version`)
-3. `cargo build --release` locally to verify
-4. `git tag vX.Y.Z && git push --tags`
-5. Wait for release workflow (builds binaries, creates GitHub Release, publishes to crates.io)
-6. Copy sha256 sums from release notes into `homebrew-lajjzy` formula
-7. Verify: `cargo install lajjzy`, `cargo binstall lajjzy`, `brew install lajjzy`, `nix run github:Lewdwig-V/lajjzy`
+1. Update `version` in `pyproject.toml`
+2. `uv build` — produces `dist/lajjzy-X.Y.Z-py3-none-any.whl` and `.tar.gz`
+3. `uv publish` — uploads to PyPI (requires `UV_PUBLISH_TOKEN` or `--token`)
+4. Verify: `uv tool install lajjzy`, `pipx install lajjzy`
 
 ## Roadmap
 
-- **M8 — jj-lib Backend Migration**: incremental migration from CLI shelling to jj-lib. M4 established read path (conflict_sides), M7 established write path (transactions). Remaining methods migrate by value:
-  - **M8a**: `load_graph` — eliminates jj log output parsing, structured revset evaluation
-  - **M8b**: `file_diff` / `change_diff` — structured hunks without parsing unified diff
-  - **M8c**: `split` / `squash_partial` — direct tree construction
-  - **M8d**: `resolve_file` — upgrade from `fs::write` to jj-lib tree mutation
-  - **M8e**: `rebase_single` / `rebase_with_descendants` — structured error reporting
-  - **M8f**: simple mutations (`describe`, `new_change`, `edit_change`, `abandon`, `undo`, `redo`, `bookmark_*`)
-  - **M8g**: `git_push` / `git_fetch` — may stay CLI-backed long-term
-- **M9a — Polish**: configurable keymaps
-- **M9b — Polish**: theming support, colour sets, nerd font support, noto emoji, statusline fonts
-- **M9d — Polish**: collapsible jj oplog pane with command-equivalent observations (jj op log/jj op diff/jj op show), restoration (jj op restore --to/jj abandon), a filter toggle to hide automatic snapshots and only show manual commands.
-- **M9e — Polish**: `jj move` hunks in hunk picker, advanced rebasing workflows
-- **M9f — Polish**: context-aware revset completions (e.g., only authors inside `author()`)
-- **M9g — Polish**: workspace name in status bar, workspace picker modal (list, switch, create)
-- **M10 — Blame / Annotate**: file content with annotation gutter (change ID, author, date), drill into blame line to jump to originating change
-- **M11 — Parallel Branches**: lane view for concurrent work (git-butler model)
-- **M12 — GitHub Stacked PRs**: Graphite-style stack-aware PR management
+Roughly priority-ordered: first close the gaps that make lajjzy a viable daily
+driver, then add depth, then explore what the Textual stack newly makes possible.
+See [Feature status & gaps](#feature-status--gaps) for the full inventory.
+
+### Shipped
+
+Graph navigation, detail + diff drill-down, core mutations (`new`, `abandon`,
+`edit`, `describe`, `squash`, `rebase` / `rebase --descendants`), reactive status
+bar, and CI (ruff + pytest).
+
+### Next — the daily-driver essentials
+
+1. **Undo / redo** (`jj undo` / `jj redo`) — the single most-felt gap; jj's whole
+   selling point is reversibility, and the TUI can't yet undo.
+2. **Omnibar** — revset search & filter with completion (functions, bookmarks,
+   change-IDs).
+3. **Bookmark management** — set / delete / move, plus a picker to jump.
+4. **Operation log** — browse `jj op log` and restore to a previous operation.
+5. **Conflict view** — base / left / right resolution panes.
+6. **Hunk picker** — interactive `split` and partial `squash` (upgrades the
+   current whole-change squash).
+
+### Then — depth & ergonomics
+
+- **Mouse support** — click-to-select, scroll, click-to-focus.
+- **Remaining mutations** — absorb, duplicate, revert; push / fetch on their own
+  background worker lanes.
+- **Inline describe editor** — a Textual `TextArea` alternative to `$EDITOR`.
+- **Configurable keymaps.**
+- **Theming** — Textual CSS themes, colour sets, nerd-font / emoji support.
+- **Forge integration** — `gh`-backed PR status, open / create (and beyond GitHub).
+
+### Exploration — what Textual unlocks
+
+The move off ratatui makes a few things newly cheap:
+
+- **Run in the browser** — `textual serve` can host the same app over the web with
+  no separate UI code.
+- **Blame / annotate** — a gutter that drills into the originating change.
+- **Parallel-branch lane view** for concurrent work.
+- **Stacked-PR management** (Graphite-style).
 
 ## License
 

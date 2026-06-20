@@ -4,39 +4,93 @@ A keyboard-driven, lazygit-style TUI for Jujutsu (jj).
 
 ## Requirements
 
-- Rust 1.85+ (edition 2024)
-- `jj` CLI in PATH (for core integration tests and running the binary)
+- Python 3.11+
+- `jj` CLI in PATH (tested with jj 0.42.0)
 
-## Build & Run
+## Dev Commands
 
 ```bash
-cargo build                    # build all crates
-cargo run -p lajjzy            # run the TUI binary
-cargo test                     # run all tests (requires jj in PATH for core integration tests)
-cargo clippy -- -D warnings    # lint
-cargo fmt --check              # format check
+uv sync                      # create / sync the environment
+uv run lajjzy                # run the TUI
+uv run pytest                # run tests (jj in PATH required for integration tests)
+uv run ruff check .          # lint
+uv run ruff format .         # format
+uv run ruff format --check . # CI format gate (don't write, just check)
+uv build                     # build wheel + sdist
+uv publish                   # publish to PyPI
 ```
 
-## Crate Structure
+CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`, and
+`pytest` (with `jj` installed) on PRs and pushes to `main`. Keep these green.
 
-- `lajjzy-core` — `RepoBackend` trait and `JjCliBackend` implementation. All jj interaction goes through this crate. The TUI layer never shells out to jj directly.
-- `lajjzy-tui` — ratatui widgets, input handling, state machine (AppState + Action + dispatch). Depends on `lajjzy-core` only.
-- `lajjzy-cli` — Binary entry point. Terminal setup, event loop, panic handler. Depends on `lajjzy-tui` and `lajjzy-core`.
+## Feature parity & the Rust reference
+
+This Python implementation is **not yet at feature parity** with the original
+Rust prototype. The Rust tree was removed in the `reboot/python-textual` cut-over
+and lives in **git history** (commits up to `731edd1`, under `crates/`) — it is
+the behavioural reference when porting a feature. The README's
+*Feature status & gaps* table is the authoritative inventory of what's shipped,
+partial, and not yet ported; the *Roadmap* orders the work. When porting a Rust
+feature, read its old widget/backend code for the exact behaviour, but build it
+the Python/Textual way (reactive state + workers), not as a literal translation
+of the Elm `dispatch`/`Effect` machine.
+
+## Source Layout
+
+```
+src/lajjzy/
+  app.py            # LajjzyApp — root App, reactive state, key bindings, worker dispatch
+  __main__.py       # python -m lajjzy entry point
+  styles.tcss       # Textual CSS
+  backend/
+    jj.py           # ONLY place that shells out to jj (asyncio.create_subprocess_exec)
+    parse.py        # pure parsers: graph output → GraphData, diff output → FileDiff list
+    types.py        # dataclasses: GraphData, GraphLine, ChangeDetail, FileDiff, JjError
+  widgets/
+    graph.py        # GraphView widget — renders the change DAG
+    detail.py       # DetailPanel widget — file list + diff view
+    status_bar.py   # StatusBar widget — reactive error/status display
+```
 
 ## Architectural Constraints
 
-- **Facade boundary:** `lajjzy-tui` never imports `RepoBackend`, `std::process::Command`, or jj-lib. The `Effect::SuspendForEditor` variant is *defined* in `lajjzy-tui` (as part of the `Effect` enum) but *executed* in `lajjzy-cli` — the `execute_effects` function in `main.rs` intercepts it before it reaches the executor and handles the terminal suspend/resume + `std::process::Command` launch there. No subprocess is ever spawned from `lajjzy-tui` code.
-- **No panics on repo ops:** All `RepoBackend` methods return `Result`. Errors update `AppState.error`, never panic.
-- **Dispatch purity:** `dispatch()` takes `(&mut AppState, Action)` and returns `Vec<Effect>`. It never calls backend methods or performs I/O.
-- **Effect executor boundary:** Effects executed in `lajjzy-cli` only. `lajjzy-tui` defines the `Effect` enum but never executes effects.
-- **Mutation gate:** At most one local mutation in flight, enforced by `AppState.pending_mutation`. Background ops (push/fetch) gated independently.
-- **Interaction patterns:** Every mutation declares its slot (Instant, Mini-modal, Background). New patterns require design justification.
-- **Working-copy gate for filesystem ops:** Any operation that reads or writes repo files on disk (file editing, merge tools, anything that touches the working tree) requires the target change to be `@`. If it is not, dispatch must emit `Effect::Edit` first to switch the working copy, then proceed. This is visible to the user — the `@` marker moves before the tool launches.
+- **Facade boundary:** `backend/jj.py` is the only module that runs `jj` subprocesses.
+  Widget and app code never call `asyncio.create_subprocess_exec` or `subprocess` directly.
+  The one exception is `app.py`'s `_edit_message_in_editor`, which calls `subprocess.run`
+  to launch `$EDITOR` — this is an app-layer responsibility, not a widget responsibility.
+
+- **No central store:** There is no global state object or Elm-style dispatch machine.
+  State lives as `reactive()` attributes on `LajjzyApp`. Widgets watch the app's reactives
+  via `self.watch(self.app, ...)` and re-render automatically.
+
+- **Worker-group concurrency lanes:**
+  - `group="mutation", exclusive=True` — the single-mutation gate; at most one mutation
+    runs at a time. All write operations (`new`, `abandon`, `describe`, `squash`, `rebase`,
+    `edit`) run in this group.
+  - `group="load", exclusive=True` — graph reloads. At most one in flight; a new
+    reload cancels any running reload. Runs independently of mutations.
+  - `group="diff", exclusive=True` — diff fetches for the detail pane. A new fetch
+    cancels any in-flight diff fetch. Runs independently.
+
+- **Editor suspend in app layer only:** `$EDITOR` is launched via `self.suspend()` in
+  `LajjzyApp._edit_message_in_editor`. Widget code never suspends the terminal.
+
+- **Errors set `App.error`, never raise:** `JjError` exceptions from `backend/jj.py` are
+  caught in workers and written to `self.error` (a reactive `str | None`). The `StatusBar`
+  widget watches this reactive and displays the message. No unhandled exceptions reach the
+  Textual event loop from backend calls.
+
+- **Working-copy gate for filesystem ops:** Any operation that reads or writes repo files
+  on disk requires the target change to be `@`. The `ensure_working_copy()` method on
+  `LajjzyApp` handles this — it calls `jj edit` first if needed. Deferred features (hunk
+  picker, conflict resolution) must call this before touching the working tree.
 
 ## Key Patterns
 
-- Elm-style state machine: `fn dispatch(state: &mut AppState, action: Action) -> Vec<Effect>`
-- Graph data loaded in bulk via `load_graph()` — one jj subprocess call, not per-keypress.
-- Cursor skips connector lines; always lands on change nodes.
-- Three concurrency lanes: local mutations, push, fetch — independent gates, no blocking between lanes.
-- Dispatch is pure: all backend calls and I/O flow through the effect executor in `lajjzy-cli`.
+- Graph data loaded in bulk via `load_graph()` — one `jj log` subprocess call, parsed
+  into `GraphData`. Not re-fetched per keypress.
+- Cursor skips connector lines; always lands on change nodes (`graph.node_indices`).
+- Mutations reload the graph inside the same worker, so the graph is consistent when
+  the worker completes and the UI updates in one step.
+- `reactive()` + `watch_*` is the only data-flow mechanism — no message buses or event
+  queues beyond Textual's built-in event system.

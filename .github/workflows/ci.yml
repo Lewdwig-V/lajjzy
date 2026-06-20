@@ -1,63 +1,40 @@
 name: CI
 
 on:
-  pull_request:
   push:
     branches: [main]
-
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
+  pull_request:
 
 jobs:
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --all --check
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-
   test:
-    name: Test
-    needs: [fmt, clippy]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install jj
-        run: cargo install --locked --bin jj jj-cli@0.39.0
-      - run: cargo test --workspace
 
-  # Aggregator job — the single required status check for branch protection.
-  ci-pass:
-    name: CI
-    needs: [fmt, clippy, test]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fail if any dependency did not succeed
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install jj
         run: |
-          if [[ "${{ needs.fmt.result }}" != "success" ||
-                "${{ needs.clippy.result }}" != "success" ||
-                "${{ needs.test.result }}" != "success" ]]; then
-            echo "One or more CI jobs failed or were skipped."
-            echo "  fmt:    ${{ needs.fmt.result }}"
-            echo "  clippy: ${{ needs.clippy.result }}"
-            echo "  test:   ${{ needs.test.result }}"
-            exit 1
-          fi
+          curl -fsSL "https://github.com/jj-vcs/jj/releases/download/v0.42.0/jj-v0.42.0-x86_64-unknown-linux-musl.tar.gz" -o jj.tar.gz
+          tar xzf jj.tar.gz ./jj
+          sudo install -m 0755 jj /usr/local/bin/jj
+          rm -f jj.tar.gz jj
+          jj --version
+          # Integration tests run `jj git init` / `jj describe`; give jj an identity.
+          jj config set --user user.name "CI"
+          jj config set --user user.email "ci@example.com"
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Format check (ruff format)
+        run: uv run ruff format --check .
+
+      - name: Run tests
+        run: uv run pytest
