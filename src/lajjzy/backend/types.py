@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
+from functools import cached_property
 from typing import Literal
 
 
@@ -65,23 +66,28 @@ class FileDiff:
     hunks: list[DiffHunk]
 
 
-@dataclass
+@dataclass(frozen=True)
 class GraphData:
     lines: list[GraphLine]
     details: dict[str, ChangeDetail]
     working_copy_index: int | None
     op_id: str
-    node_indices: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        # Always derive node_indices from lines — never trust a caller-supplied value.
-        self.node_indices = [i for i, line in enumerate(self.lines) if line.change_id is not None]
-        if self.working_copy_index is not None:
-            if (
-                self.working_copy_index >= len(self.lines)
-                or self.lines[self.working_copy_index].change_id is None
-            ):
-                raise ValueError(f"working_copy_index {self.working_copy_index} invalid")
+        line_ids = {line.change_id for line in self.lines if line.change_id is not None}
+        if line_ids != set(self.details):
+            raise ValueError(
+                f"GraphData details/lines change-ID mismatch: "
+                f"lines={sorted(line_ids)} details={sorted(self.details)}"
+            )
+        wci = self.working_copy_index
+        if wci is not None:
+            if not (0 <= wci < len(self.lines)) or self.lines[wci].change_id is None:
+                raise ValueError(f"working_copy_index {wci} is not a valid node line")
+
+    @cached_property
+    def node_indices(self) -> list[int]:
+        return [i for i, line in enumerate(self.lines) if line.change_id is not None]
 
     def change_id_at(self, index: int) -> str | None:
         if 0 <= index < len(self.lines):
