@@ -19,13 +19,13 @@ class FileStatus(Enum):
     UNKNOWN = "?"
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class FileChange:
     path: str
     status: FileStatus
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ChangeDetail:
     commit_id: str
     author: str
@@ -41,26 +41,26 @@ class ChangeDetail:
     parents: list[str]
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class GraphLine:
     raw: str
     change_id: str | None
     glyph_prefix: str
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class DiffLine:
     kind: Literal["context", "add", "remove"]
     text: str
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class DiffHunk:
     header: str
     lines: list[DiffLine]
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class FileDiff:
     path: str
     hunks: list[DiffHunk]
