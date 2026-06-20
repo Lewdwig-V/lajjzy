@@ -24,6 +24,7 @@ class LajjzyApp(App[None]):
         ("G", "cursor_bottom", "Bottom"),
         ("R", "reload_graph", "Refresh"),
         ("q", "quit", "Quit"),
+        ("tab", "focus_detail", "Detail"),
     ]
 
     graph: reactive[GraphData | None] = reactive(None)
@@ -36,10 +37,14 @@ class LajjzyApp(App[None]):
 
     def compose(self) -> ComposeResult:
         from lajjzy.widgets import DetailPanel, GraphView
+
         yield GraphView()
         yield DetailPanel()
 
     def on_mount(self) -> None:
+        from lajjzy.widgets import GraphView
+
+        self.query_one(GraphView).focus()
         self.reload()
 
     @work(group="load", exclusive=True)
@@ -89,6 +94,29 @@ class LajjzyApp(App[None]):
 
     def action_reload_graph(self) -> None:
         self.reload()
+
+    def action_focus_detail(self) -> None:
+        from lajjzy.widgets import DetailPanel
+
+        self.query_one(DetailPanel).focus()
+
+    @work(group="diff", exclusive=True)
+    async def open_diff(self, path: str) -> None:
+        from lajjzy.backend.jj import change_diff
+        from lajjzy.widgets import DetailPanel
+
+        change_id = self.selected_change_id()
+        if change_id is None:
+            return
+        try:
+            all_files = await change_diff(self.repo_path, change_id)
+        except JjError as exc:
+            self.error = str(exc)
+            return
+        panel = self.query_one(DetailPanel)
+        panel.diff = [fd for fd in all_files if fd.path == path] or all_files
+        panel.mode = "diff"
+        panel.refresh()
 
 
 def main() -> None:

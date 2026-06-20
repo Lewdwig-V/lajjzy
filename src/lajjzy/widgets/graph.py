@@ -7,6 +7,8 @@ from textual.widget import Widget
 class GraphView(Widget):
     """Renders the change graph; highlights the cursor line."""
 
+    can_focus = True
+
     def on_mount(self) -> None:
         self.watch(self.app, "graph", lambda _: self.refresh())
         self.watch(self.app, "cursor", lambda _: self.refresh())
