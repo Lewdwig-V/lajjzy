@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -311,6 +312,8 @@ class LajjzyApp(App[None]):
         except JjError as exc:
             self.error = str(exc)
             return
+        except InvariantError:
+            raise
         except Exception as exc:
             self.error = f"Unexpected error: {exc}"
             return
@@ -321,4 +324,20 @@ class LajjzyApp(App[None]):
 
 
 def main() -> None:
-    LajjzyApp().run()
+    app = LajjzyApp()
+    try:
+        app.run()
+    except InvariantError as exc:
+        # Crash policy: a broken internal model. Textual restores the terminal
+        # on app teardown; surface the breach loudly and exit non-zero.
+        print(f"lajjzy: internal invariant violated: {exc}", file=sys.stderr)
+        print("This is a bug — please report it.", file=sys.stderr)
+        sys.exit(70)
+    # Re-raise any InvariantError captured via _handle_exception (raised from a
+    # worker, where Textual swallows the exception and does not propagate it out
+    # of run()).
+    worker_invariant_error = app._invariant_error
+    if worker_invariant_error is not None:
+        print(f"lajjzy: internal invariant violated: {worker_invariant_error}", file=sys.stderr)
+        print("This is a bug — please report it.", file=sys.stderr)
+        sys.exit(70)

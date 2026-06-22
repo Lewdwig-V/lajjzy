@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TypedDict
+
 from lajjzy.backend.types import (
     ChangeDetail,
     DiffHunk,
@@ -21,6 +23,28 @@ _STATUS_MAP = {
     "R": FileStatus.RENAMED,
     "C": FileStatus.CONFLICTED,
 }
+
+
+class _PendingChange(TypedDict):
+    commit_id: str
+    author: str
+    email: str
+    timestamp: str
+    description: str
+    bookmarks: list[str]
+    is_empty: bool
+    has_conflict: bool
+    parents: list[str]
+
+
+class _PendingHunk(TypedDict):
+    header: str
+    lines: list[DiffLine]
+
+
+class _PendingFile(TypedDict):
+    path: str
+    hunks: list[_PendingHunk]
 
 
 def parse_file_line(line: str) -> FileChange | None:
@@ -50,7 +74,9 @@ def _first_alnum(s: str) -> int:
 
 def parse_graph_output(output: str, op_id: str) -> GraphData:
     lines: list[GraphLine] = []
-    details: dict[str, ChangeDetail] = {}
+    # Accumulate scalar fields per change before constructing ChangeDetail.
+    pending: dict[str, _PendingChange] = {}
+    files_by_change: dict[str, list[FileChange]] = {}
     working_copy_index: int | None = None
     current_change_id: str | None = None
 
@@ -66,11 +92,11 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
                 raise ValueError(f"Expected 11 metadata fields, got {len(fields)}: {fields!r}")
             change_id = fields[0]
             current_change_id = change_id
-            if change_id in details:
+            if change_id in pending:
                 raise ValueError(f"Duplicate short change ID {change_id!r} (truncation collision).")
             if fields[9]:  # working-copy marker "@"
                 working_copy_index = len(lines)
-            details[change_id] = ChangeDetail(
+            pending[change_id] = _PendingChange(
                 commit_id=fields[1],
                 author=fields[2],
                 email=fields[3],
@@ -79,9 +105,9 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
                 bookmarks=fields[6].split() if fields[6] else [],
                 is_empty=fields[7] == "true",
                 has_conflict=fields[8] == "true",
-                files=[],
                 parents=fields[10].split() if fields[10] else [],
             )
+            files_by_change[change_id] = []
             glyph_end = _first_alnum(display)
             lines.append(
                 GraphLine(
@@ -94,13 +120,18 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
 
         file_change = parse_file_line(raw)
         if file_change is not None and current_change_id is not None:
-            details[current_change_id].files.append(file_change)
+            files_by_change[current_change_id].append(file_change)
         else:
             # Connector / non-file line (graph art only): store as GraphLine with change_id=None.
             lines.append(GraphLine(raw=raw, change_id=None, glyph_prefix=raw))
 
-    if output.strip() and not details:
+    if output.strip() and not pending:
         raise ValueError("Parsed jj output but found zero change nodes; template may have changed.")
+
+    details: dict[str, ChangeDetail] = {
+        cid: ChangeDetail(**fields, files=files_by_change.get(cid, []))
+        for cid, fields in pending.items()
+    }
 
     return GraphData(
         lines=lines, details=details, working_copy_index=working_copy_index, op_id=op_id
@@ -108,28 +139,37 @@ def parse_graph_output(output: str, op_id: str) -> GraphData:
 
 
 def parse_file_diffs(output: str) -> list[FileDiff]:
-    files: list[FileDiff] = []
-    current: FileDiff | None = None
-    hunk: DiffHunk | None = None
+    # Accumulate mutable lists during parsing; construct frozen objects once at the end.
+    # Each entry: {"path": str, "hunks": [{"header": str, "lines": [DiffLine]}]}
+    pending_files: list[_PendingFile] = []
+    current_file: _PendingFile | None = None
+    current_hunk: _PendingHunk | None = None
 
     for line in output.splitlines():
         if line.startswith("diff --git "):
             # "diff --git a/<path> b/<path>" → take the b-side path.
             b = line.split(" b/", 1)
             path = b[1] if len(b) == 2 else line
-            current = FileDiff(path=path, hunks=[])
-            files.append(current)
-            hunk = None
+            current_file = _PendingFile(path=path, hunks=[])
+            pending_files.append(current_file)
+            current_hunk = None
         elif line.startswith("@@"):
-            hunk = DiffHunk(header=line, lines=[])
-            if current is not None:
-                current.hunks.append(hunk)
-        elif hunk is not None:
+            current_hunk = _PendingHunk(header=line, lines=[])
+            if current_file is not None:
+                current_file["hunks"].append(current_hunk)
+        elif current_hunk is not None:
             if line.startswith("+"):
-                hunk.lines.append(DiffLine(kind="add", text=line[1:]))
+                current_hunk["lines"].append(DiffLine(kind="add", text=line[1:]))
             elif line.startswith("-"):
-                hunk.lines.append(DiffLine(kind="remove", text=line[1:]))
+                current_hunk["lines"].append(DiffLine(kind="remove", text=line[1:]))
             elif line.startswith(" "):
-                hunk.lines.append(DiffLine(kind="context", text=line[1:]))
+                current_hunk["lines"].append(DiffLine(kind="context", text=line[1:]))
             # ignore "index", "---", "+++", "\ No newline" lines
-    return files
+
+    return [
+        FileDiff(
+            path=pf["path"],
+            hunks=[DiffHunk(header=ph["header"], lines=ph["lines"]) for ph in pf["hunks"]],
+        )
+        for pf in pending_files
+    ]

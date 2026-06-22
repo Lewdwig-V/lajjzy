@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from rich.text import Text
 from textual.widget import Widget
+
+if TYPE_CHECKING:
+    from lajjzy.app import LajjzyApp
 
 
 class StatusBar(Widget):
@@ -15,15 +20,19 @@ class StatusBar(Widget):
     """
 
     def on_mount(self) -> None:
-        self.watch(self.app, "error", lambda _: self.refresh())
-        self.watch(self.app, "cursor", lambda _: self.refresh())
-        self.watch(self.app, "graph", lambda _: self.refresh())
+        def _refresh(_: object) -> None:
+            self.refresh()
+
+        self.watch(self.app, "error", _refresh)
+        self.watch(self.app, "cursor", _refresh)
+        self.watch(self.app, "graph", _refresh)
 
     def render(self) -> Text:
-        if self.app.error:
-            return Text(self.app.error, style="bold red")
-        change_id = self.app.selected_change_id()
-        graph = self.app.graph
+        app = cast("LajjzyApp", self.app)
+        if app.error:
+            return Text(app.error, style="bold red")
+        change_id = app.selected_change_id()
+        graph = app.graph
         if change_id is None or graph is None:
             return Text("")
         d = graph.details.get(change_id)
