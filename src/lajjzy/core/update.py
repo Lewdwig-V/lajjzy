@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 from lajjzy.core.commands import Cmd, EditMessage, LoadGraph, RunMutation
 from lajjzy.core.messages import (
@@ -140,7 +141,9 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
     return model, []
 
 
-def _start_mutation(model: Model, kind: str, args: tuple | None) -> tuple[Model, list[Cmd]]:
+def _start_mutation(
+    model: Model, kind: str, args: tuple[Any, ...] | None
+) -> tuple[Model, list[Cmd]]:
     """Gate and launch a write op. ``args is None`` means nothing is selected."""
     if args is None:
         return replace(model, error="No change selected"), []

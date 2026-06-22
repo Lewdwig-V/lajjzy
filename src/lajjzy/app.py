@@ -6,6 +6,7 @@ import sys
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -48,7 +49,7 @@ from textual.worker import WorkerFailed
 
 # Maps a RunMutation.kind to the jj-facade coroutine that performs it. Looked up
 # through the `jj` module at call time so tests can monkeypatch the facade.
-_OPS: dict[str, Callable[[Path, tuple], Awaitable[str]]] = {
+_OPS: dict[str, Callable[[Path, tuple[Any, ...]], Awaitable[str]]] = {
     "new": lambda cwd, a: jj.new_change(cwd, *a),
     "abandon": lambda cwd, a: jj.abandon(cwd, *a),
     "edit": lambda cwd, a: jj.edit_change(cwd, *a),
@@ -164,7 +165,7 @@ class LajjzyApp(App[None]):
             self.runtime.dispatch(GraphLoaded(epoch, graph))
 
     @work(group="mutation")
-    async def _worker_mutation(self, epoch: int, kind: str, args: tuple) -> None:
+    async def _worker_mutation(self, epoch: int, kind: str, args: tuple[Any, ...]) -> None:
         # group="mutation": op + follow-up reload run in one worker, so the graph
         # reflects the result. The single-mutation gate lives in `update` (the
         # pending_mutation flag), so this group need not be exclusive.

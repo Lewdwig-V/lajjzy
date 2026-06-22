@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 # Commands are *descriptions* of side effects, returned by ``update`` alongside
 # the next Model. The core never performs them; a rendering backend interprets
@@ -27,7 +28,7 @@ class RunMutation:
 
     epoch: int
     kind: str
-    args: tuple
+    args: tuple[Any, ...]
 
 
 @dataclass(frozen=True)
