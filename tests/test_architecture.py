@@ -40,19 +40,20 @@ def test_only_backend_jj_spawns_subprocesses():
 
 
 def test_mutation_worker_is_not_exclusive():
-    # I1 (the test that would have caught Codex P1): _run_mutation must not be
-    # decorated @work(..., exclusive=True).
+    # I1 (the test that would have caught Codex P1): _worker_mutation must not
+    # be decorated @work(..., exclusive=True). (Renamed from _run_mutation when
+    # the MVU refactor moved the mutation gate into the pure update function.)
     tree = _tree(SRC / "app.py")
     found = False
     for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_run_mutation":
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_worker_mutation":
             found = True
             for dec in node.decorator_list:
                 if isinstance(dec, ast.Call):
                     for kw in dec.keywords:
                         if kw.arg == "exclusive":
-                            raise AssertionError("_run_mutation must not use exclusive=")
-    assert found, "_run_mutation not found"
+                            raise AssertionError("_worker_mutation must not use exclusive=")
+    assert found, "_worker_mutation not found"
 
 
 def test_every_work_worker_has_exception_handling():

@@ -42,7 +42,9 @@ from lajjzy.core import (
     Squash,
     selected_change_id,
 )
+from lajjzy.invariants import InvariantError
 from lajjzy.runtime import Runtime
+from textual.worker import WorkerFailed
 
 # Maps a RunMutation.kind to the jj-facade coroutine that performs it. Looked up
 # through the `jj` module at call time so tests can monkeypatch the facade.
@@ -103,6 +105,18 @@ class LajjzyApp(App[None]):
         self.runtime = Runtime(self)
         # Plain mirror of model.pending_mutation (no widget watches it).
         self.pending_mutation = False
+        # Captured when an InvariantError fires inside a @work worker (Textual
+        # wraps it in WorkerFailed and swallows it); main() reads this to exit 70.
+        self._invariant_error: InvariantError | None = None
+
+    def _handle_exception(self, error: Exception) -> None:
+        # Workers wrap raised exceptions in WorkerFailed; the original is on
+        # .error, not __cause__. Capture invariant breaches so main() can exit
+        # 70 per the crash policy, then defer to Textual to tear the app down.
+        actual = error.error if isinstance(error, WorkerFailed) else error
+        if isinstance(actual, InvariantError):
+            self._invariant_error = actual
+        super()._handle_exception(error)
 
     # -- model accessors --------------------------------------------------
 
@@ -141,6 +155,9 @@ class LajjzyApp(App[None]):
             graph = await jj.load_graph(self.repo_path)
         except JjError as exc:
             self.runtime.dispatch(GraphLoadFailed(str(exc)))
+        except InvariantError:
+            # Must propagate (crash policy), not become a GraphLoadFailed.
+            raise
         except Exception as exc:
             self.runtime.dispatch(GraphLoadFailed(f"Unexpected error: {exc}"))
         else:
@@ -157,6 +174,8 @@ class LajjzyApp(App[None]):
         except JjError as exc:
             self.runtime.dispatch(MutationFailed(str(exc)))
             return
+        except InvariantError:
+            raise
         except Exception as exc:
             self.runtime.dispatch(MutationFailed(f"Unexpected error: {exc}"))
             return
@@ -165,6 +184,8 @@ class LajjzyApp(App[None]):
         except JjError as exc:
             self.runtime.dispatch(MutationCompleted(epoch, message, None, str(exc)))
             return
+        except InvariantError:
+            raise
         except Exception as exc:
             self.runtime.dispatch(
                 MutationCompleted(epoch, message, None, f"Unexpected error: {exc}")
@@ -313,6 +334,7 @@ class LajjzyApp(App[None]):
             self.error = str(exc)
             return
         except InvariantError:
+            # Must propagate (crash policy), not become a status-bar message.
             raise
         except Exception as exc:
             self.error = f"Unexpected error: {exc}"

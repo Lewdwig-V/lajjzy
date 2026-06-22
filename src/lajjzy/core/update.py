@@ -55,6 +55,13 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
 
     # --- graph reload -----------------------------------------------------
     if isinstance(msg, ReloadRequested):
+        # A reload while a mutation is pending would race the mutation's own
+        # follow-up load: its older graph could land first (matching the bumped
+        # epoch) and the mutation's fresh graph would then be discarded as
+        # stale. The mutation's follow-up reload brings the correct graph, so
+        # drop the user's refresh until the gate reopens.
+        if model.pending_mutation:
+            return model, []
         epoch = model.graph_epoch + 1
         return replace(model, graph_epoch=epoch), [LoadGraph(epoch)]
     if isinstance(msg, GraphLoaded):

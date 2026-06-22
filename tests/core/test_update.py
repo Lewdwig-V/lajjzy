@@ -176,16 +176,20 @@ def test_mutation_completed_applies_fresh_graph_and_reports_message():
     assert done.error == "Created"
 
 
-def test_mutation_completed_keeps_message_but_discards_stale_reload():
+def test_reload_during_mutation_is_ignored_and_mutation_graph_wins():
     m = _loaded("aaa", working=0)
     armed, [cmd] = update(m, NewChange())
-    # A newer graph-producing op bumps the epoch before this reload lands.
-    superseded, _ = update(armed, ReloadRequested())
-    stale = _graph("aaa", "bbb")
-    done, _ = update(superseded, MutationCompleted(cmd.epoch, "Created", stale, None))
+    # Reload while the gate is held is dropped: the mutation's own follow-up
+    # reload brings the fresh graph, so a concurrent refresh must not bump the
+    # epoch and later discard the mutation's result as "stale".
+    after_reload, cmds = update(armed, ReloadRequested())
+    assert cmds == []
+    assert after_reload is armed  # unchanged — no epoch bump, no LoadGraph
+    fresh = _graph("aaa", "bbb", working=1)
+    done, _ = update(after_reload, MutationCompleted(cmd.epoch, "Created", fresh, None))
     assert done.pending_mutation is False
     assert done.error == "Created"
-    assert done.graph is m.graph  # stale reload not applied
+    assert done.graph is fresh  # mutation's fresh graph applied, not discarded
 
 
 def test_mutation_completed_load_error_takes_precedence():

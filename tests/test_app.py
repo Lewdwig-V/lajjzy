@@ -386,22 +386,9 @@ def test_main_does_not_intercept_normal_exit(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Task 5: runtime invariant sites — I1 (mutation gate) + I3 (cursor on node)
-# ---------------------------------------------------------------------------
-
-
-async def _noop() -> str:
-    return "noop"
-
-
-@jj_required
-async def test_do_mutation_requires_gate(temp_repo: Path):
-    app = LajjzyApp(repo_path=temp_repo)
-    async with app.run_test():
-        await app.workers.wait_for_complete()
-        app.pending_mutation = False  # bypassing the gate is an invariant breach
-        with pytest.raises(InvariantError):
-            await app._do_mutation(lambda: _noop())
+# Task 5: runtime invariant sites — I3 (cursor on node)
+# (I1 mutation gate is covered in tests/core/test_update.py by
+#  test_second_mutation_rejected_while_pending.)
 
 
 @jj_required
@@ -415,59 +402,6 @@ async def test_navigation_keeps_cursor_on_node(temp_repo: Path):
         for key in ("j", "k", "g", "G", "j", "j"):
             await pilot.press(key)
             assert app.cursor in app.graph.node_indices  # I3 holds after every move
-
-
-# ---------------------------------------------------------------------------
-# Task 6: Epoch guard (I8) for stale-reload detection
-# ---------------------------------------------------------------------------
-
-
-@jj_required
-async def test_assign_if_current_discards_stale(temp_repo: Path):
-    """_assign_if_current rejects stale results and accepts current ones.
-
-    Directly unit-tests the epoch-guard helper introduced in this refactor:
-    - stale epoch → returns False and leaves graph unchanged
-    - current epoch → returns True and updates graph
-    """
-    from lajjzy.backend.types import (
-        ChangeDetail,
-        FileChange,
-        FileStatus,
-        GraphData,
-        GraphLine,
-    )
-
-    app = LajjzyApp(repo_path=temp_repo)
-    async with app.run_test():
-        await app.workers.wait_for_complete()
-        original = app.graph
-        other = GraphData(
-            lines=[GraphLine(raw="◉ zzz", change_id="zzz", glyph_prefix="◉ ")],
-            details={
-                "zzz": ChangeDetail(
-                    commit_id="c",
-                    author="a",
-                    email="e",
-                    timestamp="1h",
-                    description="d",
-                    bookmarks=[],
-                    is_empty=False,
-                    has_conflict=False,
-                    files=[FileChange(path="x", status=FileStatus.MODIFIED)],
-                    parents=[],
-                )
-            },
-            working_copy_index=0,
-            op_id="x",
-        )
-        stale = app._graph_epoch
-        app._graph_epoch += 1  # a newer op has since run
-        assert app._assign_if_current(stale, other) is False
-        assert app.graph is original  # stale result discarded — graph unchanged
-        current = app._graph_epoch
-        assert app._assign_if_current(current, other) is True
-        assert app.graph is other  # current result assigned
 
 
 # ---------------------------------------------------------------------------
@@ -492,8 +426,10 @@ async def test_worker_invariant_error_captured_via_workerfailed(temp_repo: Path,
     async def boom(_path):
         raise sentinel
 
-    # load_graph is imported at module level in app.py — patch it there.
-    monkeypatch.setattr(app_mod, "load_graph", boom)
+    # load_graph is called via the `jj` module (imported into app.py as `jj`),
+    # so patch it there — patching app_mod.load_graph would target a name that
+    # nothing reads after the MVU refactor moved the call to jj.load_graph.
+    monkeypatch.setattr(app_mod.jj, "load_graph", boom)
 
     app = LajjzyApp(repo_path=temp_repo)
     # run_test() re-raises the WorkerFailed on exit when _exception is set —
