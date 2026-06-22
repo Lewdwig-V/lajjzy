@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from rich.text import Text
 from textual.reactive import reactive
 from textual.widget import Widget
 
 from lajjzy.backend.types import FileDiff, FileChange
+
+if TYPE_CHECKING:
+    from lajjzy.app import LajjzyApp
 
 
 class DetailPanel(Widget):
@@ -30,8 +33,11 @@ class DetailPanel(Widget):
         self.diff: list[FileDiff] = []
 
     def on_mount(self) -> None:
-        self.watch(self.app, "graph", lambda _: self._on_selection_change())
-        self.watch(self.app, "cursor", lambda _: self._on_selection_change())
+        def _on_change(_: object) -> None:
+            self._on_selection_change()
+
+        self.watch(self.app, "graph", _on_change)
+        self.watch(self.app, "cursor", _on_change)
 
     def _on_selection_change(self) -> None:
         self.file_cursor = 0
@@ -40,8 +46,9 @@ class DetailPanel(Widget):
         self.refresh()
 
     def current_files(self) -> list[FileChange]:
-        change_id = self.app.selected_change_id()
-        graph = self.app.graph
+        app = cast("LajjzyApp", self.app)
+        change_id = app.selected_change_id()
+        graph = app.graph
         if change_id is None or graph is None:
             return []
         detail = graph.details.get(change_id)
@@ -66,7 +73,8 @@ class DetailPanel(Widget):
             return
         files = self.current_files()
         if files:
-            self.app.open_diff(files[self.file_cursor].path)
+            app = cast("LajjzyApp", self.app)
+            app.open_diff(files[self.file_cursor].path)
 
     def action_back(self) -> None:
         if self.mode == "diff":

@@ -1,3 +1,5 @@
+import pytest
+
 from lajjzy.backend.parse import (
     RECORD_SEP,
     UNIT_SEP,
@@ -5,7 +7,13 @@ from lajjzy.backend.parse import (
     parse_file_line,
     parse_graph_output,
 )
-from lajjzy.backend.types import FileStatus
+from lajjzy.backend.types import FileChange, FileStatus
+
+
+def test_value_types_are_frozen():
+    fc = FileChange(path="x", status=FileStatus.MODIFIED)
+    with pytest.raises(Exception):  # FrozenInstanceError
+        fc.path = "y"
 
 
 def _node(display: str, fields: list[str]) -> str:

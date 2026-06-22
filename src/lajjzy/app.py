@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -13,6 +14,7 @@ from textual.reactive import reactive
 
 from lajjzy.backend.jj import load_graph
 from lajjzy.backend.types import GraphData, JjError
+from lajjzy.invariants import InvariantError, invariant
 
 
 class LajjzyApp(App[None]):
@@ -52,6 +54,22 @@ class LajjzyApp(App[None]):
         self.repo_path = repo_path or Path.cwd()
         self.pending_mutation = False
         self._graph_epoch = 0
+        self._invariant_error: InvariantError | None = None
+
+    def _handle_exception(self, error: Exception) -> None:
+        """Intercept InvariantError before Textual's default handler.
+
+        Textual 8.x stores exceptions in `self._exception` and exits the app
+        but does NOT re-raise them out of `run()`.  We capture any
+        `InvariantError` (including ones wrapped in `WorkerFailed`) here so
+        that `main()` can re-raise it after the app shuts down.
+        """
+        from textual.worker import WorkerFailed
+
+        inner = error.error if isinstance(error, WorkerFailed) else error
+        if isinstance(inner, InvariantError):
+            self._invariant_error = inner
+        super()._handle_exception(error)
 
     def compose(self) -> ComposeResult:
         from lajjzy.widgets import DetailPanel, GraphView, StatusBar
@@ -67,6 +85,19 @@ class LajjzyApp(App[None]):
         self.query_one(GraphView).focus()
         self.reload()
 
+    def _assign_if_current(self, epoch: int, new_graph: GraphData) -> bool:
+        """Assign new_graph only if no newer graph-producing op has run since
+        `epoch` was captured. Returns True if assigned, False if discarded as stale."""
+        if epoch != self._graph_epoch:
+            return False
+        self.graph = new_graph
+        # Land the cursor on the working copy if known, else the first node.
+        if new_graph.working_copy_index is not None:
+            self.cursor = new_graph.working_copy_index
+        elif new_graph.node_indices:
+            self.cursor = new_graph.node_indices[0]
+        return True
+
     @work(group="load", exclusive=True)
     async def reload(self) -> None:
         self._graph_epoch += 1
@@ -76,20 +107,15 @@ class LajjzyApp(App[None]):
         except JjError as exc:
             self.error = str(exc)
             return
+        except InvariantError:
+            raise
         except Exception as exc:
             self.error = f"Unexpected error: {exc}"
             return
         # Discard this result if a newer graph-producing op has superseded us.
         # Also do NOT clear error or touch state for a stale load.
-        if epoch != self._graph_epoch:
-            return
-        self.error = None
-        self.graph = new_graph
-        # Land the cursor on the working copy if known, else the first node.
-        if new_graph.working_copy_index is not None:
-            self.cursor = new_graph.working_copy_index
-        elif new_graph.node_indices:
-            self.cursor = new_graph.node_indices[0]
+        if self._assign_if_current(epoch, new_graph):
+            self.error = None
 
     def selected_change_id(self) -> str | None:
         if self.graph is None:
@@ -108,6 +134,7 @@ class LajjzyApp(App[None]):
             pos = 0
         pos = max(0, min(len(nodes) - 1, pos + delta))
         self.cursor = nodes[pos]
+        invariant(self.cursor in self.graph.node_indices, "cursor left the set of node lines")
 
     def action_cursor_down(self) -> None:
         self._node_index_offset(1)
@@ -146,11 +173,21 @@ class LajjzyApp(App[None]):
     @work(group="mutation")
     async def _run_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
         try:
+            await self._do_mutation(op)
+        except InvariantError:
+            raise
+
+    async def _do_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
+        # I1: this coroutine must only run behind the gate.
+        invariant(self.pending_mutation, "mutation ran without the pending_mutation gate set")
+        try:
             try:
                 message = await op()
             except JjError as exc:
                 self.error = str(exc)
                 return
+            except InvariantError:
+                raise
             except Exception as exc:
                 self.error = f"Unexpected error: {exc}"
                 return
@@ -165,16 +202,12 @@ class LajjzyApp(App[None]):
             except JjError as exc:
                 self.error = str(exc)
                 return
+            except InvariantError:
+                raise
             except Exception as exc:
                 self.error = f"Unexpected error: {exc}"
                 return
-            if epoch != self._graph_epoch:
-                return  # a newer graph-producing op superseded this load; discard
-            self.graph = new_graph
-            if self.graph.working_copy_index is not None:
-                self.cursor = self.graph.working_copy_index
-            elif self.graph.node_indices:
-                self.cursor = self.graph.node_indices[0]
+            self._assign_if_current(epoch, new_graph)
         finally:
             self.pending_mutation = False
 
@@ -329,6 +362,8 @@ class LajjzyApp(App[None]):
         except JjError as exc:
             self.error = str(exc)
             return
+        except InvariantError:
+            raise
         except Exception as exc:
             self.error = f"Unexpected error: {exc}"
             return
@@ -339,4 +374,20 @@ class LajjzyApp(App[None]):
 
 
 def main() -> None:
-    LajjzyApp().run()
+    app = LajjzyApp()
+    try:
+        app.run()
+    except InvariantError as exc:
+        # Crash policy: a broken internal model. Textual restores the terminal
+        # on app teardown; surface the breach loudly and exit non-zero.
+        print(f"lajjzy: internal invariant violated: {exc}", file=sys.stderr)
+        print("This is a bug — please report it.", file=sys.stderr)
+        sys.exit(70)
+    # Re-raise any InvariantError captured via _handle_exception (raised from a
+    # worker, where Textual swallows the exception and does not propagate it out
+    # of run()).
+    worker_invariant_error = app._invariant_error
+    if worker_invariant_error is not None:
+        print(f"lajjzy: internal invariant violated: {worker_invariant_error}", file=sys.stderr)
+        print("This is a bug — please report it.", file=sys.stderr)
+        sys.exit(70)

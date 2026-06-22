@@ -94,3 +94,23 @@ src/lajjzy/
   the worker completes and the UI updates in one step.
 - `reactive()` + `watch_*` is the only data-flow mechanism — no message buses or event
   queues beyond Textual's built-in event system.
+
+## Invariants
+
+Hard invariants and the mechanism that enforces each. Adding a new hard invariant
+means adding its row AND its enforcing check.
+
+| # | Invariant | Enforced by |
+|---|---|---|
+| I1 | At most one mutation in flight | `pending_mutation` gate + `invariant()` in `_do_mutation` + `test_architecture` (mutation worker not `exclusive`) + gate tests |
+| I2 | `GraphData` consistent (derived `node_indices`; valid `working_copy_index`; `details`↔`lines`) | `GraphData.__post_init__` (frozen) + `test_properties` |
+| I3 | Cursor always on a node line | `invariant()` in `_node_index_offset` + `test_properties` |
+| I4 | Only `backend/jj.py` spawns `jj` (sole exception: `app.py` `$EDITOR`) | `test_architecture` |
+| I5 | Every `@work` worker handles exceptions | `test_architecture` |
+| I6 | Backend public async fns raise only `JjError` | `load_graph`/`change_diff` wrapping + `test_architecture` |
+| I7 | `DiffLine.kind` / `DetailPanel.mode` valid literals | `Literal` types + `mypy --strict` |
+| I8 | Stale reloads never overwrite a fresher graph | `_graph_epoch` guard + epoch test |
+
+**Failure policy:** internal/model breaches raise `InvariantError` (crash via
+`main()`, exit 70); data-shape breaches raise `ValueError` (wrapped to `JjError`
+at the backend boundary); user/jj errors set `self.error`.

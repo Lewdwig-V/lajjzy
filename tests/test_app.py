@@ -356,3 +356,164 @@ async def test_mutation_gate_clears_after_completion(temp_repo: Path, monkeypatc
         await app.workers.wait_for_complete()
         assert "abandon" in calls, "second mutation was rejected after first completed"
         assert app.pending_mutation is False
+
+
+# ---------------------------------------------------------------------------
+# InvariantError crash wiring tests
+# ---------------------------------------------------------------------------
+
+
+import pytest  # noqa: E402
+
+from lajjzy.invariants import InvariantError  # noqa: E402
+
+
+def test_main_exits_70_on_invariant_error(monkeypatch):
+    import lajjzy.app as appmod
+
+    def boom(self):
+        raise InvariantError("model broken")
+
+    monkeypatch.setattr(appmod.LajjzyApp, "run", boom)
+    with pytest.raises(SystemExit) as exc:
+        appmod.main()
+    assert exc.value.code == 70
+
+
+def test_main_does_not_intercept_normal_exit(monkeypatch):
+    import lajjzy.app as appmod
+
+    monkeypatch.setattr(appmod.LajjzyApp, "run", lambda self: None)
+    # Should return normally, no SystemExit.
+    appmod.main()
+
+
+# ---------------------------------------------------------------------------
+# Task 5: runtime invariant sites — I1 (mutation gate) + I3 (cursor on node)
+# ---------------------------------------------------------------------------
+
+
+async def _noop() -> str:
+    return "noop"
+
+
+@jj_required
+async def test_do_mutation_requires_gate(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        app.pending_mutation = False  # bypassing the gate is an invariant breach
+        with pytest.raises(InvariantError):
+            await app._do_mutation(lambda: _noop())
+
+
+@jj_required
+async def test_navigation_keeps_cursor_on_node(temp_repo: Path):
+    import subprocess
+
+    subprocess.run(["jj", "new", "-m", "x"], cwd=temp_repo, check=True, capture_output=True)
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        for key in ("j", "k", "g", "G", "j", "j"):
+            await pilot.press(key)
+            assert app.cursor in app.graph.node_indices  # I3 holds after every move
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Epoch guard (I8) for stale-reload detection
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_assign_if_current_discards_stale(temp_repo: Path):
+    """_assign_if_current rejects stale results and accepts current ones.
+
+    Directly unit-tests the epoch-guard helper introduced in this refactor:
+    - stale epoch → returns False and leaves graph unchanged
+    - current epoch → returns True and updates graph
+    """
+    from lajjzy.backend.types import (
+        ChangeDetail,
+        FileChange,
+        FileStatus,
+        GraphData,
+        GraphLine,
+    )
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        original = app.graph
+        other = GraphData(
+            lines=[GraphLine(raw="◉ zzz", change_id="zzz", glyph_prefix="◉ ")],
+            details={
+                "zzz": ChangeDetail(
+                    commit_id="c",
+                    author="a",
+                    email="e",
+                    timestamp="1h",
+                    description="d",
+                    bookmarks=[],
+                    is_empty=False,
+                    has_conflict=False,
+                    files=[FileChange(path="x", status=FileStatus.MODIFIED)],
+                    parents=[],
+                )
+            },
+            working_copy_index=0,
+            op_id="x",
+        )
+        stale = app._graph_epoch
+        app._graph_epoch += 1  # a newer op has since run
+        assert app._assign_if_current(stale, other) is False
+        assert app.graph is original  # stale result discarded — graph unchanged
+        current = app._graph_epoch
+        assert app._assign_if_current(current, other) is True
+        assert app.graph is other  # current result assigned
+
+
+# ---------------------------------------------------------------------------
+# Worker-path InvariantError capture (regression test for WorkerFailed.error)
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_worker_invariant_error_captured_via_workerfailed(temp_repo: Path, monkeypatch):
+    """I1/I3 invariants fire inside @work workers. Textual wraps the exception
+    in WorkerFailed and stores it in WorkerFailed.error (NOT __cause__).
+    _handle_exception must unwrap via .error so _invariant_error is captured
+    and main() can exit 70.
+
+    This test fails against the buggy __cause__ path and passes after the .error fix.
+    """
+    import lajjzy.app as app_mod
+    from lajjzy.invariants import InvariantError
+
+    sentinel = InvariantError("worker-path invariant breach")
+
+    async def boom(_path):
+        raise sentinel
+
+    # load_graph is imported at module level in app.py — patch it there.
+    monkeypatch.setattr(app_mod, "load_graph", boom)
+
+    app = LajjzyApp(repo_path=temp_repo)
+    # run_test() re-raises the WorkerFailed on exit when _exception is set —
+    # absorb it here since we are intentionally crashing the worker.
+    try:
+        async with app.run_test():
+            # reload() is called on_mount; wait for the worker to finish
+            # (it will fail, but workers.wait_for_complete() returns regardless).
+            try:
+                await app.workers.wait_for_complete()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # After the app exits, _invariant_error must have been captured.
+    assert app._invariant_error is not None, (
+        "_invariant_error was not captured — WorkerFailed.error unwrap is missing"
+    )
+    assert isinstance(app._invariant_error, InvariantError)
