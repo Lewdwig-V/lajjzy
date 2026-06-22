@@ -32,16 +32,55 @@ the behavioural reference when porting a feature. The README's
 *Feature status & gaps* table is the authoritative inventory of what's shipped,
 partial, and not yet ported; the *Roadmap* orders the work. When porting a Rust
 feature, read its old widget/backend code for the exact behaviour, but build it
-the Python/Textual way (reactive state + workers), not as a literal translation
-of the Elm `dispatch`/`Effect` machine.
+on the MVU core (pure `Model`/`Msg`/`update`) — see below — rather than as a
+literal translation of the Rust Elm `Effect` machine.
+
+## Architecture: a pure MVU core with a swappable backend
+
+The application logic is a small, pure Model-View-Update core that knows nothing
+about Textual, asyncio, or jj. Textual is one *backend* that drives it; the core
+would run unchanged behind any renderer. The dividend is testability: every state
+transition is asserted against plain data (`tests/core/test_update.py`), and the
+whole loop is driven headless in `tests/runtime/test_runtime.py`.
+
+The data flow is one direction only:
+
+```
+key press → Msg → update(Model, Msg) → (Model', [Cmd]) → backend presents Model'
+                                                       └→ backend runs each Cmd → Msg → …
+```
+
+- **The core is pure (`core/`).** `update(model, msg) -> (Model, list[Cmd])` is the
+  ONLY place state transitions happen. No I/O, no async, no Textual, no jj imports.
+  `Cmd`s are *descriptions* of effects (`LoadGraph`, `RunMutation`, `EditMessage`),
+  never the effects themselves. `Model` is a frozen dataclass — the single source
+  of truth for graph/cursor/error/rebase/mutation-gate/epoch state.
+
+- **The Runtime is renderer-agnostic (`runtime/`).** `Runtime` owns the `Model`,
+  feeds each `Msg` through `update`, asks the backend to present the new model, and
+  asks the backend to run each `Cmd`. The seam is the `Backend` Protocol
+  (`present(model)` + `run_cmd(cmd, dispatch)`).
+
+- **Textual is just one Backend (`app.py`).** `LajjzyApp` implements `Backend`:
+  `present` *projects* the `Model` onto `reactive()` attributes the widgets watch;
+  `run_cmd` executes effects on Textual's worker lanes. Key bindings only build a
+  `Msg` and dispatch it — no logic lives in the actions. The reactives are a view
+  projection, never the source of truth.
 
 ## Source Layout
 
 ```
 src/lajjzy/
-  app.py            # LajjzyApp — root App, reactive state, key bindings, worker dispatch
+  app.py            # LajjzyApp — the Textual Backend: projects Model→reactives, runs Cmds on workers
   __main__.py       # python -m lajjzy entry point
   styles.tcss       # Textual CSS
+  core/             # the pure MVU core — no Textual / asyncio / jj
+    model.py        # Model (frozen) + pure helpers (selected_change_id, step_cursor, …)
+    messages.py     # Msg union: user intents + effect-result messages
+    commands.py     # Cmd union: LoadGraph, RunMutation, EditMessage (effect descriptions)
+    update.py       # update(model, msg) -> (Model, [Cmd]) — the only state-transition fn
+  runtime/
+    backend.py      # Backend Protocol (the swappable seam) + renderer-agnostic Runtime
   backend/
     jj.py           # ONLY place that shells out to jj (asyncio.create_subprocess_exec)
     parse.py        # pure parsers: graph output → GraphData, diff output → FileDiff list
@@ -54,43 +93,45 @@ src/lajjzy/
 
 ## Architectural Constraints
 
-- **Facade boundary:** `backend/jj.py` is the only module that runs `jj` subprocesses.
-  Widget and app code never call `asyncio.create_subprocess_exec` or `subprocess` directly.
-  The one exception is `app.py`'s `_edit_message_in_editor`, which calls `subprocess.run`
-  to launch `$EDITOR` — this is an app-layer responsibility, not a widget responsibility.
+- **Purity of the core:** nothing in `core/` may import Textual, asyncio, or the jj
+  facade, or perform I/O. New behaviour is a new `Msg` + a branch in `update`, with a
+  unit test in `tests/core/`. If a transition needs the outside world, it emits a `Cmd`.
 
-- **No central store:** There is no global state object or Elm-style dispatch machine.
-  State lives as `reactive()` attributes on `LajjzyApp`. Widgets watch the app's reactives
-  via `self.watch(self.app, ...)` and re-render automatically.
+- **Two facade boundaries:** `backend/jj.py` is the only module that runs `jj`
+  subprocesses; the `Backend` (`app.py`) is the only place effects are actually
+  executed. Widget code never calls `asyncio.create_subprocess_exec`/`subprocess`,
+  and never runs effects directly. The `EditMessage` cmd launches `$EDITOR` via
+  `LajjzyApp._edit_message_in_editor` (`subprocess.run` + `self.suspend()`) — an
+  app/backend responsibility, not a widget one.
 
-- **Worker-group concurrency lanes:**
-  - `group="mutation", exclusive=True` — the single-mutation gate; at most one mutation
-    runs at a time. All write operations (`new`, `abandon`, `describe`, `squash`, `rebase`,
-    `edit`) run in this group.
-  - `group="load", exclusive=True` — graph reloads. At most one in flight; a new
-    reload cancels any running reload. Runs independently of mutations.
-  - `group="diff", exclusive=True` — diff fetches for the detail pane. A new fetch
-    cancels any in-flight diff fetch. Runs independently.
+- **Worker-group concurrency lanes** (the backend's `run_cmd` maps Cmds to these):
+  - `group="mutation"` — runs a `RunMutation` cmd (the write op + its follow-up
+    reload, in one worker). The single-mutation gate is the `pending_mutation` flag
+    in the pure `Model`/`update`, NOT worker exclusivity.
+  - `group="load", exclusive=True` — runs a `LoadGraph` cmd. A new reload cancels any
+    running reload; the `graph_epoch` guard in `update` discards stale results.
+  - `group="diff", exclusive=True` — diff fetches for the detail pane. Diff browsing
+    is ephemeral view-local state owned by `DetailPanel`, deliberately OUTSIDE the
+    Model/update loop. A new fetch cancels any in-flight diff fetch.
 
-- **Editor suspend in app layer only:** `$EDITOR` is launched via `self.suspend()` in
-  `LajjzyApp._edit_message_in_editor`. Widget code never suspends the terminal.
+- **Errors flow as messages, never raise:** `JjError` from `backend/jj.py` is caught
+  in the backend's workers and dispatched back as a result `Msg`
+  (`GraphLoadFailed`, `MutationFailed`, `MutationCompleted(load_error=…)`); `update`
+  writes it to `Model.error`, which `present` projects to the `error` reactive that
+  `StatusBar` watches. No unhandled exception reaches the Textual event loop.
 
-- **Errors set `App.error`, never raise:** `JjError` exceptions from `backend/jj.py` are
-  caught in workers and written to `self.error` (a reactive `str | None`). The `StatusBar`
-  widget watches this reactive and displays the message. No unhandled exceptions reach the
-  Textual event loop from backend calls.
-
-- **Working-copy gate for filesystem ops:** Any operation that reads or writes repo files
-  on disk requires the target change to be `@`. The `ensure_working_copy()` method on
-  `LajjzyApp` handles this — it calls `jj edit` first if needed. Deferred features (hunk
-  picker, conflict resolution) must call this before touching the working tree.
+- **Working-copy gate for filesystem ops:** Any operation that reads or writes repo
+  files on disk requires the target change to be `@`. `LajjzyApp.ensure_working_copy()`
+  handles this (calls `jj edit` if needed). It is an out-of-band async helper for
+  deferred filesystem features (hunk picker, conflict resolution) and sets the `error`
+  reactive directly rather than flowing through the loop.
 
 ## Key Patterns
 
 - Graph data loaded in bulk via `load_graph()` — one `jj log` subprocess call, parsed
   into `GraphData`. Not re-fetched per keypress.
 - Cursor skips connector lines; always lands on change nodes (`graph.node_indices`).
-- Mutations reload the graph inside the same worker, so the graph is consistent when
-  the worker completes and the UI updates in one step.
-- `reactive()` + `watch_*` is the only data-flow mechanism — no message buses or event
-  queues beyond Textual's built-in event system.
+- A mutation's `RunMutation` cmd reloads the graph in the same worker, so the new graph
+  arrives with the result in one `MutationCompleted` message — the UI updates in one step.
+- The MVU loop (`Msg` → `update` → `Cmd`) is the only data-flow mechanism. Widgets watch
+  the projected reactives; there are no message buses beyond Textual's event system.

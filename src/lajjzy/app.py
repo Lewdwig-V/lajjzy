@@ -11,12 +11,60 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.reactive import reactive
 
-from lajjzy.backend.jj import load_graph
+import lajjzy.backend.jj as jj
 from lajjzy.backend.types import GraphData, JjError
+from lajjzy.core import (
+    Abandon,
+    Cmd,
+    CursorBottom,
+    CursorDown,
+    CursorTop,
+    CursorUp,
+    DescribeAborted,
+    DescribeReady,
+    DescribeRequested,
+    EditChange,
+    EditMessage,
+    GraphLoaded,
+    GraphLoadFailed,
+    LoadGraph,
+    Model,
+    Msg,
+    MutationCompleted,
+    MutationFailed,
+    NewChange,
+    RebaseCancel,
+    RebaseConfirm,
+    RebaseStart,
+    ReloadRequested,
+    RunMutation,
+    Squash,
+    selected_change_id,
+)
+from lajjzy.runtime import Runtime
+
+# Maps a RunMutation.kind to the jj-facade coroutine that performs it. Looked up
+# through the `jj` module at call time so tests can monkeypatch the facade.
+_OPS: dict[str, Callable[[Path, tuple], Awaitable[str]]] = {
+    "new": lambda cwd, a: jj.new_change(cwd, *a),
+    "abandon": lambda cwd, a: jj.abandon(cwd, *a),
+    "edit": lambda cwd, a: jj.edit_change(cwd, *a),
+    "squash": lambda cwd, a: jj.squash(cwd, *a),
+    "describe": lambda cwd, a: jj.describe(cwd, *a),
+    "rebase": lambda cwd, a: jj.rebase_single(cwd, *a),
+    "rebase_descendants": lambda cwd, a: jj.rebase_with_descendants(cwd, *a),
+}
 
 
 class LajjzyApp(App[None]):
-    """Root application. Owns cross-cutting reactive state and key bindings."""
+    """Textual implementation of the rendering/effect Backend.
+
+    The authoritative state lives in ``self.runtime.model`` (a pure ``Model``);
+    this class only *projects* that model onto reactive attributes the widgets
+    watch, and *runs* the effects the core requests on Textual's worker lanes.
+    Key bindings translate to ``Msg`` values dispatched through the runtime — no
+    state transition logic lives here.
+    """
 
     CSS_PATH = "styles.tcss"
 
@@ -41,17 +89,96 @@ class LajjzyApp(App[None]):
         ("escape", "rebase_cancel", "Cancel"),
     ]
 
+    # Reactives are a *projection* of the Model for the widget layer to watch;
+    # they are written only by `present`, never treated as the source of truth.
     graph: reactive[GraphData | None] = reactive(None)
     cursor: reactive[int] = reactive(0)
     error: reactive[str | None] = reactive(None)
     rebase_source: reactive[str | None] = reactive(None)
-    rebase_descendants_flag: reactive[bool] = reactive(False)
 
     def __init__(self, repo_path: Path | None = None) -> None:
         super().__init__()
         self.repo_path = repo_path or Path.cwd()
+        self.runtime = Runtime(self)
+        # Plain mirror of model.pending_mutation (no widget watches it).
         self.pending_mutation = False
-        self._graph_epoch = 0
+
+    # -- model accessors --------------------------------------------------
+
+    @property
+    def model(self) -> Model:
+        return self.runtime.model
+
+    def selected_change_id(self) -> str | None:
+        return selected_change_id(self.model)
+
+    # -- Backend.present: project Model onto the watched reactives --------
+
+    def present(self, model: Model) -> None:
+        self.graph = model.graph
+        self.cursor = model.cursor
+        self.error = model.error
+        self.rebase_source = model.rebase_source
+        self.pending_mutation = model.pending_mutation
+
+    # -- Backend.run_cmd: interpret a Cmd on the right concurrency lane ----
+
+    def run_cmd(self, cmd: Cmd, dispatch: Callable[[Msg], None]) -> None:
+        if isinstance(cmd, LoadGraph):
+            self._worker_load(cmd.epoch)
+        elif isinstance(cmd, RunMutation):
+            self._worker_mutation(cmd.epoch, cmd.kind, cmd.args)
+        elif isinstance(cmd, EditMessage):
+            # $EDITOR needs the terminal synchronously (suspend), so this runs
+            # inline rather than on a worker and dispatches its result at once.
+            self._run_editor(cmd.change_id, cmd.seed)
+
+    @work(group="load", exclusive=True)
+    async def _worker_load(self, epoch: int) -> None:
+        # group="load", exclusive: a new reload cancels any in-flight reload.
+        try:
+            graph = await jj.load_graph(self.repo_path)
+        except JjError as exc:
+            self.runtime.dispatch(GraphLoadFailed(str(exc)))
+        except Exception as exc:
+            self.runtime.dispatch(GraphLoadFailed(f"Unexpected error: {exc}"))
+        else:
+            self.runtime.dispatch(GraphLoaded(epoch, graph))
+
+    @work(group="mutation")
+    async def _worker_mutation(self, epoch: int, kind: str, args: tuple) -> None:
+        # group="mutation": op + follow-up reload run in one worker, so the graph
+        # reflects the result. The single-mutation gate lives in `update` (the
+        # pending_mutation flag), so this group need not be exclusive.
+        op = _OPS[kind]
+        try:
+            message = await op(self.repo_path, args)
+        except JjError as exc:
+            self.runtime.dispatch(MutationFailed(str(exc)))
+            return
+        except Exception as exc:
+            self.runtime.dispatch(MutationFailed(f"Unexpected error: {exc}"))
+            return
+        try:
+            graph = await jj.load_graph(self.repo_path)
+        except JjError as exc:
+            self.runtime.dispatch(MutationCompleted(epoch, message, None, str(exc)))
+            return
+        except Exception as exc:
+            self.runtime.dispatch(
+                MutationCompleted(epoch, message, None, f"Unexpected error: {exc}")
+            )
+            return
+        self.runtime.dispatch(MutationCompleted(epoch, message, graph, None))
+
+    def _run_editor(self, change_id: str, seed: str) -> None:
+        text, err = self._edit_message_in_editor(seed)
+        if text is not None:
+            self.runtime.dispatch(DescribeReady(change_id, text))
+        else:
+            self.runtime.dispatch(DescribeAborted(err))
+
+    # -- Textual lifecycle ------------------------------------------------
 
     def compose(self) -> ComposeResult:
         from lajjzy.widgets import DetailPanel, GraphView, StatusBar
@@ -65,214 +192,66 @@ class LajjzyApp(App[None]):
         from lajjzy.widgets import GraphView
 
         self.query_one(GraphView).focus()
-        self.reload()
+        self.runtime.dispatch(ReloadRequested())
 
-    @work(group="load", exclusive=True)
-    async def reload(self) -> None:
-        self._graph_epoch += 1
-        epoch = self._graph_epoch
-        try:
-            new_graph = await load_graph(self.repo_path)
-        except JjError as exc:
-            self.error = str(exc)
-            return
-        except Exception as exc:
-            self.error = f"Unexpected error: {exc}"
-            return
-        # Discard this result if a newer graph-producing op has superseded us.
-        # Also do NOT clear error or touch state for a stale load.
-        if epoch != self._graph_epoch:
-            return
-        self.error = None
-        self.graph = new_graph
-        # Land the cursor on the working copy if known, else the first node.
-        if new_graph.working_copy_index is not None:
-            self.cursor = new_graph.working_copy_index
-        elif new_graph.node_indices:
-            self.cursor = new_graph.node_indices[0]
-
-    def selected_change_id(self) -> str | None:
-        if self.graph is None:
-            return None
-        return self.graph.change_id_at(self.cursor)
-
-    def _node_index_offset(self, delta: int) -> None:
-        # self.cursor is an index into graph.lines (not an ordinal into node_indices);
-        # navigation steps between node_indices entries, skipping connector lines.
-        if self.graph is None or not self.graph.node_indices:
-            return
-        nodes = self.graph.node_indices
-        try:
-            pos = nodes.index(self.cursor)
-        except ValueError:
-            pos = 0
-        pos = max(0, min(len(nodes) - 1, pos + delta))
-        self.cursor = nodes[pos]
+    # -- key bindings → messages -----------------------------------------
 
     def action_cursor_down(self) -> None:
-        self._node_index_offset(1)
+        self.runtime.dispatch(CursorDown())
 
     def action_cursor_up(self) -> None:
-        self._node_index_offset(-1)
+        self.runtime.dispatch(CursorUp())
 
     def action_cursor_top(self) -> None:
-        if self.graph and self.graph.node_indices:
-            self.cursor = self.graph.node_indices[0]
+        self.runtime.dispatch(CursorTop())
 
     def action_cursor_bottom(self) -> None:
-        if self.graph and self.graph.node_indices:
-            self.cursor = self.graph.node_indices[-1]
+        self.runtime.dispatch(CursorBottom())
 
     def action_reload_graph(self) -> None:
-        self.reload()
+        self.runtime.dispatch(ReloadRequested())
 
     def action_focus_detail(self) -> None:
         from lajjzy.widgets import DetailPanel
 
         self.query_one(DetailPanel).focus()
 
-    def _dispatch_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
-        """Synchronous gate: reject (not cancel) a second mutation while one is in flight.
-
-        Textual processes each key action to completion before the next, so the
-        check-and-set here is atomic with respect to other key events — no race.
-        """
-        if self.pending_mutation:
-            self.error = "A mutation is already in progress"
-            return
-        self.pending_mutation = True
-        self._run_mutation(op)
-
-    @work(group="mutation")
-    async def _run_mutation(self, op: Callable[[], Awaitable[str]]) -> None:
-        try:
-            try:
-                message = await op()
-            except JjError as exc:
-                self.error = str(exc)
-                return
-            except Exception as exc:
-                self.error = f"Unexpected error: {exc}"
-                return
-            self.error = message
-            # Reload synchronously inside this worker so the graph reflects the result.
-            # Use the epoch guard so a racing manual reload cannot overwrite us, and
-            # so we do not overwrite a reload that started after us.
-            self._graph_epoch += 1
-            epoch = self._graph_epoch
-            try:
-                new_graph = await load_graph(self.repo_path)
-            except JjError as exc:
-                self.error = str(exc)
-                return
-            except Exception as exc:
-                self.error = f"Unexpected error: {exc}"
-                return
-            if epoch != self._graph_epoch:
-                return  # a newer graph-producing op superseded this load; discard
-            self.graph = new_graph
-            if self.graph.working_copy_index is not None:
-                self.cursor = self.graph.working_copy_index
-            elif self.graph.node_indices:
-                self.cursor = self.graph.node_indices[0]
-        finally:
-            self.pending_mutation = False
-
     def action_new(self) -> None:
-        from lajjzy.backend.jj import new_change
-
-        target = self.selected_change_id()
-        if target is None:
-            self.error = "No change selected"
-            return
-        self._dispatch_mutation(lambda: new_change(self.repo_path, target))
+        self.runtime.dispatch(NewChange())
 
     def action_abandon(self) -> None:
-        from lajjzy.backend.jj import abandon
-
-        target = self.selected_change_id()
-        if target is None:
-            self.error = "No change selected"
-            return
-        self._dispatch_mutation(lambda: abandon(self.repo_path, target))
+        self.runtime.dispatch(Abandon())
 
     def action_edit(self) -> None:
-        from lajjzy.backend.jj import edit_change
-
-        target = self.selected_change_id()
-        if target is None:
-            self.error = "No change selected"
-            return
-        self._dispatch_mutation(lambda: edit_change(self.repo_path, target))
+        self.runtime.dispatch(EditChange())
 
     def action_squash(self) -> None:
-        from lajjzy.backend.jj import squash
-
-        target = self.selected_change_id()
-        if target is None:
-            self.error = "No change selected"
-            return
-        self._dispatch_mutation(lambda: squash(self.repo_path, target))
+        self.runtime.dispatch(Squash())
 
     def action_describe(self) -> None:
-        target = self.selected_change_id()
-        if target is None or self.graph is None:
-            self.error = "No change selected"
-            return
-        detail = self.graph.details.get(target)
-        if detail is None:
-            return
-        seed = detail.description
-        message = self._edit_message_in_editor(seed)
-        if message is None:
-            return  # user aborted / editor unavailable
-        from lajjzy.backend.jj import describe
-
-        self._dispatch_mutation(lambda: describe(self.repo_path, target, message))
+        self.runtime.dispatch(DescribeRequested())
 
     def action_rebase(self) -> None:
-        self.rebase_source = self.selected_change_id()
-        self.rebase_descendants_flag = False
-        if self.rebase_source:
-            self.error = "Rebase: pick a destination, Enter to confirm, Esc to cancel"
-        else:
-            self.error = "No change selected"
+        self.runtime.dispatch(RebaseStart(descendants=False))
 
     def action_rebase_descendants(self) -> None:
-        self.rebase_source = self.selected_change_id()
-        self.rebase_descendants_flag = True
-        if self.rebase_source:
-            self.error = "Rebase +desc: pick a destination, Enter to confirm, Esc to cancel"
-        else:
-            self.error = "No change selected"
+        self.runtime.dispatch(RebaseStart(descendants=True))
 
     def action_rebase_confirm(self) -> None:
-        # No-op unless rebase mode is armed — Enter does exactly one thing.
-        if self.rebase_source is None:
-            return
-        dest = self.selected_change_id()
-        src = self.rebase_source
-        descend = self.rebase_descendants_flag
-        self.rebase_source = None
-        if dest is None or dest == src:
-            self.error = "Rebase cancelled (invalid destination)"
-            return
-        from lajjzy.backend.jj import rebase_single, rebase_with_descendants
-
-        op = rebase_with_descendants if descend else rebase_single
-        self._dispatch_mutation(lambda: op(self.repo_path, src, dest))
+        self.runtime.dispatch(RebaseConfirm())
 
     def action_rebase_cancel(self) -> None:
-        # No-op unless rebase mode is armed.
-        if self.rebase_source is not None:
-            self.rebase_source = None
-            self.error = "Rebase cancelled"
+        self.runtime.dispatch(RebaseCancel())
 
-    def _edit_message_in_editor(self, seed: str) -> str | None:
+    # -- $EDITOR (app-layer terminal suspend) ----------------------------
+
+    def _edit_message_in_editor(self, seed: str) -> tuple[str | None, str | None]:
+        """Launch $EDITOR seeded with ``seed``. Returns ``(text, None)`` on
+        success or ``(None, error)`` on failure/abort. Does not touch app state —
+        the result flows back through a Msg so the core owns the error."""
         editor = os.environ.get("EDITOR")
         if not editor:
-            self.error = "No $EDITOR set"
-            return None
+            return None, "No $EDITOR set"
         with tempfile.NamedTemporaryFile(
             "w+", suffix=".jjdescribe", delete=False, encoding="utf-8"
         ) as tf:
@@ -283,34 +262,36 @@ class LajjzyApp(App[None]):
                 with self.suspend():  # hand the terminal to $EDITOR
                     result = subprocess.run([*editor.split(), path], check=False)
                 if result.returncode != 0:
-                    self.error = f"Editor exited with code {result.returncode}"
-                    return None
+                    return None, f"Editor exited with code {result.returncode}"
                 with open(path, encoding="utf-8") as fh:
-                    return fh.read().strip()
+                    return fh.read().strip(), None
             except FileNotFoundError:
-                self.error = f"Editor not found: {editor!r}"
-                return None
+                return None, f"Editor not found: {editor!r}"
             except OSError as exc:
-                self.error = f"Editor error: {exc}"
-                return None
+                return None, f"Editor error: {exc}"
         finally:
             try:
                 os.unlink(path)
             except OSError:
                 pass
 
-    async def ensure_working_copy(self, change_id: str) -> bool:
-        """Working-copy gate: make `change_id` the @ commit before any
-        filesystem-touching op. Returns True if @ is (now) the target.
-        Used by deferred hunk-picker / conflict features."""
-        from lajjzy.backend.jj import edit_change
+    # -- out-of-loop helpers ---------------------------------------------
 
-        if self.graph and self.graph.working_copy_index is not None:
-            current = self.graph.lines[self.graph.working_copy_index].change_id
+    async def ensure_working_copy(self, change_id: str) -> bool:
+        """Working-copy gate: make ``change_id`` the @ commit before any
+        filesystem-touching op. Returns True if @ is (now) the target.
+
+        This is an out-of-band async helper for deferred filesystem features
+        (hunk picker, conflict resolution); it sets the ``error`` reactive
+        directly rather than flowing through the MVU loop.
+        """
+        graph = self.model.graph
+        if graph and graph.working_copy_index is not None:
+            current = graph.lines[graph.working_copy_index].change_id
             if current == change_id:
                 return True
         try:
-            await edit_change(self.repo_path, change_id)
+            await jj.edit_change(self.repo_path, change_id)
         except JjError as exc:
             self.error = str(exc)
             return False
@@ -318,14 +299,15 @@ class LajjzyApp(App[None]):
 
     @work(group="diff", exclusive=True)
     async def open_diff(self, path: str) -> None:
-        from lajjzy.backend.jj import change_diff
+        # Diff browsing is ephemeral view-local state owned by the detail pane,
+        # not core application state, so it stays outside the Model/update loop.
         from lajjzy.widgets import DetailPanel
 
         change_id = self.selected_change_id()
         if change_id is None:
             return
         try:
-            all_files = await change_diff(self.repo_path, change_id)
+            all_files = await jj.change_diff(self.repo_path, change_id)
         except JjError as exc:
             self.error = str(exc)
             return

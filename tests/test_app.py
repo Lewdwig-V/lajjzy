@@ -334,12 +334,9 @@ async def test_mutation_gate_clears_after_completion(temp_repo: Path, monkeypatc
     async def instant_load(cwd):
         return await original_load(cwd)
 
+    # The backend reloads via the jj facade attribute (jj.load_graph), so
+    # patching the facade is sufficient — no app-module patch needed.
     monkeypatch.setattr(jjmod, "load_graph", instant_load)
-
-    # Also patch the import inside app.py (load_graph is imported at module level)
-    import lajjzy.app as app_mod
-
-    monkeypatch.setattr(app_mod, "load_graph", instant_load)
 
     app = LajjzyApp(repo_path=temp_repo)
     async with app.run_test() as pilot:
