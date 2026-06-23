@@ -3,9 +3,15 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from lajjzy.core.commands import Cmd, EditMessage, LoadGraph, RunMutation
+from lajjzy.core.commands import Cmd, EditMessage, LoadBookmarks, LoadGraph, RunMutation
 from lajjzy.core.messages import (
     Abandon,
+    BookmarkDelete,
+    BookmarkInputCancel,
+    BookmarkInputConfirm,
+    BookmarkMoveConfirm,
+    BookmarksLoadFailed,
+    BookmarksLoaded,
     CursorBottom,
     CursorDown,
     CursorTop,
@@ -22,6 +28,8 @@ from lajjzy.core.messages import (
     NewChange,
     OmnibarCancel,
     OmnibarSubmit,
+    OpenBookmarkPicker,
+    OpenBookmarkSet,
     OpenOmnibar,
     RebaseCancel,
     RebaseConfirm,
@@ -121,6 +129,27 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
     # OmnibarInput / OmnibarBackspace / OmnibarAcceptCompletion are handled
     # widget-locally (query/cursor/completions are ephemeral); only submit /
     # cancel reach core.
+
+    # --- bookmarks --------------------------------------------------------
+    if isinstance(msg, OpenBookmarkSet):
+        return replace(model, modal="bookmark_input"), []
+    if isinstance(msg, OpenBookmarkPicker):
+        return replace(model, modal="bookmark_picker"), [LoadBookmarks()]
+    if isinstance(msg, BookmarkInputConfirm):
+        target = selected_change_id(model)
+        if target is None:
+            return replace(model, modal=None, error="No change selected"), []
+        return _start_mutation(replace(model, modal=None), "bookmark_set", (target, msg.name))
+    if isinstance(msg, BookmarkInputCancel):
+        return replace(model, modal=None), []
+    if isinstance(msg, BookmarkDelete):
+        return _start_mutation(model, "bookmark_delete", (msg.name,))
+    if isinstance(msg, BookmarkMoveConfirm):
+        return _start_mutation(model, "bookmark_move", (msg.name, msg.dest_change_id))
+    if isinstance(msg, BookmarksLoaded):
+        return replace(model, bookmarks=msg.bookmarks), []
+    if isinstance(msg, BookmarksLoadFailed):
+        return replace(model, error=msg.error), []
 
     # --- describe (mutation gated behind an editor round-trip) ------------
     if isinstance(msg, DescribeRequested):

@@ -10,9 +10,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from lajjzy.backend.types import ChangeDetail, GraphData, GraphLine
+from lajjzy.backend.types import Bookmark, ChangeDetail, GraphData, GraphLine
 from lajjzy.core import (
     Abandon,
+    BookmarkDelete,
+    BookmarkInputCancel,
+    BookmarkInputConfirm,
+    BookmarkMoveConfirm,
+    BookmarksLoadFailed,
+    BookmarksLoaded,
     CursorBottom,
     CursorDown,
     CursorTop,
@@ -23,6 +29,7 @@ from lajjzy.core import (
     EditMessage,
     GraphLoaded,
     GraphLoadFailed,
+    LoadBookmarks,
     LoadGraph,
     Model,
     MutationCompleted,
@@ -30,6 +37,8 @@ from lajjzy.core import (
     NewChange,
     OmnibarCancel,
     OmnibarSubmit,
+    OpenBookmarkPicker,
+    OpenBookmarkSet,
     OpenOmnibar,
     RebaseCancel,
     RebaseConfirm,
@@ -325,7 +334,6 @@ from lajjzy.core import (  # noqa: E402, F401, F811
     Undo,
 )
 from lajjzy.backend.types import (  # noqa: E402, F401
-    Bookmark,
     CompletionItem,
     ConflictData,
     HunkRef,
@@ -471,3 +479,62 @@ def test_omnibar_submit_none_clears_revset():
     assert submitted.modal is None
     assert submitted.revset is None
     assert cmds == [LoadGraph(submitted.graph_epoch, None)]
+
+
+# --- bookmarks ---------------------------------------------------------
+
+
+def test_open_bookmark_set_sets_modal():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, OpenBookmarkSet())
+    assert m1.modal == "bookmark_input"
+
+
+def test_open_bookmark_picker_sets_modal_and_loads():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, OpenBookmarkPicker())
+    assert m1.modal == "bookmark_picker"
+    assert cmds == [LoadBookmarks()]
+
+
+def test_bookmark_input_confirm_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenBookmarkSet())
+    confirmed, cmds = update(opened, BookmarkInputConfirm("main"))
+    assert confirmed.modal is None
+    assert confirmed.pending_mutation is True
+    assert cmds == [RunMutation(confirmed.graph_epoch, "bookmark_set", ("aaa", "main"))]
+
+
+def test_bookmark_input_cancel_clears_modal():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenBookmarkSet())
+    cancelled, _ = update(opened, BookmarkInputCancel())
+    assert cancelled.modal is None
+
+
+def test_bookmark_delete_starts_mutation():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, BookmarkDelete("main"))
+    assert m1.pending_mutation is True
+    assert cmds == [RunMutation(2, "bookmark_delete", ("main",))]
+
+
+def test_bookmark_move_confirm_starts_mutation():
+    m = _loaded("aaa", "bbb", working=0)
+    confirmed, cmds = update(m, BookmarkMoveConfirm("main", "bbb"))
+    assert confirmed.pending_mutation is True
+    assert cmds == [RunMutation(2, "bookmark_move", ("main", "bbb"))]
+
+
+def test_bookmarks_loaded_stores_entries():
+    m = _loaded("aaa", working=0)
+    bms = [Bookmark(name="main", change_id="aaa", change_description="d")]
+    m1, _ = update(m, BookmarksLoaded(bms))
+    assert m1.bookmarks == bms
+
+
+def test_bookmarks_load_failed_sets_error():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, BookmarksLoadFailed("boom"))
+    assert m1.error == "boom"
