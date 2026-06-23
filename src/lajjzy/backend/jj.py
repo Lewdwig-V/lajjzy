@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from lajjzy.backend.parse import parse_file_diffs, parse_graph_output
-from lajjzy.backend.types import FileDiff, GraphData, JjError
+from lajjzy.backend.parse import parse_file_diffs, parse_graph_output, parse_op_log
+from lajjzy.backend.types import FileDiff, GraphData, JjError, OpLogEntry
 
 
 async def run_jj(args: list[str], cwd: Path) -> str:
@@ -112,3 +112,30 @@ async def rebase_single(cwd: Path, source: str, destination: str) -> str:
 async def rebase_with_descendants(cwd: Path, source: str, destination: str) -> str:
     await run_jj(["rebase", "-s", source, "--onto", destination], cwd)
     return f"Rebased {source} + descendants onto {destination}"
+
+
+async def undo(cwd: Path) -> str:
+    await run_jj(["undo"], cwd)
+    return "Undid the last operation"
+
+
+async def redo(cwd: Path) -> str:
+    await run_jj(["redo"], cwd)
+    return "Redid the last operation"
+
+
+_OP_LOG_TEMPLATE = (
+    'self.id().short(16) ++ "\\x1f" ++ '
+    'self.time().start().ago() ++ "\\x1f" ++ '
+    'coalesce(description.first_line(), "") ++ "\\n"'
+)
+
+
+async def op_log(cwd: Path) -> list[OpLogEntry]:
+    stdout = await run_jj(["op", "log", "--no-graph", "-T", _OP_LOG_TEMPLATE], cwd)
+    return parse_op_log(stdout)
+
+
+async def op_restore(cwd: Path, op_id: str) -> str:
+    await run_jj(["op", "restore", op_id], cwd)
+    return f"Restored operation {op_id}"
