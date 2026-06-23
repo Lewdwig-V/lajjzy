@@ -5,6 +5,8 @@ from typing import TypedDict
 from lajjzy.backend.types import (
     Bookmark,
     ChangeDetail,
+    ConflictData,
+    ConflictRegion,
     DiffHunk,
     DiffLine,
     FileDiff,
@@ -208,3 +210,65 @@ def parse_bookmarks(output: str) -> list[Bookmark]:
             continue
         bms.append(Bookmark(name=parts[0], change_id=parts[1], change_description=parts[2]))
     return bms
+
+
+_CONFLICT_MARKERS = ("<<<<<<<", "|||||||", "=======", ">>>>>>>")
+
+
+def parse_conflict_data(output: str) -> ConflictData:
+    """Parse a conflicted file's raw content into ConflictData.
+
+    jj's conflict format uses 7-char markers on their own lines:
+        <<<<<<<
+        <left (ours)>
+        |||||||
+        <base>
+        =======
+        <right (theirs)>
+        >>>>>>>
+    Regions outside conflict hunks are non-conflicting (``resolved``).
+    An empty side means that side deleted the region.
+    """
+    lines = output.splitlines(keepends=True)
+    regions: list[ConflictRegion] = []
+    i = 0
+    pending_resolved: list[str] = []
+
+    def flush_resolved() -> None:
+        if pending_resolved:
+            regions.append(ConflictRegion.resolved("".join(pending_resolved)))
+            pending_resolved.clear()
+
+    while i < len(lines):
+        stripped = lines[i].rstrip("\n")
+        if stripped == "<<<<<<<":
+            flush_resolved()
+            i += 1
+            left: list[str] = []
+            while i < len(lines) and lines[i].rstrip("\n") != "|||||||":
+                left.append(lines[i])
+                i += 1
+            i += 1  # skip |||||||
+            base: list[str] = []
+            while i < len(lines) and lines[i].rstrip("\n") != "=======":
+                base.append(lines[i])
+                i += 1
+            i += 1  # skip =======
+            right: list[str] = []
+            while i < len(lines) and lines[i].rstrip("\n") != ">>>>>>>":
+                right.append(lines[i])
+                i += 1
+            i += 1  # skip >>>>>>>
+            regions.append(
+                ConflictRegion.conflict(
+                    base="".join(base),
+                    left="".join(left),
+                    right="".join(right),
+                )
+            )
+        else:
+            pending_resolved.append(lines[i])
+            i += 1
+
+    flush_resolved()
+    return ConflictData(regions=regions)

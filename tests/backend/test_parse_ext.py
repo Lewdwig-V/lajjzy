@@ -104,3 +104,42 @@ def test_parse_bookmarks_ignores_blank_trailing_line():
 
     bms = parse_bookmarks("main\x1fabc\x1fdesc\n")
     assert len(bms) == 1
+
+
+def test_parse_conflict_data_no_conflicts():
+    from lajjzy.backend.parse import parse_conflict_data
+
+    # A file with no conflict markers is one resolved region.
+    cd = parse_conflict_data("line1\nline2\n")
+    assert len(cd.regions) == 1
+    assert cd.regions[0].kind == "resolved"
+    assert cd.regions[0].text == "line1\nline2\n"
+
+
+def test_parse_conflict_data_one_conflict():
+    from lajjzy.backend.parse import parse_conflict_data
+
+    out = "before\n<<<<<<<\nours\n|||||||\nbase\n=======\ntheirs\n>>>>>>>\nafter\n"
+    cd = parse_conflict_data(out)
+    assert len(cd.regions) == 3
+    assert cd.regions[0].kind == "resolved"
+    assert cd.regions[0].text == "before\n"
+    assert cd.regions[1].kind == "conflict"
+    assert cd.regions[1].left == "ours\n"
+    assert cd.regions[1].base == "base\n"
+    assert cd.regions[1].right == "theirs\n"
+    assert cd.regions[2].kind == "resolved"
+    assert cd.regions[2].text == "after\n"
+
+
+def test_parse_conflict_data_empty_sides():
+    from lajjzy.backend.parse import parse_conflict_data
+
+    # Empty side = that side deleted the region.
+    out = "<<<<<<<\n|||||||\nbase\n=======\ntheirs\n>>>>>>>\n"
+    cd = parse_conflict_data(out)
+    assert len(cd.regions) == 1
+    assert cd.regions[0].kind == "conflict"
+    assert cd.regions[0].left == ""
+    assert cd.regions[0].base == "base\n"
+    assert cd.regions[0].right == "theirs\n"
