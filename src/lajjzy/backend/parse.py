@@ -11,6 +11,7 @@ from lajjzy.backend.types import (
     FileStatus,
     GraphData,
     GraphLine,
+    OpLogEntry,
 )
 
 UNIT_SEP = "\x1f"
@@ -173,3 +174,19 @@ def parse_file_diffs(output: str) -> list[FileDiff]:
         )
         for pf in pending_files
     ]
+
+
+def parse_op_log(output: str) -> list[OpLogEntry]:
+    """Parse `jj op log --no-graph -T <template>` output into OpLogEntry list.
+
+    Template (set in jj.py): id ++ \\x1f ++ timestamp ++ \\x1f ++ description ++ \\n
+    """
+    entries: list[OpLogEntry] = []
+    for line in output.split("\n"):
+        if not line:
+            continue
+        parts = line.split("\x1f")
+        if len(parts) != 3:
+            continue
+        entries.append(OpLogEntry(op_id=parts[0], timestamp=parts[1], description=parts[2]))
+    return entries

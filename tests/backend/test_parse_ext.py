@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from lajjzy.backend.parse import parse_op_log
 from lajjzy.backend.types import (
     Bookmark,
     CompletionItem,
@@ -54,3 +55,26 @@ def test_completion_item_fields():
     c = CompletionItem(insert_text="all(", display_text="all() — all visible changes")
     assert c.insert_text == "all("
     assert c.display_text.startswith("all()")
+
+
+def test_parse_op_log_empty():
+    assert parse_op_log("") == []
+
+
+def test_parse_op_log_entries():
+    # jj op log --no-graph -T produces one entry per line with our template;
+    # fields are separated by \x1f, entries by \n.
+    out = "abc123\x1f2 hours ago\x1fcommit xyz\ndef456\x1f1 hour ago\x1fabsorb"
+    entries = parse_op_log(out)
+    assert len(entries) == 2
+    assert entries[0].op_id == "abc123"
+    assert entries[0].timestamp == "2 hours ago"
+    assert entries[0].description == "commit xyz"
+    assert entries[1].op_id == "def456"
+    assert entries[1].description == "absorb"
+
+
+def test_parse_op_log_ignores_blank_trailing_line():
+    out = "abc\x1fnow\x1fdesc\n"
+    entries = parse_op_log(out)
+    assert len(entries) == 1
