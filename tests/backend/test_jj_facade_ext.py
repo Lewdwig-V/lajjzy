@@ -228,6 +228,60 @@ async def test_split_increases_change_count(temp_repo: Path) -> None:
 
 
 @jj_required
+async def test_split_file_placement(temp_repo: Path) -> None:
+    """split() puts the SELECTED file in the first/parent commit (which retains
+    the source's change-id) and the UNSELECTED file in the new child commit.
+
+    Empirically verified jj 0.42.0 behaviour: ``jj split -r <source> -m ""
+    <paths>`` places ``<paths>`` in the first commit (keeps source change-id,
+    empty description) and the remaining files in a new child working-copy
+    commit that retains the original description.  This test is the contract —
+    if jj ever flips the placement this test will catch it.
+    """
+    import subprocess
+
+    # Create a two-file change in the working copy.
+    (temp_repo / "fa.txt").write_text("alpha\n")
+    (temp_repo / "fb.txt").write_text("beta\n")
+    subprocess.run(
+        ["jj", "describe", "-m", "two-file change"], cwd=temp_repo, check=True, capture_output=True
+    )
+
+    graph_before = await jj.load_graph(temp_repo)
+    wc_idx = graph_before.working_copy_index
+    assert wc_idx is not None
+    source_id = graph_before.lines[wc_idx].change_id
+    assert source_id is not None
+
+    # Split selecting only fa.txt.
+    await jj.split(temp_repo, source_id, [HunkRef(path="fa.txt", hunk_idx=0)])
+
+    # source_id is retained by the first/parent commit and should contain fa.txt.
+    parent_diff = await jj.change_diff(temp_repo, source_id)
+    parent_paths = {fd.path for fd in parent_diff}
+    assert "fa.txt" in parent_paths, (
+        f"Expected fa.txt in first/parent commit (source_id={source_id}), got {parent_paths}"
+    )
+    assert "fb.txt" not in parent_paths, (
+        f"fb.txt should be in the child commit, not the parent (got {parent_paths})"
+    )
+
+    # The new child (current working copy @) should contain only fb.txt.
+    graph_after = await jj.load_graph(temp_repo)
+    new_wc_idx = graph_after.working_copy_index
+    assert new_wc_idx is not None
+    child_id = graph_after.lines[new_wc_idx].change_id
+    assert child_id is not None
+    assert child_id != source_id, "Working copy must be a new change after split"
+
+    child_diff = await jj.change_diff(temp_repo, child_id)
+    child_paths = {fd.path for fd in child_diff}
+    assert "fb.txt" in child_paths, (
+        f"Expected fb.txt in new child commit (child_id={child_id}), got {child_paths}"
+    )
+
+
+@jj_required
 async def test_squash_partial_moves_file_to_parent(temp_repo: Path) -> None:
     """squash_partial() moves only the selected file's changes into the parent.
 

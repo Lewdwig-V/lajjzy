@@ -144,6 +144,11 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         if revset is not None and revset == "":
             # empty query = no-op, just close
             return replace(model, modal=None), []
+        if model.pending_mutation:
+            # Don't race the mutation's follow-up reload (same guard as
+            # ReloadRequested).  Record the revset + close the modal; it takes
+            # effect on the next load triggered by MutationCompleted.
+            return replace(model, modal=None, revset=revset), []
         epoch = model.graph_epoch + 1
         return replace(model, modal=None, revset=revset, graph_epoch=epoch), [
             LoadGraph(epoch, revset)

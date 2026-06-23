@@ -470,6 +470,21 @@ def test_omnibar_submit_with_revset_loads_filtered_graph():
     assert cmds == [LoadGraph(submitted.graph_epoch, "mine()")]
 
 
+def test_omnibar_submit_blocked_while_pending():
+    """OmnibarSubmit while a mutation is in-flight must not bump the epoch or
+    emit LoadGraph — it records the revset and closes the modal, letting the
+    mutation's follow-up reload pick it up (mirrors the ReloadRequested guard).
+    """
+    m = _loaded("aaa", working=0)
+    armed, _ = update(m, NewChange())
+    epoch_before = armed.graph_epoch
+    result, cmds = update(armed, OmnibarSubmit("mine()"))
+    assert cmds == []
+    assert result.modal is None
+    assert result.revset == "mine()"
+    assert result.graph_epoch == epoch_before  # no bump
+
+
 def test_omnibar_submit_none_clears_revset():
     m = _loaded("aaa", working=0)
     # precondition: a revset is active

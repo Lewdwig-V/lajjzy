@@ -253,15 +253,18 @@ async def resolve(cwd: Path, path: str, resolutions: list[str]) -> str:
 async def split(cwd: Path, source: str, hunks: list[HunkRef]) -> str:
     """Non-interactively split ``source`` by file.
 
-    Runs ``jj split -r <source> <paths...>`` which puts the listed files'
-    changes into a new child commit and leaves the rest in ``source``.
+    Runs ``jj split -r <source> -m "" <paths...>``.  Empirically verified
+    behaviour in jj 0.42.0:
+
+    * The **selected** files (``<paths>``) are placed in the **first/parent**
+      commit, which **retains the source's original change-id** and receives
+      the empty description supplied via ``-m ""``.
+    * The **unselected** files continue in a **new child** commit that becomes
+      the working copy (``@``) and keeps the source's original description.
+
     ``hunk_idx`` fields are accepted but only the path is used in phase 1
     (file-granularity limitation — hunk-granular split needs a stable
     non-interactive jj CLI flag not available in 0.42.0).
-
-    The split-off change is created with an empty description (because
-    ``-m ""`` suppresses the editor); callers should prompt the user to
-    describe it after the operation completes.
 
     Raises ``JjError`` if ``hunks`` is empty or the jj command fails.
     """
