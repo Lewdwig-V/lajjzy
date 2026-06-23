@@ -3,8 +3,22 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from lajjzy.backend.parse import parse_bookmarks, parse_file_diffs, parse_graph_output, parse_op_log
-from lajjzy.backend.types import Bookmark, FileDiff, GraphData, JjError, OpLogEntry
+from lajjzy.backend.parse import (
+    parse_bookmarks,
+    parse_conflict_data,
+    parse_file_diffs,
+    parse_graph_output,
+    parse_op_log,
+)
+from lajjzy.backend.types import (
+    Bookmark,
+    ConflictData,
+    FileDiff,
+    GraphData,
+    HunkResolution,
+    JjError,
+    OpLogEntry,
+)
 
 
 async def run_jj(args: list[str], cwd: Path) -> str:
@@ -175,3 +189,56 @@ async def bookmark_move(cwd: Path, name: str, dest_change_id: str) -> str:
     # directionality constraints — that is the caller's responsibility.
     await run_jj(["bookmark", "set", "--allow-backwards", "-r", dest_change_id, name], cwd)
     return f"Moved bookmark {name} to {dest_change_id}"
+
+
+async def conflict_data(cwd: Path, path: str) -> ConflictData:
+    """Read a conflicted file's raw content (with jj conflict markers) and
+    parse it into ConflictData. Works on the working copy (``@``).
+
+    Forces ``ui.conflict-marker-style=git`` so the output uses the
+    traditional 3-way markers (``<<<<<<<`` / ``|||||||`` / ``=======`` /
+    ``>>>>>>>``) that ``parse_conflict_data`` understands.  jj 0.42.0
+    defaults to a diff-based format that is structurally incompatible with
+    the parser; the git style is the stable, machine-parseable subset.
+    """
+    stdout = await run_jj(
+        ["file", "show", "-r", "@", "--config", "ui.conflict-marker-style=git", path],
+        cwd,
+    )
+    return parse_conflict_data(stdout)
+
+
+def _build_resolved_content(data: ConflictData, resolutions: list[str]) -> str:
+    """Apply per-hunk resolution choices to produce the final file content.
+
+    ``resolutions`` is one entry per conflict region (in order), each being a
+    ``HunkResolution`` constant.  ``HunkResolution.NONE`` is treated as
+    ``ACCEPT_LEFT`` (the widget must not let users apply with NONE set, but we
+    default defensively).
+    """
+    out: list[str] = []
+    conflict_idx = 0
+    for region in data.regions:
+        if region.kind == "resolved":
+            out.append(region.text)
+            continue
+        choice = resolutions[conflict_idx]
+        conflict_idx += 1
+        if choice == HunkResolution.ACCEPT_RIGHT:
+            out.append(region.right)
+        else:  # NONE or ACCEPT_LEFT
+            out.append(region.left)
+    return "".join(out)
+
+
+async def resolve(cwd: Path, path: str, resolutions: list[str]) -> str:
+    """Write the resolved file content to the working copy.
+
+    Caller must ensure ``@`` is the conflicted change.  Does NOT mark the
+    conflict resolved in jj's internal state — that happens automatically when
+    the file no longer contains conflict markers.
+    """
+    data = await conflict_data(cwd, path)
+    resolved = _build_resolved_content(data, resolutions)
+    (cwd / path).write_text(resolved)
+    return f"Resolved {path}"

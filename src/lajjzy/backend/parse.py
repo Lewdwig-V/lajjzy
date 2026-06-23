@@ -218,14 +218,21 @@ _CONFLICT_MARKERS = ("<<<<<<<", "|||||||", "=======", ">>>>>>>")
 def parse_conflict_data(output: str) -> ConflictData:
     """Parse a conflicted file's raw content into ConflictData.
 
-    jj's conflict format uses 7-char markers on their own lines:
-        <<<<<<<
+    Handles jj's git-style conflict markers (``ui.conflict-marker-style = "git"``).
+    Each marker begins with the canonical 7-char sequence but may be followed by
+    extra metadata on the same line (e.g. ``<<<<<<< abc1234 "branch-name"``).
+    The ``=======`` separator carries no extra metadata and is matched exactly.
+
+    Format::
+
+        <<<<<<< <optional metadata>
         <left (ours)>
-        |||||||
+        ||||||| <optional metadata>
         <base>
         =======
         <right (theirs)>
-        >>>>>>>
+        >>>>>>> <optional metadata>
+
     Regions outside conflict hunks are non-conflicting (``resolved``).
     An empty side means that side deleted the region.
     """
@@ -241,11 +248,11 @@ def parse_conflict_data(output: str) -> ConflictData:
 
     while i < len(lines):
         stripped = lines[i].rstrip("\n")
-        if stripped == "<<<<<<<":
+        if stripped.startswith("<<<<<<<"):
             flush_resolved()
             i += 1
             left: list[str] = []
-            while i < len(lines) and lines[i].rstrip("\n") != "|||||||":
+            while i < len(lines) and not lines[i].rstrip("\n").startswith("|||||||"):
                 left.append(lines[i])
                 i += 1
             i += 1  # skip |||||||
@@ -255,7 +262,7 @@ def parse_conflict_data(output: str) -> ConflictData:
                 i += 1
             i += 1  # skip =======
             right: list[str] = []
-            while i < len(lines) and lines[i].rstrip("\n") != ">>>>>>>":
+            while i < len(lines) and not lines[i].rstrip("\n").startswith(">>>>>>>"):
                 right.append(lines[i])
                 i += 1
             i += 1  # skip >>>>>>>
