@@ -78,3 +78,29 @@ def test_parse_op_log_ignores_blank_trailing_line():
     out = "abc\x1fnow\x1fdesc\n"
     entries = parse_op_log(out)
     assert len(entries) == 1
+
+
+def test_parse_bookmarks_empty():
+    from lajjzy.backend.parse import parse_bookmarks
+
+    assert parse_bookmarks("") == []
+
+
+def test_parse_bookmarks_entries():
+    from lajjzy.backend.parse import parse_bookmarks
+
+    # name \x1f change_id \x1f change_description \n
+    out = "main\x1fksqxwpml\x1fhead commit\nfeature\x1fytoqrzxn\x1fwip"
+    bms = parse_bookmarks(out)
+    assert len(bms) == 2
+    assert bms[0].name == "main"
+    assert bms[0].change_id == "ksqxwpml"
+    assert bms[0].change_description == "head commit"
+    assert bms[1].name == "feature"
+
+
+def test_parse_bookmarks_ignores_blank_trailing_line():
+    from lajjzy.backend.parse import parse_bookmarks
+
+    bms = parse_bookmarks("main\x1fabc\x1fdesc\n")
+    assert len(bms) == 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TypedDict
 
 from lajjzy.backend.types import (
+    Bookmark,
     ChangeDetail,
     DiffHunk,
     DiffLine,
@@ -185,8 +186,25 @@ def parse_op_log(output: str) -> list[OpLogEntry]:
     for line in output.split("\n"):
         if not line:
             continue
-        parts = line.split("\x1f")
+        parts = line.split(UNIT_SEP)
         if len(parts) != 3:
             continue
         entries.append(OpLogEntry(op_id=parts[0], timestamp=parts[1], description=parts[2]))
     return entries
+
+
+def parse_bookmarks(output: str) -> list[Bookmark]:
+    """Parse `jj bookmark list -T <template>` output into Bookmark list.
+
+    Template (set in jj.py): name ++ \\x1f ++ change_id.short() ++ \\x1f ++
+    description.first_line() ++ \\n
+    """
+    bms: list[Bookmark] = []
+    for line in output.split("\n"):
+        if not line:
+            continue
+        parts = line.split(UNIT_SEP)
+        if len(parts) != 3:
+            continue
+        bms.append(Bookmark(name=parts[0], change_id=parts[1], change_description=parts[2]))
+    return bms
