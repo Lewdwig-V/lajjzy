@@ -42,3 +42,49 @@ async def test_op_restore_roundtrip(temp_repo: Path):
 
     graph = await jj.load_graph(temp_repo)
     assert isinstance(graph, GraphData)
+
+
+@jj_required
+async def test_load_bookmarks_empty_repo(temp_repo: Path):
+    bms = await jj.load_bookmarks(temp_repo)
+    assert bms == []
+
+
+@jj_required
+async def test_bookmark_set_and_load(temp_repo: Path):
+    graph = await jj.load_graph(temp_repo)
+    target = graph.lines[graph.working_copy_index or 0].change_id
+    assert target is not None
+    await jj.bookmark_set(temp_repo, target, "mybm")
+    bms = await jj.load_bookmarks(temp_repo)
+    names = [b.name for b in bms]
+    assert "mybm" in names
+    matched = [b for b in bms if b.name == "mybm"][0]
+    assert matched.change_id == target
+
+
+@jj_required
+async def test_bookmark_delete(temp_repo: Path):
+    graph = await jj.load_graph(temp_repo)
+    target = graph.lines[graph.working_copy_index or 0].change_id
+    assert target is not None
+    await jj.bookmark_set(temp_repo, target, "todelete")
+    await jj.bookmark_delete(temp_repo, "todelete")
+    bms = await jj.load_bookmarks(temp_repo)
+    assert "todelete" not in [b.name for b in bms]
+
+
+@jj_required
+async def test_bookmark_move(temp_repo: Path):
+    import subprocess
+
+    subprocess.run(["jj", "new", "-m", "second"], cwd=temp_repo, check=True, capture_output=True)
+    graph = await jj.load_graph(temp_repo)
+    first = graph.lines[0].change_id
+    second = graph.lines[1].change_id
+    assert first is not None and second is not None
+    await jj.bookmark_set(temp_repo, first, "moveable")
+    await jj.bookmark_move(temp_repo, "moveable", second)
+    bms = await jj.load_bookmarks(temp_repo)
+    moved = [b for b in bms if b.name == "moveable"][0]
+    assert moved.change_id == second

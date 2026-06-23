@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from lajjzy.backend.parse import parse_file_diffs, parse_graph_output, parse_op_log
-from lajjzy.backend.types import FileDiff, GraphData, JjError, OpLogEntry
+from lajjzy.backend.parse import parse_bookmarks, parse_file_diffs, parse_graph_output, parse_op_log
+from lajjzy.backend.types import Bookmark, FileDiff, GraphData, JjError, OpLogEntry
 
 
 async def run_jj(args: list[str], cwd: Path) -> str:
@@ -139,3 +139,39 @@ async def op_log(cwd: Path) -> list[OpLogEntry]:
 async def op_restore(cwd: Path, op_id: str) -> str:
     await run_jj(["op", "restore", op_id], cwd)
     return f"Restored operation {op_id}"
+
+
+# In jj 0.42.0, `jj bookmark list -T` exposes a CommitRef type where fields are
+# methods invoked on `self`, not bare keywords.  The template therefore uses
+# `self.name()`, `self.normal_target().change_id().short()` and
+# `self.normal_target().description().first_line()` — not the bare `name` /
+# `change_id.short()` / `description.first_line()` that the brief assumed.
+# Field order (name \x1f change_id \x1f description) is preserved so
+# `parse_bookmarks` in parse.py remains correct.
+_BOOKMARK_TEMPLATE = (
+    'self.name() ++ "\\x1f" ++ self.normal_target().change_id().short() ++ "\\x1f" ++ '
+    'coalesce(self.normal_target().description().first_line(), "") ++ "\\n"'
+)
+
+
+async def load_bookmarks(cwd: Path) -> list[Bookmark]:
+    stdout = await run_jj(["bookmark", "list", "-T", _BOOKMARK_TEMPLATE, "--color=never"], cwd)
+    return parse_bookmarks(stdout)
+
+
+async def bookmark_set(cwd: Path, change_id: str, name: str) -> str:
+    await run_jj(["bookmark", "set", "-r", change_id, name], cwd)
+    return f"Set bookmark {name} on {change_id}"
+
+
+async def bookmark_delete(cwd: Path, name: str) -> str:
+    await run_jj(["bookmark", "delete", name], cwd)
+    return f"Deleted bookmark {name}"
+
+
+async def bookmark_move(cwd: Path, name: str, dest_change_id: str) -> str:
+    # --allow-backwards permits moving a bookmark to an ancestor (older) commit,
+    # which jj refuses by default.  A TUI move operation should not impose
+    # directionality constraints — that is the caller's responsibility.
+    await run_jj(["bookmark", "set", "--allow-backwards", "-r", dest_change_id, name], cwd)
+    return f"Moved bookmark {name} to {dest_change_id}"
