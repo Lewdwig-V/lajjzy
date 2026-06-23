@@ -15,6 +15,7 @@ class LoadGraph:
     or GraphLoadFailed(error)."""
 
     epoch: int
+    revset: str | None = None
 
 
 @dataclass(frozen=True)

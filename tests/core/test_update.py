@@ -361,3 +361,42 @@ def test_msg_types_importable():
     assert LoadOpLog() is not None
     assert LoadBookmarks() is not None
     assert LoadConflictData("file.txt") is not None
+
+
+# --- task 10: Cmd types + Model fields -------------------------------------
+
+
+def test_loadgraph_has_revset_field():
+    cmd = LoadGraph(epoch=1, revset="mine()")
+    assert cmd.epoch == 1
+    assert cmd.revset == "mine()"
+
+
+def test_loadgraph_revset_defaults_none():
+    cmd = LoadGraph(epoch=1)
+    assert cmd.revset is None
+
+
+def test_loadoplog_cmd():
+    cmd = LoadOpLog()
+    assert cmd is not None
+
+
+def test_loadbookmarks_cmd():
+    cmd = LoadBookmarks()
+    assert cmd is not None
+
+
+def test_loadconflictdata_cmd():
+    cmd = LoadConflictData(path="file.txt")
+    assert cmd.path == "file.txt"
+
+
+def test_model_new_fields_default_none():
+    m = Model()
+    assert m.op_log_entries is None
+    assert m.bookmarks is None
+    assert m.revset is None
+    assert m.conflict_data is None
+    assert m.conflict_path is None
+    assert m.modal is None

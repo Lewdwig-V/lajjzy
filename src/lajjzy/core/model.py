@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lajjzy.backend.types import GraphData
+from lajjzy.backend.types import Bookmark, ConflictData, GraphData, OpLogEntry
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,15 @@ class Model:
     # its epoch still matches the model's, so a stale load cannot clobber a fresh
     # one. Incremented whenever the model launches a graph-producing effect.
     graph_epoch: int = 0
+    # --- phase 1a additions ---
+    op_log_entries: list[OpLogEntry] | None = None
+    bookmarks: list[Bookmark] | None = None
+    revset: str | None = None
+    conflict_data: ConflictData | None = None
+    conflict_path: str | None = None
+    modal: str | None = (
+        None  # "omnibar"|"bookmark_input"|"bookmark_picker"|"op_log"|"conflict_view"|"hunk_picker"|None
+    )
 
 
 def selected_change_id(model: Model) -> str | None:
