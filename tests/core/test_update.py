@@ -513,6 +513,16 @@ def test_bookmark_input_cancel_clears_modal():
     assert cancelled.modal is None
 
 
+def test_bookmark_input_confirm_no_change_selected_sets_error():
+    # A model with no graph has no selected change — confirm should error
+    # without starting a mutation.
+    m = Model()  # graph is None → selected_change_id returns None
+    m1, cmds = update(m, BookmarkInputConfirm("main"))
+    assert m1.error == "No change selected"
+    assert m1.modal is None
+    assert not any(isinstance(c, RunMutation) for c in cmds)
+
+
 def test_bookmark_delete_starts_mutation():
     m = _loaded("aaa", working=0)
     m1, cmds = update(m, BookmarkDelete("main"))
@@ -661,6 +671,7 @@ def test_squash_partial_confirm_starts_mutation():
     hunks = [HunkRef(path="file.txt", hunk_idx=0)]
     confirmed, cmds = update(opened, SquashPartialConfirm("aaa", hunks))
     assert confirmed.pending_mutation is True
+    assert confirmed.modal is None
     assert cmds == [RunMutation(confirmed.graph_epoch, "squash_partial", ("aaa", hunks))]
 
 

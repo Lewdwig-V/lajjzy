@@ -32,16 +32,24 @@ async def test_op_log_returns_entries(temp_repo: Path):
 
 @jj_required
 async def test_op_restore_roundtrip(temp_repo: Path):
-    # Capture current state, make a change, then restore to undo it.
+    # Capture node count BEFORE making a new change.
+    graph_before = await jj.load_graph(temp_repo)
+    node_count_before = len(graph_before.node_indices)
+
+    # Capture the op_id to restore to, then make a new change.
     entries_before = await jj.op_log(temp_repo)
     op_id = entries_before[0].op_id
     await jj.new_change(temp_repo, "@")
+
+    # Restore to the pre-change operation.
     await jj.op_restore(temp_repo, op_id)
-    # After restore, the new change should be gone — graph load reflects it.
+
+    # After restore, the new change should be gone — node count back to ≤ before.
     from lajjzy.backend.types import GraphData
 
     graph = await jj.load_graph(temp_repo)
     assert isinstance(graph, GraphData)
+    assert len(graph.node_indices) <= node_count_before
 
 
 @jj_required

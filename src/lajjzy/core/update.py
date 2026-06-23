@@ -154,6 +154,7 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
     # cancel reach core.
 
     # --- bookmarks --------------------------------------------------------
+    # BookmarkMove is handled widget-locally (the picker flips into destination-pick mode and later dispatches BookmarkMoveConfirm); no core branch.
     if isinstance(msg, OpenBookmarkSet):
         return replace(model, modal="bookmark_input"), []
     if isinstance(msg, OpenBookmarkPicker):
@@ -241,7 +242,7 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         return replace(model, modal=None, conflict_path=None, conflict_data=None), []
     if isinstance(msg, ApplyResolutions):
         return _start_mutation(
-            replace(model, modal=None),
+            replace(model, modal=None, conflict_path=None, conflict_data=None),
             "resolve",
             (msg.path, msg.resolutions),
         )

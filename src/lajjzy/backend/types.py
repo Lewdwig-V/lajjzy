@@ -135,7 +135,7 @@ class ConflictRegion:
     (``kind == "conflict"``). Use the ``resolved(...)`` / ``conflict(...)``
     classmethods to construct — they set ``kind`` and the side fields."""
 
-    kind: str  # "resolved" | "conflict"
+    kind: Literal["resolved", "conflict"]
     text: str = ""  # for resolved
     base: str = ""  # for conflict
     left: str = ""  # for conflict (ours)

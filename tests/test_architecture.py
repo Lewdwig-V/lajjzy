@@ -88,3 +88,32 @@ def test_parse_module_is_pure():
                 assert alias.name.split(".")[0] not in banned, f"parse.py imports {alias.name}"
         elif isinstance(node, ast.ImportFrom) and node.module:
             assert node.module.split(".")[0] not in banned, f"parse.py imports from {node.module}"
+
+
+def test_core_modules_are_pure():
+    """No module under src/lajjzy/core/ may import Textual, asyncio, subprocess,
+    os, or the jj facade (lajjzy.backend.jj). Pure types from lajjzy.backend.types
+    are allowed; only the I/O facade is forbidden."""
+    _BANNED_TOPS = {"textual", "asyncio", "subprocess", "os"}
+    _BANNED_MODULES = {"lajjzy.backend.jj"}
+
+    core_dir = SRC / "core"
+    offenders: list[str] = []
+
+    for path in sorted(core_dir.rglob("*.py")):
+        tree = _tree(path)
+        rel = path.relative_to(SRC).as_posix()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top = alias.name.split(".")[0]
+                    full = alias.name
+                    if top in _BANNED_TOPS or full in _BANNED_MODULES:
+                        offenders.append(f"{rel}: imports {alias.name}")
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                top = node.module.split(".")[0]
+                full = node.module
+                if top in _BANNED_TOPS or full in _BANNED_MODULES:
+                    offenders.append(f"{rel}: imports from {node.module}")
+
+    assert not offenders, f"core/ purity violations: {offenders}"

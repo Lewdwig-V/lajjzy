@@ -45,10 +45,10 @@ def test_conflict_data():
 
 
 def test_hunk_resolution_values():
-    assert HunkResolution.NONE is not None
-    assert HunkResolution.ACCEPT_LEFT is not None
-    assert HunkResolution.ACCEPT_RIGHT is not None
-    assert HunkResolution.NONE is not HunkResolution.ACCEPT_LEFT
+    assert HunkResolution.NONE == "none"
+    assert HunkResolution.ACCEPT_LEFT == "accept_left"
+    assert HunkResolution.ACCEPT_RIGHT == "accept_right"
+    assert HunkResolution.NONE != HunkResolution.ACCEPT_LEFT
 
 
 def test_completion_item_fields():
@@ -78,6 +78,15 @@ def test_parse_op_log_ignores_blank_trailing_line():
     out = "abc\x1fnow\x1fdesc\n"
     entries = parse_op_log(out)
     assert len(entries) == 1
+
+
+def test_parse_op_log_skips_malformed_line():
+    # The middle line has no field separators — it must be skipped silently.
+    out = "abc\x1fnow\x1fdesc\nMALFORMED_NO_SEPARATORS\ndef\x1flater\x1fother\n"
+    entries = parse_op_log(out)
+    assert len(entries) == 2
+    assert entries[0].op_id == "abc"
+    assert entries[1].op_id == "def"
 
 
 def test_parse_bookmarks_empty():
