@@ -8,6 +8,8 @@ machine, and the epoch guard is testable in microseconds against data.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from lajjzy.backend.types import ChangeDetail, GraphData, GraphLine
 from lajjzy.core import (
     Abandon,
@@ -26,11 +28,16 @@ from lajjzy.core import (
     MutationCompleted,
     MutationFailed,
     NewChange,
+    OmnibarCancel,
+    OmnibarSubmit,
+    OpenOmnibar,
     RebaseCancel,
     RebaseConfirm,
     RebaseStart,
+    Redo,
     ReloadRequested,
     RunMutation,
+    Undo,
     update,
 )
 
@@ -279,7 +286,7 @@ def test_rebase_cancel_clears_source():
 # --- phase 1a: importability smoke test ------------------------------------
 
 
-from lajjzy.core import (  # noqa: E402, F401
+from lajjzy.core import (  # noqa: E402, F401, F811
     # new in phase 1a:
     ApplyResolutions,
     BookmarkDelete,
@@ -400,3 +407,67 @@ def test_model_new_fields_default_none():
     assert m.conflict_data is None
     assert m.conflict_path is None
     assert m.modal is None
+
+
+# --- undo / redo -------------------------------------------------------
+
+
+def test_undo_starts_mutation():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, Undo())
+    assert m1.pending_mutation is True
+    assert m1.graph_epoch == 2
+    assert cmds == [RunMutation(2, "undo", ())]
+
+
+def test_undo_blocked_while_pending():
+    m = _loaded("aaa", working=0)
+    armed, _ = update(m, NewChange())
+    blocked, cmds = update(armed, Undo())
+    assert cmds == []
+    assert blocked.error == "A mutation is already in progress"
+    assert blocked.pending_mutation is True
+
+
+def test_redo_starts_mutation():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, Redo())
+    assert m1.pending_mutation is True
+    assert cmds == [RunMutation(2, "redo", ())]
+
+
+# --- omnibar -----------------------------------------------------------
+
+
+def test_open_omnibar_sets_modal():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, OpenOmnibar())
+    assert m1.modal == "omnibar"
+    assert cmds == []
+
+
+def test_omnibar_cancel_clears_modal():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenOmnibar())
+    cancelled, _ = update(opened, OmnibarCancel())
+    assert cancelled.modal is None
+
+
+def test_omnibar_submit_with_revset_loads_filtered_graph():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenOmnibar())
+    submitted, cmds = update(opened, OmnibarSubmit("mine()"))
+    assert submitted.modal is None
+    assert submitted.revset == "mine()"
+    assert cmds == [LoadGraph(submitted.graph_epoch, "mine()")]
+
+
+def test_omnibar_submit_none_clears_revset():
+    m = _loaded("aaa", working=0)
+    # precondition: a revset is active
+    pre = replace(m, revset="mine()")
+    opened, _ = update(pre, OpenOmnibar())
+    submitted, cmds = update(opened, OmnibarSubmit(None))
+    assert submitted.modal is None
+    assert submitted.revset is None
+    assert cmds == [LoadGraph(submitted.graph_epoch, None)]

@@ -20,11 +20,16 @@ from lajjzy.core.messages import (
     MutationCompleted,
     MutationFailed,
     NewChange,
+    OmnibarCancel,
+    OmnibarSubmit,
+    OpenOmnibar,
     RebaseCancel,
     RebaseConfirm,
     RebaseStart,
+    Redo,
     ReloadRequested,
     Squash,
+    Undo,
 )
 from lajjzy.core.model import Model, cursor_after_reload, selected_change_id, step_cursor
 
@@ -91,6 +96,31 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         return replace(model, error=msg.error, pending_mutation=False), []
     if isinstance(msg, MutationCompleted):
         return _mutation_completed(model, msg), []
+
+    # --- undo / redo ------------------------------------------------------
+    if isinstance(msg, Undo):
+        return _start_mutation(model, "undo", ())
+    if isinstance(msg, Redo):
+        return _start_mutation(model, "redo", ())
+
+    # --- omnibar ----------------------------------------------------------
+    if isinstance(msg, OpenOmnibar):
+        return replace(model, modal="omnibar"), []
+    if isinstance(msg, OmnibarCancel):
+        return replace(model, modal=None), []
+    if isinstance(msg, OmnibarSubmit):
+        revset = msg.revset
+        if revset is not None and revset == "":
+            # empty query = no-op, just close
+            return replace(model, modal=None), []
+        epoch = model.graph_epoch + 1
+        return replace(model, modal=None, revset=revset, graph_epoch=epoch), [
+            LoadGraph(epoch, revset)
+        ]
+
+    # OmnibarInput / OmnibarBackspace / OmnibarAcceptCompletion are handled
+    # widget-locally (query/cursor/completions are ephemeral); only submit /
+    # cancel reach core.
 
     # --- describe (mutation gated behind an editor round-trip) ------------
     if isinstance(msg, DescribeRequested):
