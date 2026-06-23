@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from lajjzy.backend import jj
-from lajjzy.backend.types import ConflictData, HunkResolution, OpLogEntry
+from lajjzy.backend.types import ConflictData, HunkRef, HunkResolution, OpLogEntry
 
 from tests.conftest import jj_required
 
@@ -184,3 +184,80 @@ async def test_resolve_accept_left(temp_repo: Path) -> None:
     msg = await jj.resolve(temp_repo, "c.txt", resolutions)
     assert "resolve" in msg.lower() or "resolved" in msg.lower()
     assert (temp_repo / "c.txt").read_text() == "LEFT\n"
+
+
+@jj_required
+async def test_split_increases_change_count(temp_repo: Path) -> None:
+    """split() with one file selected creates a new child change.
+
+    Setup: create a change with two files (file_a.txt and file_b.txt), then
+    split file_a.txt out.  The resulting graph must have more node-commits
+    than before the split (the selected file lands in a new child; the
+    remaining file stays in the original).
+    """
+    import subprocess
+
+    # Write two files into the working copy (already on a change from fixture).
+    (temp_repo / "file_a.txt").write_text("content a\n")
+    (temp_repo / "file_b.txt").write_text("content b\n")
+    subprocess.run(
+        ["jj", "describe", "-m", "two-file change"], cwd=temp_repo, check=True, capture_output=True
+    )
+
+    graph_before = await jj.load_graph(temp_repo)
+    wc_idx = graph_before.working_copy_index
+    assert wc_idx is not None
+    source_id = graph_before.lines[wc_idx].change_id
+    assert source_id is not None
+
+    node_count_before = len(graph_before.node_indices)
+
+    msg = await jj.split(temp_repo, source_id, [HunkRef(path="file_a.txt", hunk_idx=0)])
+    assert "split" in msg.lower()
+
+    graph_after = await jj.load_graph(temp_repo)
+    assert len(graph_after.node_indices) > node_count_before
+
+
+@jj_required
+async def test_squash_partial_moves_file_to_parent(temp_repo: Path) -> None:
+    """squash_partial() moves only the selected file's changes into the parent.
+
+    Setup:
+    - Parent change: file_a.txt and file_b.txt (first version).
+    - Child change (on top): file_a.txt modified, file_b.txt modified.
+    Then squash_partial with file_a.txt only → file_a.txt modification lands
+    in the parent; file_b.txt modification stays in the child.
+    """
+    import subprocess
+
+    # Parent: write initial versions of both files.
+    (temp_repo / "file_a.txt").write_text("parent a\n")
+    (temp_repo / "file_b.txt").write_text("parent b\n")
+    subprocess.run(
+        ["jj", "describe", "-m", "parent change"], cwd=temp_repo, check=True, capture_output=True
+    )
+    parent_id = _jj_short_id(temp_repo, "@")
+
+    # Child: modify both files.
+    subprocess.run(
+        ["jj", "new", "-m", "child change"], cwd=temp_repo, check=True, capture_output=True
+    )
+    (temp_repo / "file_a.txt").write_text("child a\n")
+    (temp_repo / "file_b.txt").write_text("child b\n")
+    child_id = _jj_short_id(temp_repo, "@")
+
+    msg = await jj.squash_partial(
+        temp_repo, child_id, parent_id, [HunkRef(path="file_a.txt", hunk_idx=0)]
+    )
+    assert "squash" in msg.lower()
+
+    # file_a.txt in the parent change should now contain the child's version.
+    parent_diff = await jj.change_diff(temp_repo, parent_id)
+    parent_paths = {fd.path for fd in parent_diff}
+    assert "file_a.txt" in parent_paths
+
+    # file_b.txt should still be in the child change only.
+    child_diff = await jj.change_diff(temp_repo, child_id)
+    child_paths = {fd.path for fd in child_diff}
+    assert "file_b.txt" in child_paths

@@ -153,3 +153,18 @@ class ConflictRegion:
 @dataclass(frozen=True, slots=True)
 class ConflictData:
     regions: list[ConflictRegion]
+
+
+@dataclass(frozen=True, slots=True)
+class HunkRef:
+    """A reference to a selected hunk for split / partial squash.
+
+    ``hunk_idx`` is the 0-based index of the hunk within the file's diff.
+    Phase-1 implementation operates at file granularity — the whole file is
+    selected whenever any of its hunks appear in the list.  Hunk-granular
+    selection requires a stable non-interactive jj CLI flag not yet available
+    in 0.42.0.
+    """
+
+    path: str
+    hunk_idx: int
