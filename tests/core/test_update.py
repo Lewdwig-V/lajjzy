@@ -538,3 +538,86 @@ def test_bookmarks_load_failed_sets_error():
     m = _loaded("aaa", working=0)
     m1, _ = update(m, BookmarksLoadFailed("boom"))
     assert m1.error == "boom"
+
+
+# --- operation log -----------------------------------------------------
+
+
+def test_open_op_log_sets_modal_and_loads():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, OpenOpLog())
+    assert m1.modal == "op_log"
+    assert cmds == [LoadOpLog()]
+
+
+def test_op_log_close_clears_modal():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenOpLog())
+    closed, _ = update(opened, OpLogClose())
+    assert closed.modal is None
+
+
+def test_op_log_restore_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenOpLog())
+    restored, cmds = update(opened, OpLogRestore("abc123"))
+    assert restored.pending_mutation is True
+    assert restored.modal is None
+    assert cmds == [RunMutation(restored.graph_epoch, "op_restore", ("abc123",))]
+
+
+def test_op_log_loaded_stores_entries():
+    m = _loaded("aaa", working=0)
+    entries = [OpLogEntry(op_id="abc", timestamp="now", description="d")]
+    m1, _ = update(m, OpLogLoaded(entries))
+    assert m1.op_log_entries == entries
+
+
+def test_op_log_load_failed_sets_error():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, OpLogLoadFailed("boom"))
+    assert m1.error == "boom"
+
+
+# --- conflict view -----------------------------------------------------
+
+
+def test_open_conflict_view_sets_modal_and_loads():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, OpenConflictView("file.txt"))
+    assert m1.modal == "conflict_view"
+    assert m1.conflict_path == "file.txt"
+    assert cmds == [LoadConflictData("file.txt")]
+
+
+def test_conflict_view_close_clears_modal_and_path():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenConflictView("file.txt"))
+    closed, _ = update(opened, ConflictViewClose())
+    assert closed.modal is None
+    assert closed.conflict_path is None
+    assert closed.conflict_data is None
+
+
+def test_apply_resolutions_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenConflictView("file.txt"))
+    applied, cmds = update(opened, ApplyResolutions("file.txt", [HunkResolution.ACCEPT_LEFT]))
+    assert applied.pending_mutation is True
+    assert applied.modal is None
+    assert cmds == [
+        RunMutation(applied.graph_epoch, "resolve", ("file.txt", [HunkResolution.ACCEPT_LEFT]))
+    ]
+
+
+def test_conflict_data_loaded_stores_data():
+    m = _loaded("aaa", working=0)
+    data = ConflictData(regions=[])
+    m1, _ = update(m, ConflictDataLoaded(data))
+    assert m1.conflict_data is data
+
+
+def test_conflict_data_load_failed_sets_error():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, ConflictDataLoadFailed("boom"))
+    assert m1.error == "boom"

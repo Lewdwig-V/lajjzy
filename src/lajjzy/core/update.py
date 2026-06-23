@@ -3,15 +3,27 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from lajjzy.core.commands import Cmd, EditMessage, LoadBookmarks, LoadGraph, RunMutation
+from lajjzy.core.commands import (
+    Cmd,
+    EditMessage,
+    LoadBookmarks,
+    LoadConflictData,
+    LoadGraph,
+    LoadOpLog,
+    RunMutation,
+)
 from lajjzy.core.messages import (
     Abandon,
+    ApplyResolutions,
     BookmarkDelete,
     BookmarkInputCancel,
     BookmarkInputConfirm,
     BookmarkMoveConfirm,
     BookmarksLoadFailed,
     BookmarksLoaded,
+    ConflictDataLoadFailed,
+    ConflictDataLoaded,
+    ConflictViewClose,
     CursorBottom,
     CursorDown,
     CursorTop,
@@ -30,7 +42,13 @@ from lajjzy.core.messages import (
     OmnibarSubmit,
     OpenBookmarkPicker,
     OpenBookmarkSet,
+    OpenConflictView,
     OpenOmnibar,
+    OpenOpLog,
+    OpLogClose,
+    OpLogLoadFailed,
+    OpLogLoaded,
+    OpLogRestore,
     RebaseCancel,
     RebaseConfirm,
     RebaseStart,
@@ -196,6 +214,36 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         if model.rebase_source is not None:
             return replace(model, rebase_source=None, error="Rebase cancelled"), []
         return model, []
+
+    # --- operation log ----------------------------------------------------
+    if isinstance(msg, OpenOpLog):
+        return replace(model, modal="op_log"), [LoadOpLog()]
+    if isinstance(msg, OpLogClose):
+        return replace(model, modal=None), []
+    if isinstance(msg, OpLogRestore):
+        return _start_mutation(replace(model, modal=None), "op_restore", (msg.op_id,))
+    if isinstance(msg, OpLogLoaded):
+        return replace(model, op_log_entries=msg.entries), []
+    if isinstance(msg, OpLogLoadFailed):
+        return replace(model, error=msg.error), []
+
+    # --- conflict view ----------------------------------------------------
+    if isinstance(msg, OpenConflictView):
+        return replace(model, modal="conflict_view", conflict_path=msg.path), [
+            LoadConflictData(msg.path)
+        ]
+    if isinstance(msg, ConflictViewClose):
+        return replace(model, modal=None, conflict_path=None, conflict_data=None), []
+    if isinstance(msg, ApplyResolutions):
+        return _start_mutation(
+            replace(model, modal=None),
+            "resolve",
+            (msg.path, msg.resolutions),
+        )
+    if isinstance(msg, ConflictDataLoaded):
+        return replace(model, conflict_data=msg.data), []
+    if isinstance(msg, ConflictDataLoadFailed):
+        return replace(model, error=msg.error), []
 
     return model, []
 
