@@ -621,3 +621,53 @@ def test_conflict_data_load_failed_sets_error():
     m = _loaded("aaa", working=0)
     m1, _ = update(m, ConflictDataLoadFailed("boom"))
     assert m1.error == "boom"
+
+
+# --- hunk picker (split / partial squash) ------------------------------
+
+
+def test_split_opens_hunk_picker_modal():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, Split())
+    assert m1.modal == "hunk_picker"
+
+
+def test_squash_partial_opens_hunk_picker_modal():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, SquashPartial())
+    assert m1.modal == "hunk_picker"
+
+
+def test_hunk_picker_close_clears_modal():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, Split())
+    closed, _ = update(opened, HunkPickerClose())
+    assert closed.modal is None
+
+
+def test_split_confirm_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, Split())
+    hunks = [HunkRef(path="file.txt", hunk_idx=0)]
+    confirmed, cmds = update(opened, SplitConfirm("aaa", hunks))
+    assert confirmed.pending_mutation is True
+    assert confirmed.modal is None
+    assert cmds == [RunMutation(confirmed.graph_epoch, "split", ("aaa", hunks))]
+
+
+def test_squash_partial_confirm_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, SquashPartial())
+    hunks = [HunkRef(path="file.txt", hunk_idx=0)]
+    confirmed, cmds = update(opened, SquashPartialConfirm("aaa", hunks))
+    assert confirmed.pending_mutation is True
+    assert cmds == [RunMutation(confirmed.graph_epoch, "squash_partial", ("aaa", hunks))]
+
+
+def test_split_confirm_blocked_while_pending():
+    m = _loaded("aaa", working=0)
+    armed, _ = update(m, NewChange())
+    opened = replace(armed, modal="hunk_picker")
+    blocked, cmds = update(opened, SplitConfirm("aaa", [HunkRef("f", 0)]))
+    assert cmds == []
+    assert blocked.error == "A mutation is already in progress"

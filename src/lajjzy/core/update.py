@@ -34,6 +34,7 @@ from lajjzy.core.messages import (
     EditChange,
     GraphLoaded,
     GraphLoadFailed,
+    HunkPickerClose,
     Msg,
     MutationCompleted,
     MutationFailed,
@@ -54,7 +55,11 @@ from lajjzy.core.messages import (
     RebaseStart,
     Redo,
     ReloadRequested,
+    Split,
+    SplitConfirm,
     Squash,
+    SquashPartial,
+    SquashPartialConfirm,
     Undo,
 )
 from lajjzy.core.model import Model, cursor_after_reload, selected_change_id, step_cursor
@@ -244,6 +249,20 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         return replace(model, conflict_data=msg.data), []
     if isinstance(msg, ConflictDataLoadFailed):
         return replace(model, error=msg.error), []
+
+    # --- hunk picker (split / partial squash) ----------------------------
+    if isinstance(msg, Split):
+        return replace(model, modal="hunk_picker"), []
+    if isinstance(msg, SquashPartial):
+        return replace(model, modal="hunk_picker"), []
+    if isinstance(msg, HunkPickerClose):
+        return replace(model, modal=None), []
+    if isinstance(msg, SplitConfirm):
+        return _start_mutation(replace(model, modal=None), "split", (msg.source, msg.hunks))
+    if isinstance(msg, SquashPartialConfirm):
+        return _start_mutation(
+            replace(model, modal=None), "squash_partial", (msg.source, msg.hunks)
+        )
 
     return model, []
 
