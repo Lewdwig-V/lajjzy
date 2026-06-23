@@ -212,7 +212,11 @@ def parse_bookmarks(output: str) -> list[Bookmark]:
     return bms
 
 
-_CONFLICT_MARKERS = ("<<<<<<<", "|||||||", "=======", ">>>>>>>")
+def _is_conflict_marker(stripped: str, prefix: str) -> bool:
+    """True if a line (already rstripped of "\n") is the jj git-style conflict
+    marker for ``prefix`` — either the bare 7-char prefix or the prefix followed
+    by a space and metadata. Avoids misreading content lines like "<<<<<<<x"."""
+    return stripped == prefix or stripped.startswith(prefix + " ")
 
 
 def parse_conflict_data(output: str) -> ConflictData:
@@ -248,21 +252,21 @@ def parse_conflict_data(output: str) -> ConflictData:
 
     while i < len(lines):
         stripped = lines[i].rstrip("\n")
-        if stripped.startswith("<<<<<<<"):
+        if _is_conflict_marker(stripped, "<<<<<<<"):
             flush_resolved()
             i += 1
             left: list[str] = []
-            while i < len(lines) and not lines[i].rstrip("\n").startswith("|||||||"):
+            while i < len(lines) and not _is_conflict_marker(lines[i].rstrip("\n"), "|||||||"):
                 left.append(lines[i])
                 i += 1
             i += 1  # skip |||||||
             base: list[str] = []
-            while i < len(lines) and lines[i].rstrip("\n") != "=======":
+            while i < len(lines) and not _is_conflict_marker(lines[i].rstrip("\n"), "======="):
                 base.append(lines[i])
                 i += 1
             i += 1  # skip =======
             right: list[str] = []
-            while i < len(lines) and not lines[i].rstrip("\n").startswith(">>>>>>>"):
+            while i < len(lines) and not _is_conflict_marker(lines[i].rstrip("\n"), ">>>>>>>"):
                 right.append(lines[i])
                 i += 1
             i += 1  # skip >>>>>>>

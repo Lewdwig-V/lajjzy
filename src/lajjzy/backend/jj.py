@@ -216,6 +216,11 @@ def _build_resolved_content(data: ConflictData, resolutions: list[str]) -> str:
     ``ACCEPT_LEFT`` (the widget must not let users apply with NONE set, but we
     default defensively).
     """
+    n_conflicts = sum(1 for r in data.regions if r.kind == "conflict")
+    if n_conflicts > len(resolutions):
+        raise JjError(
+            f"resolve: {n_conflicts} conflict region(s) but only {len(resolutions)} resolution(s) provided"
+        )
     out: list[str] = []
     conflict_idx = 0
     for region in data.regions:
