@@ -93,3 +93,63 @@ class GraphData:
         if 0 <= index < len(self.lines):
             return self.lines[index].change_id
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class OpLogEntry:
+    op_id: str
+    timestamp: str
+    description: str
+
+
+@dataclass(frozen=True, slots=True)
+class Bookmark:
+    name: str
+    change_id: str
+    change_description: str
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionItem:
+    insert_text: str
+    display_text: str
+
+
+class HunkResolution:
+    """Sentinel constants for per-hunk resolution choices in the conflict view.
+
+    Kept as plain class attributes (not an Enum) so widgets can pass them as
+    plain values without importing the enum wrapper; matches how the Rust
+    prototype modelled it as a plain enum we serialize to a label.
+    """
+
+    NONE = "none"  # undecided
+    ACCEPT_LEFT = "accept_left"
+    ACCEPT_RIGHT = "accept_right"
+
+
+@dataclass(frozen=True, slots=True)
+class ConflictRegion:
+    """One region of a conflicted file. Either non-conflicting content
+    (``kind == "resolved"``) or a three-way conflict hunk
+    (``kind == "conflict"``). Use the ``resolved(...)`` / ``conflict(...)``
+    classmethods to construct — they set ``kind`` and the side fields."""
+
+    kind: str  # "resolved" | "conflict"
+    text: str = ""  # for resolved
+    base: str = ""  # for conflict
+    left: str = ""  # for conflict (ours)
+    right: str = ""  # for conflict (theirs)
+
+    @classmethod
+    def resolved(cls, text: str) -> ConflictRegion:
+        return cls(kind="resolved", text=text)
+
+    @classmethod
+    def conflict(cls, base: str, left: str, right: str) -> ConflictRegion:
+        return cls(kind="conflict", base=base, left=left, right=right)
+
+
+@dataclass(frozen=True, slots=True)
+class ConflictData:
+    regions: list[ConflictRegion]
