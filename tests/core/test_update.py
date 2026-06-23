@@ -274,3 +274,90 @@ def test_rebase_cancel_clears_source():
     done, _ = update(armed, RebaseCancel())
     assert done.rebase_source is None
     assert done.error == "Rebase cancelled"
+
+
+# --- phase 1a: importability smoke test ------------------------------------
+
+
+from lajjzy.core import (  # noqa: E402, F401
+    # new in phase 1a:
+    ApplyResolutions,
+    BookmarkDelete,
+    BookmarkInputCancel,
+    BookmarkInputConfirm,
+    BookmarkMove,
+    BookmarkMoveConfirm,
+    BookmarksLoaded,
+    BookmarksLoadFailed,
+    ConflictDataLoadFailed,
+    ConflictDataLoaded,
+    ConflictViewClose,
+    HunkPickerClose,
+    LoadBookmarks,
+    LoadConflictData,
+    LoadOpLog,
+    OpenBookmarkPicker,
+    OpenBookmarkSet,
+    OpenConflictView,
+    OpenOmnibar,
+    OpenOpLog,
+    OmnibarAcceptCompletion,
+    OmnibarBackspace,
+    OmnibarCancel,
+    OmnibarInput,
+    OmnibarSubmit,
+    OpLogClose,
+    OpLogLoaded,
+    OpLogLoadFailed,
+    OpLogRestore,
+    Redo,
+    Split,
+    SplitConfirm,
+    SquashPartial,
+    SquashPartialConfirm,
+    Undo,
+)
+from lajjzy.backend.types import (  # noqa: E402, F401
+    Bookmark,
+    CompletionItem,
+    ConflictData,
+    HunkRef,
+    HunkResolution,
+    OpLogEntry,
+)
+
+
+def test_msg_types_importable():
+    # Smoke test — just constructing each is enough to verify the import + dataclass shape.
+    assert Undo() is not None
+    assert Redo() is not None
+    assert OpenOmnibar() is not None
+    assert OmnibarInput("x") is not None
+    assert OmnibarSubmit("mine()") is not None
+    assert OpenBookmarkSet() is not None
+    assert OpenBookmarkPicker() is not None
+    assert BookmarkInputConfirm("main") is not None
+    assert BookmarkDelete("main") is not None
+    assert BookmarkMove("main") is not None
+    assert BookmarkMoveConfirm("main", "ksqxwpml") is not None
+    assert OpenOpLog() is not None
+    assert OpLogRestore("abc123") is not None
+    assert OpLogClose() is not None
+    assert OpenConflictView("file.txt") is not None
+    assert ConflictViewClose() is not None
+    assert ApplyResolutions("file.txt", [HunkResolution.ACCEPT_LEFT]) is not None
+    assert Split() is not None
+    assert SquashPartial() is not None
+    assert SplitConfirm("ksqxwpml", [HunkRef("file.txt", 0)]) is not None
+    assert SquashPartialConfirm("ksqxwpml", [HunkRef("file.txt", 0)]) is not None
+    # result Msgs
+    assert OpLogLoaded([]) is not None
+    assert OpLogLoadFailed("boom") is not None
+    assert BookmarksLoaded([]) is not None
+    assert BookmarksLoadFailed("boom") is not None
+    assert ConflictDataLoaded(ConflictData(regions=[])) is not None
+    assert ConflictDataLoadFailed("boom") is not None
+    # cmds
+    assert LoadOpLog() is not None
+    assert LoadBookmarks() is not None
+    assert LoadConflictData("file.txt") is not None
