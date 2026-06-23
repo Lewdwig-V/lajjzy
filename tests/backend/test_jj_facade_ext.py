@@ -247,9 +247,7 @@ async def test_squash_partial_moves_file_to_parent(temp_repo: Path) -> None:
     (temp_repo / "file_b.txt").write_text("child b\n")
     child_id = _jj_short_id(temp_repo, "@")
 
-    msg = await jj.squash_partial(
-        temp_repo, child_id, parent_id, [HunkRef(path="file_a.txt", hunk_idx=0)]
-    )
+    msg = await jj.squash_partial(temp_repo, child_id, [HunkRef(path="file_a.txt", hunk_idx=0)])
     assert "squash" in msg.lower()
 
     # file_a.txt in the parent change should now contain the child's version.

@@ -259,6 +259,10 @@ async def split(cwd: Path, source: str, hunks: list[HunkRef]) -> str:
     (file-granularity limitation — hunk-granular split needs a stable
     non-interactive jj CLI flag not available in 0.42.0).
 
+    The split-off change is created with an empty description (because
+    ``-m ""`` suppresses the editor); callers should prompt the user to
+    describe it after the operation completes.
+
     Raises ``JjError`` if ``hunks`` is empty or the jj command fails.
     """
     paths = sorted({h.path for h in hunks})
@@ -270,14 +274,17 @@ async def split(cwd: Path, source: str, hunks: list[HunkRef]) -> str:
     return f"Split {len(paths)} file(s) out of {source}"
 
 
-async def squash_partial(cwd: Path, source: str, destination: str, hunks: list[HunkRef]) -> str:
-    """Move selected files' changes from ``source`` into ``destination``.
+async def squash_partial(cwd: Path, source: str, hunks: list[HunkRef]) -> str:
+    """Move selected files' changes from ``source`` into its parent.
 
-    Runs ``jj squash --from <source> --into <destination>
-    --use-destination-message <paths...>``.  Only paths extracted from
-    ``hunks`` are moved; other files in ``source`` remain.  ``hunk_idx``
-    fields are accepted but only the path is used in phase 1
-    (file-granularity limitation).
+    Runs ``jj squash -r <source> --use-destination-message <paths...>``.
+    Only paths extracted from ``hunks`` are moved; other files in ``source``
+    remain.  ``hunk_idx`` fields are accepted but only the path is used in
+    phase 1 (file-granularity limitation).
+
+    The destination is always ``source``'s parent, parallel to the
+    whole-change ``squash(cwd, change_id)`` which uses
+    ``jj squash -r <id> --use-destination-message``.
 
     Raises ``JjError`` if ``hunks`` is empty or the jj command fails.
     """
@@ -285,7 +292,7 @@ async def squash_partial(cwd: Path, source: str, destination: str, hunks: list[H
     if not paths:
         raise JjError("squash_partial requires at least one selected hunk")
     await run_jj(
-        ["squash", "--from", source, "--into", destination, "--use-destination-message", *paths],
+        ["squash", "-r", source, "--use-destination-message", *paths],
         cwd,
     )
-    return f"Squashed {len(paths)} file(s) from {source} into {destination}"
+    return f"Squashed {len(paths)} file(s) from {source} into its parent"
