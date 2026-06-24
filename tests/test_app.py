@@ -543,3 +543,40 @@ async def test_present_projects_modal_and_new_model_fields(temp_repo: Path):
         app.runtime.dispatch(OpenOmnibar())
         await app.workers.wait_for_complete()
         assert app.modal == "omnibar"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: pilot tests for new key bindings
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_undo_key_runs_jj_undo(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("u")
+        await app.workers.wait_for_complete()
+        assert app.graph is not None
+
+
+@jj_required
+async def test_U_key_runs_jj_redo(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("u")
+        await app.workers.wait_for_complete()
+        await pilot.press("U")
+        await app.workers.wait_for_complete()
+        assert app.graph is not None
+
+
+@jj_required
+async def test_slash_key_opens_omnibar_modal(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("/")
+        await app.workers.wait_for_complete()
+        assert app.modal == "omnibar"

@@ -39,12 +39,20 @@ from lajjzy.core import (
     MutationCompleted,
     MutationFailed,
     NewChange,
+    OpenBookmarkPicker,
+    OpenBookmarkSet,
+    OpenOmnibar,
+    OpenOpLog,
     RebaseCancel,
     RebaseConfirm,
     RebaseStart,
+    Redo,
     ReloadRequested,
     RunMutation,
+    Split,
     Squash,
+    SquashPartial,
+    Undo,
     selected_change_id,
 )
 from lajjzy.core.messages import (
@@ -112,6 +120,14 @@ class LajjzyApp(App[None]):
         ("ctrl+r", "rebase_descendants", "Rebase+desc"),
         ("enter", "rebase_confirm", "Confirm rebase"),
         ("escape", "rebase_cancel", "Cancel"),
+        ("u", "undo", "Undo"),
+        ("U", "redo", "Redo"),
+        ("/", "open_omnibar", "Omnibar"),
+        ("B", "open_bookmark_set", "Set bookmark"),
+        ("b", "open_bookmark_picker", "Bookmarks"),
+        ("o", "open_op_log", "Op log"),
+        ("s", "split", "Split"),
+        ("ctrl+s", "squash_partial", "Squash partial"),
     ]
 
     # Reactives are a *projection* of the Model for the widget layer to watch;
@@ -355,6 +371,30 @@ class LajjzyApp(App[None]):
 
     def action_rebase_cancel(self) -> None:
         self.runtime.dispatch(RebaseCancel())
+
+    def action_undo(self) -> None:
+        self.runtime.dispatch(Undo())
+
+    def action_redo(self) -> None:
+        self.runtime.dispatch(Redo())
+
+    def action_open_omnibar(self) -> None:
+        self.runtime.dispatch(OpenOmnibar())
+
+    def action_open_bookmark_set(self) -> None:
+        self.runtime.dispatch(OpenBookmarkSet())
+
+    def action_open_bookmark_picker(self) -> None:
+        self.runtime.dispatch(OpenBookmarkPicker())
+
+    def action_open_op_log(self) -> None:
+        self.runtime.dispatch(OpenOpLog())
+
+    def action_split(self) -> None:
+        self.runtime.dispatch(Split())
+
+    def action_squash_partial(self) -> None:
+        self.runtime.dispatch(SquashPartial())
 
     # -- $EDITOR (app-layer terminal suspend) ----------------------------
 
