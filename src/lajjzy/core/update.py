@@ -311,7 +311,14 @@ def _mutation_completed(model: Model, msg: MutationCompleted) -> Model:
         if msg.bookmarks is not None:
             reported = replace(reported, bookmarks=msg.bookmarks)
         return reported
-    reported = replace(reported, graph=msg.graph, cursor=cursor_after_reload(msg.graph))
+    # A fresh graph means the prior detail (file cursor / diff) belongs to a
+    # change that may no longer be selected — reset it, like GraphLoaded does.
+    reported = replace(
+        reported,
+        graph=msg.graph,
+        cursor=cursor_after_reload(msg.graph),
+        detail=DetailState(),
+    )
     if msg.bookmarks is not None:
         reported = replace(reported, bookmarks=msg.bookmarks)
     return reported

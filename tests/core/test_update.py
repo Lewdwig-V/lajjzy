@@ -193,6 +193,20 @@ def test_mutation_completed_applies_fresh_graph_and_reports_message():
     assert done.error == "Created"
 
 
+def test_mutation_completed_resets_detail_with_fresh_graph():
+    # A completed mutation reloads the graph and repositions the cursor, so the
+    # prior detail (file cursor / open diff) must not carry across — same
+    # exemplary-MVU invariant as GraphLoaded and select_change.
+    m = replace(
+        _loaded("aaa", working=0),
+        detail=DetailState(file_cursor=2, mode="diff", diff=[]),
+    )
+    armed, [cmd] = update(m, NewChange())
+    new_graph = _graph("aaa", "bbb", working=1)
+    done, _ = update(armed, MutationCompleted(cmd.epoch, "Created", new_graph, None))
+    assert done.detail == DetailState()
+
+
 def test_reload_during_mutation_is_ignored_and_mutation_graph_wins():
     m = _loaded("aaa", working=0)
     armed, [cmd] = update(m, NewChange())

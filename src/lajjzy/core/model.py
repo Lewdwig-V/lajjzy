@@ -67,7 +67,7 @@ def select_change(model: Model, cursor: int) -> Model:
     DetailState whenever the selected line actually changes, so a stale diff or
     file cursor never carries across to a different change."""
     if cursor == model.cursor:
-        return replace(model, cursor=cursor)
+        return model  # no selection change → nothing to reset
     return replace(model, cursor=cursor, detail=DetailState())
 
 

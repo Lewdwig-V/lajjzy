@@ -93,6 +93,7 @@ __all__ = [
     "DescribeAborted",
     "DescribeReady",
     "DescribeRequested",
+    "DetailState",
     "EditChange",
     "EditMessage",
     "GraphLoaded",
@@ -139,5 +140,4 @@ __all__ = [
     "selected_change_id",
     "step_cursor",
     "update",
-    "DetailState",
 ]
