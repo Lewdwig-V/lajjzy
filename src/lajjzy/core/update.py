@@ -12,6 +12,7 @@ from lajjzy.core.commands import (
     LoadOpLog,
     RunMutation,
 )
+from lajjzy.backend.types import FileChange
 from lajjzy.core.messages import (
     Abandon,
     ApplyResolutions,
@@ -31,6 +32,9 @@ from lajjzy.core.messages import (
     DescribeAborted,
     DescribeReady,
     DescribeRequested,
+    DetailBack,
+    DetailFileDown,
+    DetailFileUp,
     EditChange,
     GraphLoaded,
     GraphLoadFailed,
@@ -95,6 +99,25 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
     if isinstance(msg, CursorBottom):
         if model.graph and model.graph.node_indices:
             return select_change(model, model.graph.node_indices[-1]), []
+        return model, []
+
+    # --- detail-pane file navigation -------------------------------------
+    if isinstance(msg, DetailFileDown):
+        if model.detail.mode != "files":
+            return model, []
+        n = len(_current_files(model))
+        if n == 0:
+            return model, []
+        new = min(n - 1, model.detail.file_cursor + 1)
+        return replace(model, detail=replace(model.detail, file_cursor=new)), []
+    if isinstance(msg, DetailFileUp):
+        if model.detail.mode != "files":
+            return model, []
+        new = max(0, model.detail.file_cursor - 1)
+        return replace(model, detail=replace(model.detail, file_cursor=new)), []
+    if isinstance(msg, DetailBack):
+        if model.detail.mode == "diff":
+            return replace(model, detail=replace(model.detail, mode="files", diff=None)), []
         return model, []
 
     # --- graph reload -----------------------------------------------------
@@ -284,6 +307,15 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         )
 
     return model, []
+
+
+def _current_files(model: Model) -> list[FileChange]:
+    """Return the file list for the currently selected change, or [] if none."""
+    cid = selected_change_id(model)
+    if cid is None or model.graph is None:
+        return []
+    detail = model.graph.details.get(cid)
+    return detail.files if detail else []
 
 
 def _start_mutation(

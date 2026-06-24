@@ -10,7 +10,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from lajjzy.backend.types import Bookmark, ChangeDetail, GraphData, GraphLine
+from lajjzy.backend.types import (
+    Bookmark,
+    ChangeDetail,
+    FileChange,
+    FileStatus,
+    GraphData,
+    GraphLine,
+)
 from lajjzy.core import (
     Abandon,
     BookmarkDelete,
@@ -52,7 +59,7 @@ from lajjzy.core import (
 from lajjzy.core.model import DetailState, select_change
 
 
-def _detail(desc: str = "") -> ChangeDetail:
+def _detail(desc: str = "", files: list | None = None) -> ChangeDetail:
     return ChangeDetail(
         commit_id="c0",
         author="a",
@@ -62,7 +69,7 @@ def _detail(desc: str = "") -> ChangeDetail:
         bookmarks=[],
         is_empty=False,
         has_conflict=False,
-        files=[],
+        files=files or [],
         parents=[],
     )
 
@@ -816,3 +823,55 @@ def test_select_change_resets_detail_only_on_actual_change():
     # selecting the same cursor leaves detail untouched
     same = select_change(m, g.node_indices[0])
     assert same.detail == m.detail
+
+
+# --- phase 2a task 2: DetailFileUp/Down/Back Msgs --------------------------
+
+from lajjzy.core import DetailBack, DetailFileDown, DetailFileUp  # noqa: E402
+
+
+def _two_file_change() -> Model:
+    """A model whose selected change 'aaa' has two files."""
+    detail = _detail(
+        files=[
+            FileChange(path="a.txt", status=FileStatus.MODIFIED),
+            FileChange(path="b.txt", status=FileStatus.MODIFIED),
+        ]
+    )
+    g = GraphData(
+        lines=[GraphLine(raw="aaa", change_id="aaa", glyph_prefix="")],
+        details={"aaa": detail},
+        working_copy_index=0,
+        op_id="op",
+    )
+    return replace(Model(), graph=g, cursor=0)
+
+
+def test_detail_file_down_clamps_to_file_count() -> None:
+    m = _two_file_change()
+    m1, cmds = update(m, DetailFileDown())
+    assert m1.detail.file_cursor == 1
+    assert cmds == []
+    m2, _ = update(m1, DetailFileDown())  # already at last file
+    assert m2.detail.file_cursor == 1
+
+
+def test_detail_file_up_clamps_at_zero() -> None:
+    m = replace(_two_file_change(), detail=DetailState(file_cursor=1))
+    m1, _ = update(m, DetailFileUp())
+    assert m1.detail.file_cursor == 0
+    m2, _ = update(m1, DetailFileUp())
+    assert m2.detail.file_cursor == 0
+
+
+def test_detail_file_nav_ignored_in_diff_mode() -> None:
+    m = replace(_two_file_change(), detail=DetailState(file_cursor=0, mode="diff"))
+    m1, _ = update(m, DetailFileDown())
+    assert m1.detail.file_cursor == 0  # unchanged in diff mode
+
+
+def test_detail_back_returns_to_files_and_clears_diff() -> None:
+    m = replace(_two_file_change(), detail=DetailState(mode="diff", diff=[]))
+    m1, _ = update(m, DetailBack())
+    assert m1.detail.mode == "files"
+    assert m1.detail.diff is None

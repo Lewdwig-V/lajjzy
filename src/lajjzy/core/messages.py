@@ -276,6 +276,21 @@ class ConflictDataLoadFailed:
 
 # --- hunk picker (split / partial squash) ------------------------------
 @dataclass(frozen=True)
+class DetailBack:
+    pass
+
+
+@dataclass(frozen=True)
+class DetailFileDown:
+    pass
+
+
+@dataclass(frozen=True)
+class DetailFileUp:
+    pass
+
+
+@dataclass(frozen=True)
 class Split:
     pass
 
@@ -307,6 +322,9 @@ Msg = (
     | CursorUp
     | CursorTop
     | CursorBottom
+    | DetailBack
+    | DetailFileDown
+    | DetailFileUp
     | ReloadRequested
     | NewChange
     | Abandon
