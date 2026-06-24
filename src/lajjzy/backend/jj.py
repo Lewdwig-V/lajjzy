@@ -140,6 +140,9 @@ async def redo(cwd: Path) -> str:
     return "Redid the last operation"
 
 
+# Op-log templates operate on the Operation type, not a commit.
+# Fields: self.id() / self.time().start().ago() (NOT committer.timestamp()) / description.
+# Field order (id, timestamp, description) must match parse_op_log in parse.py.
 _OP_LOG_TEMPLATE = (
     'self.id().short(16) ++ "\\x1f" ++ '
     'self.time().start().ago() ++ "\\x1f" ++ '
