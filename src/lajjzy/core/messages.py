@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from lajjzy.backend.types import (
     Bookmark,
     ConflictData,
+    FileRef,
     GraphData,
-    HunkRef,
     HunkResolutionValue,
     OpLogEntry,
 )
@@ -290,13 +290,13 @@ class HunkPickerClose:
 @dataclass(frozen=True)
 class SplitConfirm:
     source: str
-    hunks: list[HunkRef]
+    files: list[FileRef]
 
 
 @dataclass(frozen=True)
 class SquashPartialConfirm:
     source: str
-    hunks: list[HunkRef]
+    files: list[FileRef]
 
 
 Msg = (

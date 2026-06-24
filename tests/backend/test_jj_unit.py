@@ -5,32 +5,32 @@ from __future__ import annotations
 import pytest
 
 from lajjzy.backend.jj import _build_resolved_content
-from lajjzy.backend.types import ConflictData, ConflictRegion, HunkResolution, JjError
+from lajjzy.backend.types import (
+    ConflictData,
+    ConflictHunk,
+    HunkResolution,
+    JjError,
+    ResolvedRegion,
+)
 
 
 def test_accept_right_selects_right():
     """ACCEPT_RIGHT picks region.right."""
-    data = ConflictData(
-        regions=[ConflictRegion.conflict(base="b\n", left="left\n", right="right\n")]
-    )
+    data = ConflictData(regions=[ConflictHunk(base="b\n", left="left\n", right="right\n")])
     result = _build_resolved_content(data, [HunkResolution.ACCEPT_RIGHT])
     assert result == "right\n"
 
 
 def test_accept_left_selects_left():
     """ACCEPT_LEFT picks region.left."""
-    data = ConflictData(
-        regions=[ConflictRegion.conflict(base="b\n", left="left\n", right="right\n")]
-    )
+    data = ConflictData(regions=[ConflictHunk(base="b\n", left="left\n", right="right\n")])
     result = _build_resolved_content(data, [HunkResolution.ACCEPT_LEFT])
     assert result == "left\n"
 
 
 def test_none_defaults_to_left():
     """NONE falls back to left (defensive default — widget must not allow NONE at apply)."""
-    data = ConflictData(
-        regions=[ConflictRegion.conflict(base="b\n", left="left\n", right="right\n")]
-    )
+    data = ConflictData(regions=[ConflictHunk(base="b\n", left="left\n", right="right\n")])
     result = _build_resolved_content(data, [HunkResolution.NONE])
     assert result == "left\n"
 
@@ -41,11 +41,11 @@ def test_mixed_resolutions_interleaved_with_resolved():
     """
     data = ConflictData(
         regions=[
-            ConflictRegion.resolved("header\n"),
-            ConflictRegion.conflict(base="b1\n", left="left1\n", right="right1\n"),
-            ConflictRegion.resolved("middle\n"),
-            ConflictRegion.conflict(base="b2\n", left="left2\n", right="right2\n"),
-            ConflictRegion.resolved("footer\n"),
+            ResolvedRegion(text="header\n"),
+            ConflictHunk(base="b1\n", left="left1\n", right="right1\n"),
+            ResolvedRegion(text="middle\n"),
+            ConflictHunk(base="b2\n", left="left2\n", right="right2\n"),
+            ResolvedRegion(text="footer\n"),
         ]
     )
     result = _build_resolved_content(
@@ -58,8 +58,8 @@ def test_too_few_resolutions_raises():
     """Fewer resolutions than conflict regions raises JjError naming the counts."""
     data = ConflictData(
         regions=[
-            ConflictRegion.conflict(base="b1\n", left="l1\n", right="r1\n"),
-            ConflictRegion.conflict(base="b2\n", left="l2\n", right="r2\n"),
+            ConflictHunk(base="b1\n", left="l1\n", right="r1\n"),
+            ConflictHunk(base="b2\n", left="l2\n", right="r2\n"),
         ]
     )
     with pytest.raises(JjError, match="2"):
@@ -70,8 +70,8 @@ def test_zero_conflict_regions_no_resolutions():
     """Zero conflict regions with empty resolutions list: returns concatenated resolved text, no raise."""
     data = ConflictData(
         regions=[
-            ConflictRegion.resolved("line1\n"),
-            ConflictRegion.resolved("line2\n"),
+            ResolvedRegion(text="line1\n"),
+            ResolvedRegion(text="line2\n"),
         ]
     )
     result = _build_resolved_content(data, [])

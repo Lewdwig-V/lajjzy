@@ -13,13 +13,15 @@ from lajjzy.backend.parse import (
 from lajjzy.backend.types import (
     Bookmark,
     ConflictData,
+    ConflictHunk,
     FileDiff,
+    FileRef,
     GraphData,
-    HunkRef,
     HunkResolution,
     HunkResolutionValue,
     JjError,
     OpLogEntry,
+    ResolvedRegion,
 )
 
 
@@ -62,13 +64,18 @@ _GRAPH_TEMPLATE = (
 
 
 async def _op_id(cwd: Path) -> str:
-    try:
-        out = await run_jj(
-            ["op", "log", "--limit=1", "--no-graph", "-T", "self.id().short(16)"], cwd
-        )
-        return out.strip() or "unknown"
-    except JjError:
-        return "unknown"
+    # Every valid jj repo (even a fresh ``jj git init``) has at least one
+    # operation in its op-log, so this command succeeds with non-empty output
+    # for any repo we could legally be pointed at.  We therefore let a JjError
+    # propagate (a failure here is a real error — e.g. not a jj repo) and treat
+    # empty output as a broken invariant rather than swallowing either into a
+    # bogus "unknown" op-id, which would silently defeat concurrency detection
+    # in load_graph's GraphData.op_id.
+    out = await run_jj(["op", "log", "--limit=1", "--no-graph", "-T", "self.id().short(16)"], cwd)
+    op_id = out.strip()
+    if not op_id:
+        raise JjError("op log returned no operation id (corrupt or unsupported repo?)")
+    return op_id
 
 
 async def change_diff(cwd: Path, change_id: str) -> list[FileDiff]:
@@ -227,7 +234,7 @@ def _build_resolved_content(data: ConflictData, resolutions: list[HunkResolution
     ``ACCEPT_LEFT`` (the widget must not let users apply with NONE set, but we
     default defensively).
     """
-    n_conflicts = sum(1 for r in data.regions if r.kind == "conflict")
+    n_conflicts = sum(1 for r in data.regions if isinstance(r, ConflictHunk))
     if n_conflicts > len(resolutions):
         raise JjError(
             f"resolve: {n_conflicts} conflict region(s) but only {len(resolutions)} resolution(s) provided"
@@ -235,7 +242,7 @@ def _build_resolved_content(data: ConflictData, resolutions: list[HunkResolution
     out: list[str] = []
     conflict_idx = 0
     for region in data.regions:
-        if region.kind == "resolved":
+        if isinstance(region, ResolvedRegion):
             out.append(region.text)
             continue
         choice = resolutions[conflict_idx]
@@ -255,12 +262,17 @@ async def resolve(cwd: Path, path: str, resolutions: list[HunkResolutionValue]) 
     the file no longer contains conflict markers.
     """
     data = await conflict_data(cwd, path)
+    # Guard against overwriting a file that isn't actually conflicted (e.g. @ is
+    # not the conflicted change).  _build_resolved_content's count guard handles
+    # too-few resolutions; this handles the no-conflict case before any write.
+    if not any(isinstance(r, ConflictHunk) for r in data.regions):
+        raise JjError(f"{path} has no conflicts to resolve (is @ the conflicted change?)")
     resolved = _build_resolved_content(data, resolutions)
     (cwd / path).write_text(resolved)
     return f"Resolved {path}"
 
 
-async def split(cwd: Path, source: str, hunks: list[HunkRef]) -> str:
+async def split(cwd: Path, source: str, files: list[FileRef]) -> str:
     """Non-interactively split ``source`` by file.
 
     Runs ``jj split -r <source> -m "" <paths...>``.  Empirically verified
@@ -272,38 +284,39 @@ async def split(cwd: Path, source: str, hunks: list[HunkRef]) -> str:
     * The **unselected** files continue in a **new child** commit that becomes
       the working copy (``@``) and keeps the source's original description.
 
-    ``hunk_idx`` fields are accepted but only the path is used in phase 1
-    (file-granularity limitation — hunk-granular split needs a stable
-    non-interactive jj CLI flag not available in 0.42.0).
+    Phase-1 contract is **file granularity**: the whole of each selected file
+    is split out.  Hunk-granular split will reintroduce a richer reference type
+    once jj exposes a stable non-interactive flag for it (none in 0.42.0).
 
-    Raises ``JjError`` if ``hunks`` is empty or the jj command fails.
+    Raises ``JjError`` if ``files`` is empty or the jj command fails.
     """
-    paths = sorted({h.path for h in hunks})
+    paths = sorted({f.path for f in files})
     if not paths:
-        raise JjError("split requires at least one selected hunk")
+        raise JjError("split requires at least one selected file")
     # -m "" suppresses the editor prompt for the selected-changes description;
     # the remaining changes keep the original description automatically.
     await run_jj(["split", "-r", source, "-m", "", *paths], cwd)
     return f"Split {len(paths)} file(s) out of {source}"
 
 
-async def squash_partial(cwd: Path, source: str, hunks: list[HunkRef]) -> str:
+async def squash_partial(cwd: Path, source: str, files: list[FileRef]) -> str:
     """Move selected files' changes from ``source`` into its parent.
 
     Runs ``jj squash -r <source> --use-destination-message <paths...>``.
-    Only paths extracted from ``hunks`` are moved; other files in ``source``
-    remain.  ``hunk_idx`` fields are accepted but only the path is used in
-    phase 1 (file-granularity limitation).
+    Only the selected paths are moved; other files in ``source`` remain.
+    Phase-1 contract is **file granularity** (the whole of each selected file
+    moves); hunk-granular squash will reintroduce a richer reference type once
+    jj exposes a stable non-interactive flag for it (none in 0.42.0).
 
     The destination is always ``source``'s parent, parallel to the
     whole-change ``squash(cwd, change_id)`` which uses
     ``jj squash -r <id> --use-destination-message``.
 
-    Raises ``JjError`` if ``hunks`` is empty or the jj command fails.
+    Raises ``JjError`` if ``files`` is empty or the jj command fails.
     """
-    paths = sorted({h.path for h in hunks})
+    paths = sorted({f.path for f in files})
     if not paths:
-        raise JjError("squash_partial requires at least one selected hunk")
+        raise JjError("squash_partial requires at least one selected file")
     await run_jj(
         ["squash", "-r", source, "--use-destination-message", *paths],
         cwd,

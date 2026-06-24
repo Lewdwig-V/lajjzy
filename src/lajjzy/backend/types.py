@@ -132,38 +132,27 @@ class HunkResolution:
 
 
 @dataclass(frozen=True, slots=True)
-class ConflictRegion:
-    """One region of a conflicted file. Either non-conflicting content
-    (``kind == "resolved"``) or a three-way conflict hunk
-    (``kind == "conflict"``). Use the ``resolved(...)`` / ``conflict(...)``
-    classmethods to construct — they set ``kind`` and the side fields."""
+class ResolvedRegion:
+    """Non-conflicting content of a conflicted file (text passed through as-is)."""
 
-    kind: Literal["resolved", "conflict"]
-    text: str = ""  # for resolved
-    base: str = ""  # for conflict
-    left: str = ""  # for conflict (ours)
-    right: str = ""  # for conflict (theirs)
+    text: str
 
-    def __post_init__(self) -> None:
-        if self.kind == "resolved":
-            if self.base or self.left or self.right:
-                raise ValueError(
-                    f"ConflictRegion(kind='resolved') must have empty base/left/right; "
-                    f"got base={self.base!r} left={self.left!r} right={self.right!r}"
-                )
-        elif self.kind == "conflict":
-            if self.text:
-                raise ValueError(
-                    f"ConflictRegion(kind='conflict') must have empty text; got text={self.text!r}"
-                )
 
-    @classmethod
-    def resolved(cls, text: str) -> ConflictRegion:
-        return cls(kind="resolved", text=text)
+@dataclass(frozen=True, slots=True)
+class ConflictHunk:
+    """A three-way conflict hunk within a conflicted file."""
 
-    @classmethod
-    def conflict(cls, base: str, left: str, right: str) -> ConflictRegion:
-        return cls(kind="conflict", base=base, left=left, right=right)
+    base: str
+    left: str  # ours
+    right: str  # theirs
+
+
+# One region of a conflicted file: either non-conflicting passthrough content
+# (``ResolvedRegion``) or a three-way conflict (``ConflictHunk``).  Modelled as
+# a type union so illegal field combinations are unrepresentable by
+# construction — there is no tag to validate and no way to set conflict fields
+# on resolved content (or vice versa).
+ConflictRegion = ResolvedRegion | ConflictHunk
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,15 +161,14 @@ class ConflictData:
 
 
 @dataclass(frozen=True, slots=True)
-class HunkRef:
-    """A reference to a selected hunk for split / partial squash.
+class FileRef:
+    """A reference to a selected file for split / partial squash.
 
-    ``hunk_idx`` is the 0-based index of the hunk within the file's diff.
-    Phase-1 implementation operates at file granularity — the whole file is
-    selected whenever any of its hunks appear in the list.  Hunk-granular
-    selection requires a stable non-interactive jj CLI flag not yet available
-    in 0.42.0.
+    Phase-1 operates at **file granularity**: the whole file is selected
+    whenever it appears in the list.  This is the current contract.
+    Hunk-granular selection will reintroduce a richer type (carrying a hunk
+    index) once jj exposes a stable non-interactive CLI flag for it — jj 0.42.0
+    has no such flag, so advertising hunk precision here would be dishonest.
     """
 
     path: str
-    hunk_idx: int

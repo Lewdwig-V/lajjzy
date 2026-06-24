@@ -264,10 +264,10 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
     if isinstance(msg, HunkPickerClose):
         return replace(model, modal=None), []
     if isinstance(msg, SplitConfirm):
-        return _start_mutation(replace(model, modal=None), "split", (msg.source, msg.hunks))
+        return _start_mutation(replace(model, modal=None), "split", (msg.source, msg.files))
     if isinstance(msg, SquashPartialConfirm):
         return _start_mutation(
-            replace(model, modal=None), "squash_partial", (msg.source, msg.hunks)
+            replace(model, modal=None), "squash_partial", (msg.source, msg.files)
         )
 
     return model, []

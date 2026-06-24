@@ -3,7 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from lajjzy.backend import jj
-from lajjzy.backend.types import ConflictData, HunkRef, HunkResolution, OpLogEntry
+from lajjzy.backend.types import (
+    ConflictData,
+    ConflictHunk,
+    FileRef,
+    HunkResolution,
+    OpLogEntry,
+    ResolvedRegion,
+)
 
 from tests.conftest import jj_required
 
@@ -124,7 +131,31 @@ async def test_conflict_data_no_conflict(temp_repo: Path) -> None:
     subprocess.run(["jj", "new"], cwd=temp_repo, check=True, capture_output=True)
     cd = await jj.conflict_data(temp_repo, "file.txt")
     assert isinstance(cd, ConflictData)
-    assert all(r.kind == "resolved" for r in cd.regions)
+    assert all(isinstance(r, ResolvedRegion) for r in cd.regions)
+
+
+async def test_resolve_raises_when_file_not_conflicted(monkeypatch, tmp_path: Path) -> None:
+    """resolve() must refuse to overwrite a file that has no conflict hunks.
+
+    Patches conflict_data to return a fully-resolved ConflictData (no
+    ConflictHunk regions) so no jj subprocess is needed.  The guard must raise
+    *before* any write touches the file.
+    """
+    import pytest
+
+    target = tmp_path / "file.txt"
+    target.write_text("original\n")
+
+    async def _fake_conflict_data(cwd: Path, path: str) -> ConflictData:
+        return ConflictData(regions=[ResolvedRegion(text="original\n")])
+
+    monkeypatch.setattr(jj, "conflict_data", _fake_conflict_data)
+
+    with pytest.raises(jj.JjError, match="no conflicts to resolve"):
+        await jj.resolve(tmp_path, "file.txt", [])
+
+    # The file must be untouched — the guard fires before write_text.
+    assert target.read_text() == "original\n"
 
 
 @jj_required
@@ -184,7 +215,7 @@ async def test_resolve_accept_left(temp_repo: Path) -> None:
     # Verify the conflict was actually created
     cd = await jj.conflict_data(temp_repo, "c.txt")
     assert isinstance(cd, ConflictData)
-    conflict_regions = [r for r in cd.regions if r.kind == "conflict"]
+    conflict_regions = [r for r in cd.regions if isinstance(r, ConflictHunk)]
     assert len(conflict_regions) >= 1, f"Expected at least one conflict region, got: {cd.regions}"
 
     # Resolve by accepting left (should produce LEFT\n)
@@ -220,7 +251,7 @@ async def test_split_increases_change_count(temp_repo: Path) -> None:
 
     node_count_before = len(graph_before.node_indices)
 
-    msg = await jj.split(temp_repo, source_id, [HunkRef(path="file_a.txt", hunk_idx=0)])
+    msg = await jj.split(temp_repo, source_id, [FileRef(path="file_a.txt")])
     assert "split" in msg.lower()
 
     graph_after = await jj.load_graph(temp_repo)
@@ -254,7 +285,7 @@ async def test_split_file_placement(temp_repo: Path) -> None:
     assert source_id is not None
 
     # Split selecting only fa.txt.
-    await jj.split(temp_repo, source_id, [HunkRef(path="fa.txt", hunk_idx=0)])
+    await jj.split(temp_repo, source_id, [FileRef(path="fa.txt")])
 
     # source_id is retained by the first/parent commit and should contain fa.txt.
     parent_diff = await jj.change_diff(temp_repo, source_id)
@@ -309,7 +340,7 @@ async def test_squash_partial_moves_file_to_parent(temp_repo: Path) -> None:
     (temp_repo / "file_b.txt").write_text("child b\n")
     child_id = _jj_short_id(temp_repo, "@")
 
-    msg = await jj.squash_partial(temp_repo, child_id, [HunkRef(path="file_a.txt", hunk_idx=0)])
+    msg = await jj.squash_partial(temp_repo, child_id, [FileRef(path="file_a.txt")])
     assert "squash" in msg.lower()
 
     # file_a.txt in the parent change should now contain the child's version.

@@ -5,9 +5,10 @@ from lajjzy.backend.types import (
     Bookmark,
     CompletionItem,
     ConflictData,
-    ConflictRegion,
+    ConflictHunk,
     HunkResolution,
     OpLogEntry,
+    ResolvedRegion,
 )
 
 
@@ -26,21 +27,21 @@ def test_bookmark_fields():
 
 
 def test_conflict_region_resolved():
-    r = ConflictRegion.resolved("context line")
-    assert r.kind == "resolved"
+    r = ResolvedRegion(text="context line")
+    assert isinstance(r, ResolvedRegion)
     assert r.text == "context line"
 
 
 def test_conflict_region_conflict():
-    r = ConflictRegion.conflict(base="b", left="l", right="r")
-    assert r.kind == "conflict"
+    r = ConflictHunk(base="b", left="l", right="r")
+    assert isinstance(r, ConflictHunk)
     assert r.base == "b"
     assert r.left == "l"
     assert r.right == "r"
 
 
 def test_conflict_data():
-    c = ConflictData(regions=[ConflictRegion.resolved("x")])
+    c = ConflictData(regions=[ResolvedRegion(text="x")])
     assert len(c.regions) == 1
 
 
@@ -128,7 +129,7 @@ def test_parse_conflict_data_no_conflicts():
     # A file with no conflict markers is one resolved region.
     cd = parse_conflict_data("line1\nline2\n")
     assert len(cd.regions) == 1
-    assert cd.regions[0].kind == "resolved"
+    assert isinstance(cd.regions[0], ResolvedRegion)
     assert cd.regions[0].text == "line1\nline2\n"
 
 
@@ -138,13 +139,13 @@ def test_parse_conflict_data_one_conflict():
     out = "before\n<<<<<<<\nours\n|||||||\nbase\n=======\ntheirs\n>>>>>>>\nafter\n"
     cd = parse_conflict_data(out)
     assert len(cd.regions) == 3
-    assert cd.regions[0].kind == "resolved"
+    assert isinstance(cd.regions[0], ResolvedRegion)
     assert cd.regions[0].text == "before\n"
-    assert cd.regions[1].kind == "conflict"
+    assert isinstance(cd.regions[1], ConflictHunk)
     assert cd.regions[1].left == "ours\n"
     assert cd.regions[1].base == "base\n"
     assert cd.regions[1].right == "theirs\n"
-    assert cd.regions[2].kind == "resolved"
+    assert isinstance(cd.regions[2], ResolvedRegion)
     assert cd.regions[2].text == "after\n"
 
 
@@ -155,7 +156,7 @@ def test_parse_conflict_data_empty_sides():
     out = "<<<<<<<\n|||||||\nbase\n=======\ntheirs\n>>>>>>>\n"
     cd = parse_conflict_data(out)
     assert len(cd.regions) == 1
-    assert cd.regions[0].kind == "conflict"
+    assert isinstance(cd.regions[0], ConflictHunk)
     assert cd.regions[0].left == ""
     assert cd.regions[0].base == "base\n"
     assert cd.regions[0].right == "theirs\n"
@@ -171,7 +172,7 @@ def test_parse_conflict_data_back_to_back_conflicts():
     )
     cd = parse_conflict_data(out)
     assert len(cd.regions) == 2
-    assert all(r.kind == "conflict" for r in cd.regions)
+    assert all(isinstance(r, ConflictHunk) for r in cd.regions)
     assert cd.regions[0].left == "ours1\n"
     assert cd.regions[1].left == "ours2\n"
 
@@ -183,8 +184,8 @@ def test_parse_conflict_data_conflict_at_eof():
     out = "before\n<<<<<<<\nours\n|||||||\nbase\n=======\ntheirs\n>>>>>>>"
     cd = parse_conflict_data(out)
     assert len(cd.regions) == 2  # resolved("before\n") + conflict
-    assert cd.regions[0].kind == "resolved"
+    assert isinstance(cd.regions[0], ResolvedRegion)
     assert cd.regions[0].text == "before\n"
-    assert cd.regions[1].kind == "conflict"
+    assert isinstance(cd.regions[1], ConflictHunk)
     assert cd.regions[1].left == "ours\n"
     assert cd.regions[1].right == "theirs\n"

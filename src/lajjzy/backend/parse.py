@@ -6,7 +6,9 @@ from lajjzy.backend.types import (
     Bookmark,
     ChangeDetail,
     ConflictData,
+    ConflictHunk,
     ConflictRegion,
+    ResolvedRegion,
     DiffHunk,
     DiffLine,
     FileDiff,
@@ -248,7 +250,7 @@ def parse_conflict_data(output: str) -> ConflictData:
 
     def flush_resolved() -> None:
         if pending_resolved:
-            regions.append(ConflictRegion.resolved("".join(pending_resolved)))
+            regions.append(ResolvedRegion(text="".join(pending_resolved)))
             pending_resolved.clear()
 
     while i < len(lines):
@@ -272,7 +274,7 @@ def parse_conflict_data(output: str) -> ConflictData:
                 i += 1
             i += 1  # skip >>>>>>>
             regions.append(
-                ConflictRegion.conflict(
+                ConflictHunk(
                     base="".join(base),
                     left="".join(left),
                     right="".join(right),

@@ -216,6 +216,24 @@ def test_mutation_completed_load_error_takes_precedence():
     assert done.error == "load failed"
 
 
+def test_mutation_completed_discards_stale_graph_but_keeps_message():
+    # Mutation-side twin of test_graph_loaded_discarded_when_epoch_stale: if a
+    # newer op bumped graph_epoch after the mutation armed, the mutation's own
+    # reload is stale and must be discarded — but its success message and the
+    # gate reopen still apply.
+    m = _loaded("aaa", working=0)
+    armed, [cmd] = update(m, NewChange())
+    original_graph = armed.graph
+    # A newer op supersedes the mutation's reload before it lands.
+    bumped = replace(armed, graph_epoch=armed.graph_epoch + 1)
+    stale_graph = _graph("aaa", "bbb", working=1)
+    done, _ = update(bumped, MutationCompleted(cmd.epoch, "Created", stale_graph, None))
+    assert done.error == "Created"  # success message kept
+    assert done.graph is original_graph  # stale graph discarded, graph unchanged
+    assert done.graph is not stale_graph
+    assert done.pending_mutation is False  # gate reopened
+
+
 # --- describe (editor round-trip) -------------------------------------------
 
 
@@ -336,7 +354,7 @@ from lajjzy.core import (  # noqa: E402, F401, F811
 from lajjzy.backend.types import (  # noqa: E402, F401
     CompletionItem,
     ConflictData,
-    HunkRef,
+    FileRef,
     HunkResolution,
     OpLogEntry,
 )
@@ -363,8 +381,8 @@ def test_msg_types_importable():
     assert ApplyResolutions("file.txt", [HunkResolution.ACCEPT_LEFT]) is not None
     assert Split() is not None
     assert SquashPartial() is not None
-    assert SplitConfirm("ksqxwpml", [HunkRef("file.txt", 0)]) is not None
-    assert SquashPartialConfirm("ksqxwpml", [HunkRef("file.txt", 0)]) is not None
+    assert SplitConfirm("ksqxwpml", [FileRef("file.txt")]) is not None
+    assert SquashPartialConfirm("ksqxwpml", [FileRef("file.txt")]) is not None
     # result Msgs
     assert OpLogLoaded([]) is not None
     assert OpLogLoadFailed("boom") is not None
@@ -689,7 +707,7 @@ def test_hunk_picker_close_clears_modal():
 def test_split_confirm_starts_mutation():
     m = _loaded("aaa", working=0)
     opened, _ = update(m, Split())
-    hunks = [HunkRef(path="file.txt", hunk_idx=0)]
+    hunks = [FileRef(path="file.txt")]
     confirmed, cmds = update(opened, SplitConfirm("aaa", hunks))
     assert confirmed.pending_mutation is True
     assert confirmed.modal is None
@@ -699,7 +717,7 @@ def test_split_confirm_starts_mutation():
 def test_squash_partial_confirm_starts_mutation():
     m = _loaded("aaa", working=0)
     opened, _ = update(m, SquashPartial())
-    hunks = [HunkRef(path="file.txt", hunk_idx=0)]
+    hunks = [FileRef(path="file.txt")]
     confirmed, cmds = update(opened, SquashPartialConfirm("aaa", hunks))
     assert confirmed.pending_mutation is True
     assert confirmed.modal is None
@@ -710,6 +728,6 @@ def test_split_confirm_blocked_while_pending():
     m = _loaded("aaa", working=0)
     armed, _ = update(m, NewChange())
     opened = replace(armed, modal="hunk_picker")
-    blocked, cmds = update(opened, SplitConfirm("aaa", [HunkRef("f", 0)]))
+    blocked, cmds = update(opened, SplitConfirm("aaa", [FileRef("f")]))
     assert cmds == []
     assert blocked.error == "A mutation is already in progress"
