@@ -51,15 +51,12 @@ async def test_enter_opens_diff_then_esc_returns(temp_repo: Path):
     app = LajjzyApp(repo_path=temp_repo)
     async with app.run_test() as pilot:
         await app.workers.wait_for_complete()
-        from lajjzy.widgets.detail import DetailPanel
-
-        panel = app.query_one(DetailPanel)
         await pilot.press("tab")  # focus detail
         await pilot.press("enter")  # open diff for first file
         await app.workers.wait_for_complete()
-        assert panel.mode == "diff"
+        assert app.detail.mode == "diff"
         await pilot.press("escape")
-        assert panel.mode == "files"
+        assert app.detail.mode == "files"
 
 
 @jj_required
@@ -244,20 +241,17 @@ async def test_file_up_noop_in_diff_mode(temp_repo: Path):
     app = LajjzyApp(repo_path=temp_repo)
     async with app.run_test() as pilot:
         await app.workers.wait_for_complete()
-        from lajjzy.widgets.detail import DetailPanel
-
-        panel = app.query_one(DetailPanel)
         await pilot.press("tab")  # focus detail panel
         await pilot.press("enter")  # open diff for first file (a.txt)
         await app.workers.wait_for_complete()
-        assert panel.mode == "diff", f"expected diff mode, got {panel.mode!r}"
-        cursor_before = panel.file_cursor
+        assert app.detail.mode == "diff", f"expected diff mode, got {app.detail.mode!r}"
+        cursor_before = app.detail.file_cursor
         await pilot.press("k")
-        assert panel.file_cursor == cursor_before, (
-            f"file_cursor changed from {cursor_before} to {panel.file_cursor} "
+        assert app.detail.file_cursor == cursor_before, (
+            f"file_cursor changed from {cursor_before} to {app.detail.file_cursor} "
             "while in diff mode — mode guard missing from action_file_up"
         )
-        assert panel.mode == "diff"
+        assert app.detail.mode == "diff"
 
 
 # ---------------------------------------------------------------------------
@@ -725,8 +719,12 @@ async def test_enter_on_conflicted_file_opens_conflict_view(temp_repo: Path, mon
         )
 
         # Focus the detail panel and position the cursor on the conflicted file.
+        # The injected graph has exactly one file (the conflicted one), so
+        # conflict_idx is always 0 and the model's file_cursor already starts
+        # there; no explicit navigation is needed.
         panel.focus()
-        panel.file_cursor = conflict_idx
+        for _ in range(conflict_idx):
+            await pilot.press("j")
 
         await pilot.press("enter")
         await app.workers.wait_for_complete()
@@ -735,3 +733,21 @@ async def test_enter_on_conflicted_file_opens_conflict_view(temp_repo: Path, mon
         cv = app.query_one(ConflictView)
         assert app.modal == "conflict_view", f"Expected modal='conflict_view', got {app.modal!r}"
         assert cv.display, "ConflictView is not visible after pressing Enter on a CONFLICTED file"
+
+
+# ---------------------------------------------------------------------------
+# Task 5 (phase 2): DetailPanel must be a pure projection — zero logic state
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_detail_panel_holds_no_logic_state(temp_repo: Path):
+    from lajjzy.widgets import DetailPanel
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        panel = app.query_one(DetailPanel)
+        # The widget must not own these any more; they live on Model.detail.
+        assert not hasattr(panel, "file_cursor") or "file_cursor" not in type(panel).__dict__
+        assert "mode" not in type(panel).__dict__

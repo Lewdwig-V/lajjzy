@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, cast
 
 from rich.text import Text
-from textual.reactive import reactive
 from textual.widget import Widget
 
-from lajjzy.backend.types import FileDiff, FileChange, FileStatus
+from lajjzy.backend.types import FileChange
 
 if TYPE_CHECKING:
     from lajjzy.app import LajjzyApp
@@ -15,7 +14,8 @@ if TYPE_CHECKING:
 class DetailPanel(Widget):
     can_focus = True
 
-    # Focus-scoped: these fire ONLY when the DetailPanel has focus.
+    # Focus-scoped: these fire ONLY when the DetailPanel has focus. Each
+    # dispatches a Msg; all state lives on Model.detail.
     BINDINGS = [
         ("j", "file_down", "Next file"),
         ("down", "file_down", "Next file"),
@@ -25,38 +25,20 @@ class DetailPanel(Widget):
         ("escape", "back", "Back"),
     ]
 
-    file_cursor: reactive[int] = reactive(0)
-    mode: reactive[Literal["files", "diff"]] = reactive("files")
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.diff: list[FileDiff] = []
-
     def on_mount(self) -> None:
-        def _on_change(_: object) -> None:
-            self._on_selection_change()
-
-        def _on_detail_change(detail: object) -> None:
-            from lajjzy.core import DetailState as DS
-
-            if not isinstance(detail, DS):
-                return
-            self.mode = detail.mode
-            self.diff = detail.diff if detail.diff is not None else []
+        # Re-render whenever the projected detail state or selection changes.
+        def _refresh(_: object) -> None:
             self.refresh()
 
-        self.watch(self.app, "graph", _on_change)
-        self.watch(self.app, "cursor", _on_change)
-        self.watch(self.app, "detail", _on_detail_change)
+        self.watch(self.app, "detail", _refresh)
+        self.watch(self.app, "graph", _refresh)
+        self.watch(self.app, "cursor", _refresh)
 
-    def _on_selection_change(self) -> None:
-        self.file_cursor = 0
-        self.mode = "files"
-        self.diff = []
-        self.refresh()
+    def _app(self) -> LajjzyApp:
+        return cast("LajjzyApp", self.app)
 
     def current_files(self) -> list[FileChange]:
-        app = cast("LajjzyApp", self.app)
+        app = self._app()
         change_id = app.selected_change_id()
         graph = app.graph
         if change_id is None or graph is None:
@@ -65,62 +47,53 @@ class DetailPanel(Widget):
         return detail.files if detail else []
 
     def action_file_down(self) -> None:
-        if self.mode != "files":
-            return
-        files = self.current_files()
-        if files:
-            self.file_cursor = min(len(files) - 1, self.file_cursor + 1)
-            self.refresh()
+        from lajjzy.core import DetailFileDown
+
+        self._app().runtime.dispatch(DetailFileDown())
 
     def action_file_up(self) -> None:
-        if self.mode != "files":
-            return
-        self.file_cursor = max(0, self.file_cursor - 1)
-        self.refresh()
+        from lajjzy.core import DetailFileUp
+
+        self._app().runtime.dispatch(DetailFileUp())
 
     def action_open_file(self) -> None:
-        if self.mode != "files":
-            return
-        files = self.current_files()
-        if not files:
-            return
-        if not (0 <= self.file_cursor < len(files)):
-            return
-        selected = files[self.file_cursor]
-        if selected.status == FileStatus.CONFLICTED:
-            from lajjzy.core import OpenConflictView
-
-            cast("LajjzyApp", self.app).runtime.dispatch(OpenConflictView(selected.path))
-            return
         from lajjzy.core import DetailOpenFile
 
-        cast("LajjzyApp", self.app).runtime.dispatch(DetailOpenFile())
+        self._app().runtime.dispatch(DetailOpenFile())
 
     def action_back(self) -> None:
-        if self.mode == "diff":
-            self.mode = "files"
-            self.refresh()
+        from lajjzy.core import DetailBack
+
+        self._app().runtime.dispatch(DetailBack())
 
     def render(self) -> Text:
-        if self.mode == "diff":
+        detail = self._app().detail
+        if detail.mode == "diff":
             return self._render_diff()
         return self._render_files()
 
     def _render_files(self) -> Text:
-        text = Text()
         files = self.current_files()
         if not files:
             return Text("(no file changes)", style="dim")
+        cursor = self._app().detail.file_cursor
+        text = Text()
         for i, fc in enumerate(files):
-            style = "reverse" if i == self.file_cursor else ""
+            style = "reverse" if i == cursor else ""
             text.append(f"{fc.status.value} {fc.path}\n", style=style)
         return text
 
     def _render_diff(self) -> Text:
-        if not self.diff:
+        diff = self._app().detail.diff
+        if not diff:
             return Text("(no diff)", style="dim")
+        files = self.current_files()
+        cursor = self._app().detail.file_cursor
+        # Show the opened file's diff (preserves the prior single-file view).
+        path = files[cursor].path if 0 <= cursor < len(files) else None
+        shown = [fd for fd in diff if fd.path == path] or diff
         text = Text()
-        for fd in self.diff:
+        for fd in shown:
             text.append(f"{fd.path}\n", style="bold")
             for hunk in fd.hunks:
                 text.append(hunk.header + "\n", style="cyan")
