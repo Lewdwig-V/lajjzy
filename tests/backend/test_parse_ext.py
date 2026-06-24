@@ -159,3 +159,32 @@ def test_parse_conflict_data_empty_sides():
     assert cd.regions[0].left == ""
     assert cd.regions[0].base == "base\n"
     assert cd.regions[0].right == "theirs\n"
+
+
+def test_parse_conflict_data_back_to_back_conflicts():
+    """Two conflict hunks with no resolved text between → 2 conflict regions, no spurious empty resolved region."""
+    from lajjzy.backend.parse import parse_conflict_data
+
+    out = (
+        "<<<<<<<\nours1\n|||||||\nbase1\n=======\ntheirs1\n>>>>>>>\n"
+        "<<<<<<<\nours2\n|||||||\nbase2\n=======\ntheirs2\n>>>>>>>\n"
+    )
+    cd = parse_conflict_data(out)
+    assert len(cd.regions) == 2
+    assert all(r.kind == "conflict" for r in cd.regions)
+    assert cd.regions[0].left == "ours1\n"
+    assert cd.regions[1].left == "ours2\n"
+
+
+def test_parse_conflict_data_conflict_at_eof():
+    """A conflict ending at EOF (no trailing \\n after >>>>>>>) parses without error."""
+    from lajjzy.backend.parse import parse_conflict_data
+
+    out = "before\n<<<<<<<\nours\n|||||||\nbase\n=======\ntheirs\n>>>>>>>"
+    cd = parse_conflict_data(out)
+    assert len(cd.regions) == 2  # resolved("before\n") + conflict
+    assert cd.regions[0].kind == "resolved"
+    assert cd.regions[0].text == "before\n"
+    assert cd.regions[1].kind == "conflict"
+    assert cd.regions[1].left == "ours\n"
+    assert cd.regions[1].right == "theirs\n"
