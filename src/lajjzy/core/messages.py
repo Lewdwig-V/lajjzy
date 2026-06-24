@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lajjzy.backend.types import Bookmark, ConflictData, GraphData, HunkRef, OpLogEntry
+from lajjzy.backend.types import (
+    Bookmark,
+    ConflictData,
+    GraphData,
+    HunkRef,
+    HunkResolutionValue,
+    OpLogEntry,
+)
 
 # ---------------------------------------------------------------------------
 # User intents — produced by key bindings in the rendering backend.
@@ -251,7 +258,7 @@ class ConflictViewClose:
 @dataclass(frozen=True)
 class ApplyResolutions:
     path: str
-    resolutions: list[str]  # list of HunkResolution.* values, one per conflict region
+    resolutions: list[HunkResolutionValue]  # one HunkResolution.* value per conflict region
 
 
 @dataclass(frozen=True)

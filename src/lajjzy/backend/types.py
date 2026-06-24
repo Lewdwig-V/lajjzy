@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
-from typing import Literal
+from typing import ClassVar, Literal
 
 
 class JjError(Exception):
@@ -115,6 +115,9 @@ class CompletionItem:
     display_text: str
 
 
+HunkResolutionValue = Literal["none", "accept_left", "accept_right"]
+
+
 class HunkResolution:
     """Sentinel constants for per-hunk resolution choices in the conflict view.
 
@@ -123,9 +126,9 @@ class HunkResolution:
     prototype modelled it as a plain enum we serialize to a label.
     """
 
-    NONE = "none"  # undecided
-    ACCEPT_LEFT = "accept_left"
-    ACCEPT_RIGHT = "accept_right"
+    NONE: ClassVar[HunkResolutionValue] = "none"  # undecided
+    ACCEPT_LEFT: ClassVar[HunkResolutionValue] = "accept_left"
+    ACCEPT_RIGHT: ClassVar[HunkResolutionValue] = "accept_right"
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +143,19 @@ class ConflictRegion:
     base: str = ""  # for conflict
     left: str = ""  # for conflict (ours)
     right: str = ""  # for conflict (theirs)
+
+    def __post_init__(self) -> None:
+        if self.kind == "resolved":
+            if self.base or self.left or self.right:
+                raise ValueError(
+                    f"ConflictRegion(kind='resolved') must have empty base/left/right; "
+                    f"got base={self.base!r} left={self.left!r} right={self.right!r}"
+                )
+        elif self.kind == "conflict":
+            if self.text:
+                raise ValueError(
+                    f"ConflictRegion(kind='conflict') must have empty text; got text={self.text!r}"
+                )
 
     @classmethod
     def resolved(cls, text: str) -> ConflictRegion:

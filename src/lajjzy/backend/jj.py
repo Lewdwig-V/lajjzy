@@ -17,6 +17,7 @@ from lajjzy.backend.types import (
     GraphData,
     HunkRef,
     HunkResolution,
+    HunkResolutionValue,
     JjError,
     OpLogEntry,
 )
@@ -209,7 +210,7 @@ async def conflict_data(cwd: Path, path: str) -> ConflictData:
     return parse_conflict_data(stdout)
 
 
-def _build_resolved_content(data: ConflictData, resolutions: list[str]) -> str:
+def _build_resolved_content(data: ConflictData, resolutions: list[HunkResolutionValue]) -> str:
     """Apply per-hunk resolution choices to produce the final file content.
 
     ``resolutions`` is one entry per conflict region (in order), each being a
@@ -237,7 +238,7 @@ def _build_resolved_content(data: ConflictData, resolutions: list[str]) -> str:
     return "".join(out)
 
 
-async def resolve(cwd: Path, path: str, resolutions: list[str]) -> str:
+async def resolve(cwd: Path, path: str, resolutions: list[HunkResolutionValue]) -> str:
     """Write the resolved file content to the working copy.
 
     Caller must ensure ``@`` is the conflicted change.  Does NOT mark the
