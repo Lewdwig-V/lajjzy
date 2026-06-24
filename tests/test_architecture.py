@@ -188,3 +188,28 @@ def test_core_modules_are_pure():
                     offenders.append(f"{rel}: imports from {node.module}")
 
     assert not offenders, f"core/ purity violations: {offenders}"
+
+
+def test_widgets_do_not_import_jj_facade_or_subprocess():
+    """Widgets project Model state and dispatch Msgs; they must never call the
+    jj facade or spawn subprocesses directly (the two-facade-boundary rule).
+    Textual and lajjzy.core/types imports are fine — only I/O is forbidden."""
+    _BANNED_TOPS = {"subprocess"}
+    _BANNED_MODULES = {"lajjzy.backend.jj"}
+
+    widgets_dir = SRC / "widgets"
+    offenders: list[str] = []
+
+    for path in sorted(widgets_dir.rglob("*.py")):
+        tree = _tree(path)
+        rel = path.relative_to(SRC).as_posix()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".")[0] in _BANNED_TOPS or alias.name in _BANNED_MODULES:
+                        offenders.append(f"{rel}: imports {alias.name}")
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.split(".")[0] in _BANNED_TOPS or node.module in _BANNED_MODULES:
+                    offenders.append(f"{rel}: imports from {node.module}")
+
+    assert not offenders, f"widget purity violations: {offenders}"
