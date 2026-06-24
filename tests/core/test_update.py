@@ -875,3 +875,59 @@ def test_detail_back_returns_to_files_and_clears_diff() -> None:
     m1, _ = update(m, DetailBack())
     assert m1.detail.mode == "files"
     assert m1.detail.diff is None
+
+
+# --- phase 2a task 3: LoadChangeDiff + DetailOpenFile + ChangeDiffLoaded ----
+
+from lajjzy.core import (  # noqa: E402
+    ChangeDiffLoadFailed,
+    ChangeDiffLoaded,
+    DetailOpenFile,
+    LoadChangeDiff,
+)
+
+
+def test_detail_open_file_normal_enters_diff_mode_and_loads() -> None:
+    m = _two_file_change()  # selected change "aaa", file_cursor 0 = a.txt (MODIFIED)
+    m1, cmds = update(m, DetailOpenFile())
+    assert m1.detail.mode == "diff"
+    assert cmds == [LoadChangeDiff("aaa")]
+
+
+def test_detail_open_file_conflicted_opens_conflict_view() -> None:
+    detail = _detail(files=[FileChange(path="c.txt", status=FileStatus.CONFLICTED)])
+    g = GraphData(
+        lines=[GraphLine(raw="aaa", change_id="aaa", glyph_prefix="")],
+        details={"aaa": detail},
+        working_copy_index=0,
+        op_id="op",
+    )
+    m = replace(Model(), graph=g, cursor=0)
+    m1, cmds = update(m, DetailOpenFile())
+    assert m1.modal == "conflict_view"
+    assert m1.conflict_path == "c.txt"
+    assert cmds == [LoadConflictData("c.txt")]
+
+
+def test_change_diff_loaded_stores_when_relevant() -> None:
+    m = replace(_two_file_change(), detail=DetailState(mode="diff"))
+    m1, _ = update(m, ChangeDiffLoaded("aaa", []))
+    assert m1.detail.diff == []
+
+
+def test_change_diff_loaded_dropped_when_not_in_diff_mode() -> None:
+    m = _two_file_change()  # mode == "files"
+    m1, _ = update(m, ChangeDiffLoaded("aaa", []))
+    assert m1.detail.diff is None  # dropped
+
+
+def test_change_diff_loaded_dropped_when_change_id_stale() -> None:
+    m = replace(_two_file_change(), detail=DetailState(mode="diff"))
+    m1, _ = update(m, ChangeDiffLoaded("different", []))
+    assert m1.detail.diff is None
+
+
+def test_change_diff_load_failed_sets_error() -> None:
+    m = _two_file_change()
+    m1, _ = update(m, ChangeDiffLoadFailed("boom"))
+    assert m1.error == "boom"

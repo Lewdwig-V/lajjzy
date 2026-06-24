@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from lajjzy.backend.types import (
     Bookmark,
     ConflictData,
+    FileDiff,
     FileRef,
     GraphData,
     HunkResolutionValue,
@@ -274,6 +275,23 @@ class ConflictDataLoadFailed:
     error: str
 
 
+# --- diff view ---------------------------------------------------------
+@dataclass(frozen=True)
+class DetailOpenFile:
+    pass
+
+
+@dataclass(frozen=True)
+class ChangeDiffLoaded:
+    change_id: str
+    diff: list[FileDiff]
+
+
+@dataclass(frozen=True)
+class ChangeDiffLoadFailed:
+    error: str
+
+
 # --- hunk picker (split / partial squash) ------------------------------
 @dataclass(frozen=True)
 class DetailBack:
@@ -322,9 +340,12 @@ Msg = (
     | CursorUp
     | CursorTop
     | CursorBottom
+    | ChangeDiffLoadFailed
+    | ChangeDiffLoaded
     | DetailBack
     | DetailFileDown
     | DetailFileUp
+    | DetailOpenFile
     | ReloadRequested
     | NewChange
     | Abandon

@@ -7,12 +7,13 @@ from lajjzy.core.commands import (
     Cmd,
     EditMessage,
     LoadBookmarks,
+    LoadChangeDiff,
     LoadConflictData,
     LoadGraph,
     LoadOpLog,
     RunMutation,
 )
-from lajjzy.backend.types import FileChange
+from lajjzy.backend.types import FileChange, FileStatus
 from lajjzy.core.messages import (
     Abandon,
     ApplyResolutions,
@@ -22,6 +23,8 @@ from lajjzy.core.messages import (
     BookmarkMoveConfirm,
     BookmarksLoadFailed,
     BookmarksLoaded,
+    ChangeDiffLoadFailed,
+    ChangeDiffLoaded,
     ConflictDataLoadFailed,
     ConflictDataLoaded,
     ConflictViewClose,
@@ -35,6 +38,7 @@ from lajjzy.core.messages import (
     DetailBack,
     DetailFileDown,
     DetailFileUp,
+    DetailOpenFile,
     EditChange,
     GraphLoaded,
     GraphLoadFailed,
@@ -119,6 +123,26 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         if model.detail.mode == "diff":
             return replace(model, detail=replace(model.detail, mode="files", diff=None)), []
         return model, []
+    if isinstance(msg, DetailOpenFile):
+        if model.detail.mode != "files":
+            return model, []
+        files = _current_files(model)
+        fc = model.detail.file_cursor
+        if not (0 <= fc < len(files)):
+            return model, []
+        selected = files[fc]
+        if selected.status == FileStatus.CONFLICTED:
+            return update(model, OpenConflictView(selected.path))
+        cid = selected_change_id(model)
+        if cid is None:
+            return model, []
+        return replace(model, detail=replace(model.detail, mode="diff")), [LoadChangeDiff(cid)]
+    if isinstance(msg, ChangeDiffLoaded):
+        if model.detail.mode != "diff" or selected_change_id(model) != msg.change_id:
+            return model, []  # superseded: user navigated away or left diff mode
+        return replace(model, detail=replace(model.detail, diff=msg.diff)), []
+    if isinstance(msg, ChangeDiffLoadFailed):
+        return replace(model, error=msg.error), []
 
     # --- graph reload -----------------------------------------------------
     if isinstance(msg, ReloadRequested):

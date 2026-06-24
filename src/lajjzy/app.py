@@ -30,6 +30,7 @@ from lajjzy.core import (
     GraphLoaded,
     GraphLoadFailed,
     LoadBookmarks,
+    LoadChangeDiff,
     LoadConflictData,
     LoadGraph,
     LoadOpLog,
@@ -58,6 +59,8 @@ from lajjzy.core import (
 from lajjzy.core.messages import (
     BookmarksLoadFailed,
     BookmarksLoaded,
+    ChangeDiffLoadFailed,
+    ChangeDiffLoaded,
     ConflictDataLoadFailed,
     ConflictDataLoaded,
     OpLogLoadFailed,
@@ -203,6 +206,8 @@ class LajjzyApp(App[None]):
             self._worker_load_bookmarks()
         elif isinstance(cmd, LoadConflictData):
             self._worker_load_conflict(cmd.path)
+        elif isinstance(cmd, LoadChangeDiff):
+            self._worker_load_diff(cmd.change_id)
         else:
             assert_never(cmd)
 
@@ -310,6 +315,20 @@ class LajjzyApp(App[None]):
             self.runtime.dispatch(ConflictDataLoadFailed(f"Unexpected error: {exc}"))
         else:
             self.runtime.dispatch(ConflictDataLoaded(data))
+
+    @work(group="diff", exclusive=True)
+    async def _worker_load_diff(self, change_id: str) -> None:
+        # group="diff", exclusive: a new diff load cancels any in-flight diff load.
+        try:
+            diff = await jj.change_diff(self.repo_path, change_id)
+        except JjError as exc:
+            self.runtime.dispatch(ChangeDiffLoadFailed(str(exc)))
+        except InvariantError:
+            raise
+        except Exception as exc:
+            self.runtime.dispatch(ChangeDiffLoadFailed(f"Unexpected error: {exc}"))
+        else:
+            self.runtime.dispatch(ChangeDiffLoaded(change_id, diff))
 
     def _run_editor(self, change_id: str, seed: str) -> None:
         text, err = self._edit_message_in_editor(seed)
