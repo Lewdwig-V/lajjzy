@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
-from lajjzy.backend.types import Bookmark, ConflictData, GraphData, OpLogEntry
+from lajjzy.backend.types import Bookmark, ConflictData, FileDiff, GraphData, OpLogEntry
 
 Modal = Literal[
     "omnibar",
@@ -15,6 +15,28 @@ Modal = Literal[
 ]
 
 
+@dataclass(frozen=True, slots=True)
+class DetailState:
+    """The detail pane's logic-bearing state, owned by the Model (not the
+    widget). ``diff`` is loaded through the MVU loop (LoadChangeDiff →
+    ChangeDiffLoaded); it is None until the load lands and while in files mode.
+
+    ``mode == 'diff'`` with ``diff is None`` is the valid in-flight state
+    between DetailOpenFile and ChangeDiffLoaded; the renderer shows a loading
+    placeholder during that window.
+    """
+
+    file_cursor: int = 0
+    mode: Literal["files", "diff"] = "files"
+    diff: list[FileDiff] | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode == "files" and self.diff is not None:
+            raise ValueError("DetailState: diff must be None in files mode")
+        if self.file_cursor < 0:
+            raise ValueError(f"DetailState: file_cursor must be >= 0, got {self.file_cursor}")
+
+
 @dataclass(frozen=True)
 class Model:
     """The complete application state, as immutable plain data.
@@ -23,10 +45,6 @@ class Model:
     Textual, asyncio, or jj references — it is constructed and transformed only
     by the pure ``update`` function, which makes every state transition testable
     without a renderer or a subprocess.
-
-    Detail-pane browsing state (selected file, files/diff mode, fetched diff)
-    is deliberately *not* here: it is ephemeral view-local state owned by the
-    rendering backend, not core application logic.
     """
 
     graph: GraphData | None = None
@@ -46,12 +64,22 @@ class Model:
     conflict_data: ConflictData | None = None
     conflict_path: str | None = None
     modal: Modal | None = None
+    detail: DetailState = field(default_factory=DetailState)
 
 
 def selected_change_id(model: Model) -> str | None:
     if model.graph is None:
         return None
     return model.graph.change_id_at(model.cursor)
+
+
+def select_change(model: Model, cursor: int) -> Model:
+    """Move the change-graph cursor. Resets the detail pane to a fresh
+    DetailState whenever the selected line actually changes, so a stale diff or
+    file cursor never carries across to a different change."""
+    if cursor == model.cursor:
+        return model  # no selection change → nothing to reset
+    return replace(model, cursor=cursor, detail=DetailState())
 
 
 def step_cursor(model: Model, delta: int) -> int:

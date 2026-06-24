@@ -51,15 +51,12 @@ async def test_enter_opens_diff_then_esc_returns(temp_repo: Path):
     app = LajjzyApp(repo_path=temp_repo)
     async with app.run_test() as pilot:
         await app.workers.wait_for_complete()
-        from lajjzy.widgets.detail import DetailPanel
-
-        panel = app.query_one(DetailPanel)
         await pilot.press("tab")  # focus detail
         await pilot.press("enter")  # open diff for first file
         await app.workers.wait_for_complete()
-        assert panel.mode == "diff"
+        assert app.detail.mode == "diff"
         await pilot.press("escape")
-        assert panel.mode == "files"
+        assert app.detail.mode == "files"
 
 
 @jj_required
@@ -244,20 +241,17 @@ async def test_file_up_noop_in_diff_mode(temp_repo: Path):
     app = LajjzyApp(repo_path=temp_repo)
     async with app.run_test() as pilot:
         await app.workers.wait_for_complete()
-        from lajjzy.widgets.detail import DetailPanel
-
-        panel = app.query_one(DetailPanel)
         await pilot.press("tab")  # focus detail panel
         await pilot.press("enter")  # open diff for first file (a.txt)
         await app.workers.wait_for_complete()
-        assert panel.mode == "diff", f"expected diff mode, got {panel.mode!r}"
-        cursor_before = panel.file_cursor
+        assert app.detail.mode == "diff", f"expected diff mode, got {app.detail.mode!r}"
+        cursor_before = app.detail.file_cursor
         await pilot.press("k")
-        assert panel.file_cursor == cursor_before, (
-            f"file_cursor changed from {cursor_before} to {panel.file_cursor} "
+        assert app.detail.file_cursor == cursor_before, (
+            f"file_cursor changed from {cursor_before} to {app.detail.file_cursor} "
             "while in diff mode — mode guard missing from action_file_up"
         )
-        assert panel.mode == "diff"
+        assert app.detail.mode == "diff"
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +632,25 @@ async def test_bookmark_set_mutation_refreshes_bookmarks(temp_repo: Path):
 
 
 @jj_required
+async def test_detail_open_file_loads_diff_through_mvu(temp_repo: Path):
+    import subprocess
+
+    (temp_repo / "x.txt").write_text("one\n")
+    subprocess.run(
+        ["jj", "describe", "-m", "add x"], cwd=temp_repo, check=True, capture_output=True
+    )
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        from lajjzy.core import DetailOpenFile
+
+        app.runtime.dispatch(DetailOpenFile())
+        await app.workers.wait_for_complete()
+        assert app.detail.mode == "diff"
+        assert app.detail.diff is not None
+
+
+@jj_required
 async def test_enter_on_conflicted_file_opens_conflict_view(temp_repo: Path, monkeypatch):
     """Enter on a CONFLICTED file in the DetailPanel must dispatch
     OpenConflictView (setting modal='conflict_view') rather than opening the
@@ -706,8 +719,12 @@ async def test_enter_on_conflicted_file_opens_conflict_view(temp_repo: Path, mon
         )
 
         # Focus the detail panel and position the cursor on the conflicted file.
+        # The injected graph has exactly one file (the conflicted one), so
+        # conflict_idx is always 0 and the model's file_cursor already starts
+        # there; no explicit navigation is needed.
         panel.focus()
-        panel.file_cursor = conflict_idx
+        for _ in range(conflict_idx):
+            await pilot.press("j")
 
         await pilot.press("enter")
         await app.workers.wait_for_complete()
@@ -716,3 +733,68 @@ async def test_enter_on_conflicted_file_opens_conflict_view(temp_repo: Path, mon
         cv = app.query_one(ConflictView)
         assert app.modal == "conflict_view", f"Expected modal='conflict_view', got {app.modal!r}"
         assert cv.display, "ConflictView is not visible after pressing Enter on a CONFLICTED file"
+
+
+# ---------------------------------------------------------------------------
+# Task 5 (phase 2): DetailPanel must be a pure projection — zero logic state
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_detail_panel_holds_no_logic_state(temp_repo: Path):
+    from lajjzy.widgets import DetailPanel
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        panel = app.query_one(DetailPanel)
+        # The widget must not own these any more; they live on Model.detail.
+        # Check BOTH the class dict (reactives/class attrs) AND the instance
+        # dict (an __init__ attribute like the old `self.diff`) so the split-brain
+        # cannot return in either form.
+        for name in ("file_cursor", "mode", "diff"):
+            assert name not in type(panel).__dict__, f"{name} leaked back as a class attr"
+            assert name not in vars(panel), f"{name} leaked back as an instance attr"
+
+
+# ---------------------------------------------------------------------------
+# Fix E: _render_diff single-file projection — diff contains the opened file
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_diff_mode_diff_contains_opened_file(temp_repo: Path):
+    """Open diff mode on the first file and assert detail.diff contains that file's path.
+
+    We assert on the model state rather than the rendered text to avoid brittleness
+    from Rich text formatting. The render-text assertion would require precise string
+    matching against Rich markup which is fragile; the model assertion is authoritative.
+    """
+    import subprocess
+
+    # Add a second file so the change has multiple files.
+    (temp_repo / "b.txt").write_text("world\n")
+    subprocess.run(
+        ["jj", "describe", "-m", "two files"], cwd=temp_repo, check=True, capture_output=True
+    )
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        # Focus detail panel and open diff for the first file (file_cursor=0).
+        await pilot.press("tab")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        assert app.detail.mode == "diff", f"expected diff mode, got {app.detail.mode!r}"
+        assert app.detail.diff is not None, "diff should be loaded after entering diff mode"
+        # The opened file (file_cursor=0) must appear in the diff list.
+        from lajjzy.widgets.detail import DetailPanel
+
+        panel = app.query_one(DetailPanel)
+        files = panel.current_files()
+        assert files, "Expected at least one file in the working change"
+        opened_path = files[0].path
+        diff_paths = [fd.path for fd in app.detail.diff]
+        assert any(opened_path in p or p in opened_path for p in diff_paths), (
+            f"Opened file {opened_path!r} not found in diff paths {diff_paths!r}"
+        )

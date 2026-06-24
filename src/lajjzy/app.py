@@ -25,11 +25,13 @@ from lajjzy.core import (
     DescribeAborted,
     DescribeReady,
     DescribeRequested,
+    DetailState,
     EditChange,
     EditMessage,
     GraphLoaded,
     GraphLoadFailed,
     LoadBookmarks,
+    LoadChangeDiff,
     LoadConflictData,
     LoadGraph,
     LoadOpLog,
@@ -58,6 +60,8 @@ from lajjzy.core import (
 from lajjzy.core.messages import (
     BookmarksLoadFailed,
     BookmarksLoaded,
+    ChangeDiffLoadFailed,
+    ChangeDiffLoaded,
     ConflictDataLoadFailed,
     ConflictDataLoaded,
     OpLogLoadFailed,
@@ -142,6 +146,7 @@ class LajjzyApp(App[None]):
     revset: reactive[str | None] = reactive(None)
     conflict_data: reactive[ConflictData | None] = reactive(None)
     conflict_path: reactive[str | None] = reactive(None)
+    detail: reactive[DetailState] = reactive(DetailState())
 
     def __init__(self, repo_path: Path | None = None) -> None:
         super().__init__()
@@ -185,6 +190,7 @@ class LajjzyApp(App[None]):
         self.revset = model.revset
         self.conflict_data = model.conflict_data
         self.conflict_path = model.conflict_path
+        self.detail = model.detail
 
     # -- Backend.run_cmd: interpret a Cmd on the right concurrency lane ----
 
@@ -203,6 +209,8 @@ class LajjzyApp(App[None]):
             self._worker_load_bookmarks()
         elif isinstance(cmd, LoadConflictData):
             self._worker_load_conflict(cmd.path)
+        elif isinstance(cmd, LoadChangeDiff):
+            self._worker_load_diff(cmd.change_id)
         else:
             assert_never(cmd)
 
@@ -310,6 +318,20 @@ class LajjzyApp(App[None]):
             self.runtime.dispatch(ConflictDataLoadFailed(f"Unexpected error: {exc}"))
         else:
             self.runtime.dispatch(ConflictDataLoaded(data))
+
+    @work(group="diff", exclusive=True)
+    async def _worker_load_diff(self, change_id: str) -> None:
+        # group="diff", exclusive: a new diff load cancels any in-flight diff load.
+        try:
+            diff = await jj.change_diff(self.repo_path, change_id)
+        except JjError as exc:
+            self.runtime.dispatch(ChangeDiffLoadFailed(str(exc)))
+        except InvariantError:
+            raise
+        except Exception as exc:
+            self.runtime.dispatch(ChangeDiffLoadFailed(f"Unexpected error: {exc}"))
+        else:
+            self.runtime.dispatch(ChangeDiffLoaded(change_id, diff))
 
     def _run_editor(self, change_id: str, seed: str) -> None:
         text, err = self._edit_message_in_editor(seed)
@@ -516,31 +538,6 @@ class LajjzyApp(App[None]):
             self.error = str(exc)
             return False
         return True
-
-    @work(group="diff", exclusive=True)
-    async def open_diff(self, path: str) -> None:
-        # Diff browsing is ephemeral view-local state owned by the detail pane,
-        # not core application state, so it stays outside the Model/update loop.
-        from lajjzy.widgets import DetailPanel
-
-        change_id = self.selected_change_id()
-        if change_id is None:
-            return
-        try:
-            all_files = await jj.change_diff(self.repo_path, change_id)
-        except JjError as exc:
-            self.error = str(exc)
-            return
-        except InvariantError:
-            # Must propagate (crash policy), not become a status-bar message.
-            raise
-        except Exception as exc:
-            self.error = f"Unexpected error: {exc}"
-            return
-        panel = self.query_one(DetailPanel)
-        panel.diff = [fd for fd in all_files if fd.path == path] or all_files
-        panel.mode = "diff"
-        panel.refresh()
 
 
 def main() -> None:

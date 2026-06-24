@@ -7,11 +7,13 @@ from lajjzy.core.commands import (
     Cmd,
     EditMessage,
     LoadBookmarks,
+    LoadChangeDiff,
     LoadConflictData,
     LoadGraph,
     LoadOpLog,
     RunMutation,
 )
+from lajjzy.backend.types import FileChange, FileStatus
 from lajjzy.core.messages import (
     Abandon,
     ApplyResolutions,
@@ -21,6 +23,8 @@ from lajjzy.core.messages import (
     BookmarkMoveConfirm,
     BookmarksLoadFailed,
     BookmarksLoaded,
+    ChangeDiffLoadFailed,
+    ChangeDiffLoaded,
     ConflictDataLoadFailed,
     ConflictDataLoaded,
     ConflictViewClose,
@@ -31,6 +35,10 @@ from lajjzy.core.messages import (
     DescribeAborted,
     DescribeReady,
     DescribeRequested,
+    DetailBack,
+    DetailFileDown,
+    DetailFileUp,
+    DetailOpenFile,
     EditChange,
     GraphLoaded,
     GraphLoadFailed,
@@ -62,7 +70,14 @@ from lajjzy.core.messages import (
     SquashPartialConfirm,
     Undo,
 )
-from lajjzy.core.model import Model, cursor_after_reload, selected_change_id, step_cursor
+from lajjzy.core.model import (
+    DetailState,
+    Model,
+    cursor_after_reload,
+    select_change,
+    selected_change_id,
+    step_cursor,
+)
 
 _REBASE_PROMPT = "Rebase: pick a destination, Enter to confirm, Esc to cancel"
 _REBASE_DESC_PROMPT = "Rebase +desc: pick a destination, Enter to confirm, Esc to cancel"
@@ -78,17 +93,59 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
     """
     # --- navigation -------------------------------------------------------
     if isinstance(msg, CursorDown):
-        return replace(model, cursor=step_cursor(model, 1)), []
+        return select_change(model, step_cursor(model, 1)), []
     if isinstance(msg, CursorUp):
-        return replace(model, cursor=step_cursor(model, -1)), []
+        return select_change(model, step_cursor(model, -1)), []
     if isinstance(msg, CursorTop):
         if model.graph and model.graph.node_indices:
-            return replace(model, cursor=model.graph.node_indices[0]), []
+            return select_change(model, model.graph.node_indices[0]), []
         return model, []
     if isinstance(msg, CursorBottom):
         if model.graph and model.graph.node_indices:
-            return replace(model, cursor=model.graph.node_indices[-1]), []
+            return select_change(model, model.graph.node_indices[-1]), []
         return model, []
+
+    # --- detail-pane file navigation -------------------------------------
+    if isinstance(msg, DetailFileDown):
+        if model.detail.mode != "files":
+            return model, []
+        n = len(_current_files(model))
+        if n == 0:
+            return model, []
+        new = min(n - 1, model.detail.file_cursor + 1)
+        return replace(model, detail=replace(model.detail, file_cursor=new)), []
+    if isinstance(msg, DetailFileUp):
+        if model.detail.mode != "files":
+            return model, []
+        new = max(0, model.detail.file_cursor - 1)
+        return replace(model, detail=replace(model.detail, file_cursor=new)), []
+    if isinstance(msg, DetailBack):
+        if model.detail.mode == "diff":
+            return replace(model, detail=replace(model.detail, mode="files", diff=None)), []
+        return model, []
+    if isinstance(msg, DetailOpenFile):
+        if model.detail.mode != "files":
+            return model, []
+        files = _current_files(model)
+        fc = model.detail.file_cursor
+        if not (0 <= fc < len(files)):
+            return model, []
+        selected = files[fc]
+        if selected.status == FileStatus.CONFLICTED:
+            return update(model, OpenConflictView(selected.path))
+        cid = selected_change_id(model)
+        if cid is None:
+            return model, []
+        return replace(model, detail=replace(model.detail, mode="diff")), [LoadChangeDiff(cid)]
+    if isinstance(msg, ChangeDiffLoaded):
+        if model.detail.mode != "diff" or selected_change_id(model) != msg.change_id:
+            return model, []  # superseded: user navigated away or left diff mode
+        return replace(model, detail=replace(model.detail, diff=msg.diff)), []
+    if isinstance(msg, ChangeDiffLoadFailed):
+        return (
+            replace(model, error=msg.error, detail=replace(model.detail, mode="files", diff=None)),
+            [],
+        )
 
     # --- graph reload -----------------------------------------------------
     if isinstance(msg, ReloadRequested):
@@ -105,7 +162,11 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         if msg.epoch != model.graph_epoch:
             return model, []  # superseded by a newer load; discard
         return replace(
-            model, error=None, graph=msg.graph, cursor=cursor_after_reload(msg.graph)
+            model,
+            error=None,
+            graph=msg.graph,
+            cursor=cursor_after_reload(msg.graph),
+            detail=DetailState(),
         ), []
     if isinstance(msg, GraphLoadFailed):
         return replace(model, error=msg.error), []
@@ -275,6 +336,15 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
     return model, []
 
 
+def _current_files(model: Model) -> list[FileChange]:
+    """Return the file list for the currently selected change, or [] if none."""
+    cid = selected_change_id(model)
+    if cid is None or model.graph is None:
+        return []
+    detail = model.graph.details.get(cid)
+    return detail.files if detail else []
+
+
 def _start_mutation(
     model: Model, kind: str, args: tuple[Any, ...] | None
 ) -> tuple[Model, list[Cmd]]:
@@ -300,7 +370,14 @@ def _mutation_completed(model: Model, msg: MutationCompleted) -> Model:
         if msg.bookmarks is not None:
             reported = replace(reported, bookmarks=msg.bookmarks)
         return reported
-    reported = replace(reported, graph=msg.graph, cursor=cursor_after_reload(msg.graph))
+    # A fresh graph means the prior detail (file cursor / diff) belongs to a
+    # change that may no longer be selected — reset it, like GraphLoaded does.
+    reported = replace(
+        reported,
+        graph=msg.graph,
+        cursor=cursor_after_reload(msg.graph),
+        detail=DetailState(),
+    )
     if msg.bookmarks is not None:
         reported = replace(reported, bookmarks=msg.bookmarks)
     return reported

@@ -58,6 +58,14 @@ class LoadBookmarks:
 
 
 @dataclass(frozen=True)
+class LoadChangeDiff:
+    """Fetch the diff for one change. On completion dispatch
+    ChangeDiffLoaded(change_id, diff) or ChangeDiffLoadFailed(error)."""
+
+    change_id: str
+
+
+@dataclass(frozen=True)
 class LoadConflictData:
     """Load conflict data for a file. On completion dispatch ConflictDataLoaded(data)
     or ConflictDataLoadFailed(error)."""
@@ -65,4 +73,12 @@ class LoadConflictData:
     path: str
 
 
-Cmd = LoadGraph | RunMutation | EditMessage | LoadOpLog | LoadBookmarks | LoadConflictData
+Cmd = (
+    LoadGraph
+    | RunMutation
+    | EditMessage
+    | LoadOpLog
+    | LoadBookmarks
+    | LoadChangeDiff
+    | LoadConflictData
+)

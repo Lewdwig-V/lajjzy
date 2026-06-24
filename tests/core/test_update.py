@@ -10,7 +10,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from lajjzy.backend.types import Bookmark, ChangeDetail, GraphData, GraphLine
+from lajjzy.backend.types import (
+    Bookmark,
+    ChangeDetail,
+    FileChange,
+    FileStatus,
+    GraphData,
+    GraphLine,
+)
 from lajjzy.core import (
     Abandon,
     BookmarkDelete,
@@ -49,9 +56,10 @@ from lajjzy.core import (
     Undo,
     update,
 )
+from lajjzy.core.model import DetailState, select_change
 
 
-def _detail(desc: str = "") -> ChangeDetail:
+def _detail(desc: str = "", files: list | None = None) -> ChangeDetail:
     return ChangeDetail(
         commit_id="c0",
         author="a",
@@ -61,7 +69,7 @@ def _detail(desc: str = "") -> ChangeDetail:
         bookmarks=[],
         is_empty=False,
         has_conflict=False,
-        files=[],
+        files=files or [],
         parents=[],
     )
 
@@ -190,6 +198,20 @@ def test_mutation_completed_applies_fresh_graph_and_reports_message():
     assert done.graph is new_graph
     assert done.cursor == 1
     assert done.error == "Created"
+
+
+def test_mutation_completed_resets_detail_with_fresh_graph():
+    # A completed mutation reloads the graph and repositions the cursor, so the
+    # prior detail (file cursor / open diff) must not carry across — same
+    # exemplary-MVU invariant as GraphLoaded and select_change.
+    m = replace(
+        _loaded("aaa", working=0),
+        detail=DetailState(file_cursor=2, mode="diff", diff=[]),
+    )
+    armed, [cmd] = update(m, NewChange())
+    new_graph = _graph("aaa", "bbb", working=1)
+    done, _ = update(armed, MutationCompleted(cmd.epoch, "Created", new_graph, None))
+    assert done.detail == DetailState()
 
 
 def test_reload_during_mutation_is_ignored_and_mutation_graph_wins():
@@ -773,3 +795,192 @@ def test_split_confirm_blocked_while_pending():
     blocked, cmds = update(opened, SplitConfirm("aaa", [FileRef("f")]))
     assert cmds == []
     assert blocked.error == "A mutation is already in progress"
+
+
+# --- phase 2a task 1: DetailState + select_change --------------------------
+
+
+def test_model_has_detail_defaulting_to_fresh_detailstate():
+    m = Model()
+    assert m.detail == DetailState()
+    assert m.detail.file_cursor == 0
+    assert m.detail.mode == "files"
+    assert m.detail.diff is None
+
+
+def test_select_change_resets_detail_only_on_actual_change():
+    g = _loaded("aaa", "bbb", working=0).graph  # two nodes
+    m = replace(
+        Model(),
+        graph=g,
+        cursor=g.node_indices[0],
+        detail=DetailState(file_cursor=3, mode="diff", diff=[]),
+    )
+    # moving to a different node resets detail
+    moved = select_change(m, g.node_indices[1])
+    assert moved.cursor == g.node_indices[1]
+    assert moved.detail == DetailState()
+    # selecting the same cursor leaves detail untouched
+    same = select_change(m, g.node_indices[0])
+    assert same.detail == m.detail
+
+
+# --- phase 2a task 2: DetailFileUp/Down/Back Msgs --------------------------
+
+from lajjzy.core import DetailBack, DetailFileDown, DetailFileUp  # noqa: E402
+
+
+def _two_file_change() -> Model:
+    """A model whose selected change 'aaa' has two files."""
+    detail = _detail(
+        files=[
+            FileChange(path="a.txt", status=FileStatus.MODIFIED),
+            FileChange(path="b.txt", status=FileStatus.MODIFIED),
+        ]
+    )
+    g = GraphData(
+        lines=[GraphLine(raw="aaa", change_id="aaa", glyph_prefix="")],
+        details={"aaa": detail},
+        working_copy_index=0,
+        op_id="op",
+    )
+    return replace(Model(), graph=g, cursor=0)
+
+
+def test_detail_file_down_clamps_to_file_count() -> None:
+    m = _two_file_change()
+    m1, cmds = update(m, DetailFileDown())
+    assert m1.detail.file_cursor == 1
+    assert cmds == []
+    m2, _ = update(m1, DetailFileDown())  # already at last file
+    assert m2.detail.file_cursor == 1
+
+
+def test_detail_file_up_clamps_at_zero() -> None:
+    m = replace(_two_file_change(), detail=DetailState(file_cursor=1))
+    m1, _ = update(m, DetailFileUp())
+    assert m1.detail.file_cursor == 0
+    m2, _ = update(m1, DetailFileUp())
+    assert m2.detail.file_cursor == 0
+
+
+def test_detail_file_nav_ignored_in_diff_mode() -> None:
+    m = replace(_two_file_change(), detail=DetailState(file_cursor=0, mode="diff"))
+    m1, _ = update(m, DetailFileDown())
+    assert m1.detail.file_cursor == 0  # unchanged in diff mode
+
+
+def test_detail_back_returns_to_files_and_clears_diff() -> None:
+    m = replace(_two_file_change(), detail=DetailState(mode="diff", diff=[]))
+    m1, _ = update(m, DetailBack())
+    assert m1.detail.mode == "files"
+    assert m1.detail.diff is None
+
+
+# --- phase 2a task 3: LoadChangeDiff + DetailOpenFile + ChangeDiffLoaded ----
+
+from lajjzy.core import (  # noqa: E402
+    ChangeDiffLoadFailed,
+    ChangeDiffLoaded,
+    DetailOpenFile,
+    LoadChangeDiff,
+)
+
+
+def test_detail_open_file_normal_enters_diff_mode_and_loads() -> None:
+    m = _two_file_change()  # selected change "aaa", file_cursor 0 = a.txt (MODIFIED)
+    m1, cmds = update(m, DetailOpenFile())
+    assert m1.detail.mode == "diff"
+    assert cmds == [LoadChangeDiff("aaa")]
+
+
+def test_detail_open_file_conflicted_opens_conflict_view() -> None:
+    detail = _detail(files=[FileChange(path="c.txt", status=FileStatus.CONFLICTED)])
+    g = GraphData(
+        lines=[GraphLine(raw="aaa", change_id="aaa", glyph_prefix="")],
+        details={"aaa": detail},
+        working_copy_index=0,
+        op_id="op",
+    )
+    m = replace(Model(), graph=g, cursor=0)
+    m1, cmds = update(m, DetailOpenFile())
+    assert m1.modal == "conflict_view"
+    assert m1.conflict_path == "c.txt"
+    assert cmds == [LoadConflictData("c.txt")]
+
+
+def test_change_diff_loaded_stores_when_relevant() -> None:
+    m = replace(_two_file_change(), detail=DetailState(mode="diff"))
+    m1, _ = update(m, ChangeDiffLoaded("aaa", []))
+    assert m1.detail.diff == []
+
+
+def test_change_diff_loaded_dropped_when_not_in_diff_mode() -> None:
+    m = _two_file_change()  # mode == "files"
+    m1, _ = update(m, ChangeDiffLoaded("aaa", []))
+    assert m1.detail.diff is None  # dropped
+
+
+def test_change_diff_loaded_dropped_when_change_id_stale() -> None:
+    m = replace(_two_file_change(), detail=DetailState(mode="diff"))
+    m1, _ = update(m, ChangeDiffLoaded("different", []))
+    assert m1.detail.diff is None
+
+
+def test_change_diff_load_failed_sets_error() -> None:
+    m = _two_file_change()
+    m1, _ = update(m, ChangeDiffLoadFailed("boom"))
+    assert m1.error == "boom"
+
+
+# --- Fix A: ChangeDiffLoadFailed exits diff mode ---------------------------
+
+
+def test_change_diff_load_failed_resets_to_files_mode() -> None:
+    """ChangeDiffLoadFailed must exit diff mode, not leave diff=None in diff mode."""
+    m = replace(_two_file_change(), detail=DetailState(mode="diff"))
+    m1, _ = update(m, ChangeDiffLoadFailed("boom"))
+    assert m1.error == "boom"
+    assert m1.detail.mode == "files"
+    assert m1.detail.diff is None
+
+
+# --- Fix B: DetailState __post_init__ invariant ----------------------------
+
+import pytest  # noqa: E402
+
+
+def test_detail_state_rejects_diff_in_files_mode() -> None:
+    with pytest.raises(ValueError, match="diff must be None in files mode"):
+        DetailState(mode="files", diff=[])
+
+
+def test_detail_state_rejects_negative_file_cursor() -> None:
+    with pytest.raises(ValueError, match="file_cursor must be >= 0"):
+        DetailState(file_cursor=-1)
+
+
+def test_detail_state_allows_diff_none_in_files_mode() -> None:
+    ds = DetailState(mode="files", diff=None)
+    assert ds.diff is None
+
+
+def test_detail_state_allows_diff_in_diff_mode() -> None:
+    ds = DetailState(mode="diff", diff=[])
+    assert ds.diff == []
+
+
+def test_detail_state_allows_diff_none_in_diff_mode() -> None:
+    # The in-flight loading state: mode="diff", diff=None is legal.
+    ds = DetailState(mode="diff", diff=None)
+    assert ds.diff is None
+
+
+# --- Fix D: GraphLoaded resets detail --------------------------------------
+
+
+def test_graph_loaded_resets_detail():
+    m = replace(_loaded("aaa", working=0), detail=DetailState(file_cursor=2, mode="diff", diff=[]))
+    fresh = _graph("aaa", "bbb", working=1)
+    done, _ = update(m, GraphLoaded(m.graph_epoch, fresh))
+    assert done.detail == DetailState()
