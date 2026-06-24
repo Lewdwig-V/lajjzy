@@ -62,6 +62,7 @@ from lajjzy.core.messages import (
     Undo,
 )
 from lajjzy.core.model import (
+    Modal,
     Model,
     cursor_after_reload,
     selected_change_id,
@@ -99,6 +100,7 @@ __all__ = [
     "LoadConflictData",
     "LoadGraph",
     "LoadOpLog",
+    "Modal",
     "Model",
     "Msg",
     "MutationCompleted",

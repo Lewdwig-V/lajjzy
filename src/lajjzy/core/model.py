@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from lajjzy.backend.types import Bookmark, ConflictData, GraphData, OpLogEntry
+
+Modal = Literal[
+    "omnibar",
+    "bookmark_input",
+    "bookmark_picker",
+    "op_log",
+    "conflict_view",
+    "hunk_picker",
+]
 
 
 @dataclass(frozen=True)
@@ -35,9 +45,7 @@ class Model:
     revset: str | None = None
     conflict_data: ConflictData | None = None
     conflict_path: str | None = None
-    modal: str | None = (
-        None  # "omnibar"|"bookmark_input"|"bookmark_picker"|"op_log"|"conflict_view"|"hunk_picker"|None
-    )
+    modal: Modal | None = None
 
 
 def selected_change_id(model: Model) -> str | None:
