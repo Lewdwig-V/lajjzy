@@ -321,17 +321,73 @@ class LajjzyApp(App[None]):
     # -- Textual lifecycle ------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        from lajjzy.widgets import DetailPanel, GraphView, StatusBar
+        from lajjzy.widgets import (
+            BookmarkInput,
+            BookmarkPicker,
+            ConflictView,
+            DetailPanel,
+            GraphView,
+            HunkPicker,
+            Omnibar,
+            OpLog,
+            StatusBar,
+        )
 
         with Horizontal(id="panes"):
             yield GraphView()
             yield DetailPanel()
         yield StatusBar()
+        # Modals are always mounted but hidden; visibility follows self.modal.
+        # (Mounting once avoids mount/unmount churn on every modal open/close.)
+        yield Omnibar(id="omnibar")
+        yield BookmarkInput(id="bookmark_input")
+        yield BookmarkPicker(id="bookmark_picker")
+        yield OpLog(id="op_log")
+        yield ConflictView(id="conflict_view")
+        yield HunkPicker(id="hunk_picker")
+
+    def watch_modal(self, modal: str | None) -> None:
+        from textual.widget import Widget
+
+        from lajjzy.widgets import (
+            BookmarkInput,
+            BookmarkPicker,
+            ConflictView,
+            HunkPicker,
+            Omnibar,
+            OpLog,
+        )
+
+        mapping: dict[str, type[Widget]] = {
+            "omnibar": Omnibar,
+            "bookmark_input": BookmarkInput,
+            "bookmark_picker": BookmarkPicker,
+            "op_log": OpLog,
+            "conflict_view": ConflictView,
+            "hunk_picker": HunkPicker,
+        }
+        for name, cls in mapping.items():
+            try:
+                w = self.query_one(cls)
+            except Exception:
+                continue
+            w.display = modal == name
 
     def on_mount(self) -> None:
-        from lajjzy.widgets import GraphView
+        from lajjzy.widgets import (
+            BookmarkInput,
+            BookmarkPicker,
+            ConflictView,
+            GraphView,
+            HunkPicker,
+            Omnibar,
+            OpLog,
+        )
 
         self.query_one(GraphView).focus()
+        # Modals start hidden; watch_modal shows the active one.
+        for cls in (Omnibar, BookmarkInput, BookmarkPicker, OpLog, ConflictView, HunkPicker):
+            self.query_one(cls).display = False
         self.runtime.dispatch(ReloadRequested())
 
     # -- key bindings → messages -----------------------------------------

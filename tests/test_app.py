@@ -588,6 +588,19 @@ async def test_slash_key_opens_omnibar_modal(temp_repo: Path):
 
 
 @jj_required
+async def test_omnibar_mounts_when_modal_reactive_set(temp_repo: Path):
+    from lajjzy.widgets import Omnibar
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("/")
+        await app.workers.wait_for_complete()
+        # The Omnibar widget should now be mounted and visible.
+        app.query_one(Omnibar)
+
+
+@jj_required
 async def test_bookmark_set_mutation_refreshes_bookmarks(temp_repo: Path):
     app = LajjzyApp(repo_path=temp_repo)
     async with app.run_test():
