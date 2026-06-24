@@ -749,5 +749,9 @@ async def test_detail_panel_holds_no_logic_state(temp_repo: Path):
         await app.workers.wait_for_complete()
         panel = app.query_one(DetailPanel)
         # The widget must not own these any more; they live on Model.detail.
-        assert not hasattr(panel, "file_cursor") or "file_cursor" not in type(panel).__dict__
-        assert "mode" not in type(panel).__dict__
+        # Check BOTH the class dict (reactives/class attrs) AND the instance
+        # dict (an __init__ attribute like the old `self.diff`) so the split-brain
+        # cannot return in either form.
+        for name in ("file_cursor", "mode", "diff"):
+            assert name not in type(panel).__dict__, f"{name} leaked back as a class attr"
+            assert name not in vars(panel), f"{name} leaked back as an instance attr"
