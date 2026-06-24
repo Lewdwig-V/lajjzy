@@ -14,7 +14,7 @@ from textual.containers import Horizontal
 from textual.reactive import reactive
 
 import lajjzy.backend.jj as jj
-from lajjzy.backend.types import GraphData, JjError
+from lajjzy.backend.types import Bookmark, ConflictData, GraphData, JjError, OpLogEntry
 from lajjzy.core import (
     Abandon,
     Cmd,
@@ -33,6 +33,7 @@ from lajjzy.core import (
     LoadConflictData,
     LoadGraph,
     LoadOpLog,
+    Modal,
     Model,
     Msg,
     MutationCompleted,
@@ -119,6 +120,12 @@ class LajjzyApp(App[None]):
     cursor: reactive[int] = reactive(0)
     error: reactive[str | None] = reactive(None)
     rebase_source: reactive[str | None] = reactive(None)
+    modal: reactive[Modal | None] = reactive(None)
+    op_log_entries: reactive[list[OpLogEntry] | None] = reactive(None)
+    bookmarks: reactive[list[Bookmark] | None] = reactive(None)
+    revset: reactive[str | None] = reactive(None)
+    conflict_data: reactive[ConflictData | None] = reactive(None)
+    conflict_path: reactive[str | None] = reactive(None)
 
     def __init__(self, repo_path: Path | None = None) -> None:
         super().__init__()
@@ -156,6 +163,12 @@ class LajjzyApp(App[None]):
         self.error = model.error
         self.rebase_source = model.rebase_source
         self.pending_mutation = model.pending_mutation
+        self.modal = model.modal
+        self.op_log_entries = model.op_log_entries
+        self.bookmarks = model.bookmarks
+        self.revset = model.revset
+        self.conflict_data = model.conflict_data
+        self.conflict_path = model.conflict_path
 
     # -- Backend.run_cmd: interpret a Cmd on the right concurrency lane ----
 

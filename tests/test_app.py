@@ -531,3 +531,15 @@ async def test_open_bookmark_picker_populates_model(temp_repo: Path, monkeypatch
         assert app.model.bookmarks == canned, (
             f"Expected bookmarks={canned!r}, got {app.model.bookmarks!r}"
         )
+
+
+@jj_required
+async def test_present_projects_modal_and_new_model_fields(temp_repo: Path):
+    from lajjzy.core import OpenOmnibar
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        app.runtime.dispatch(OpenOmnibar())
+        await app.workers.wait_for_complete()
+        assert app.modal == "omnibar"
