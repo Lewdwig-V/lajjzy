@@ -275,24 +275,12 @@ class ConflictDataLoadFailed:
     error: str
 
 
-# --- diff view ---------------------------------------------------------
+# --- detail pane / diff ------------------------------------------------
 @dataclass(frozen=True)
 class DetailOpenFile:
     pass
 
 
-@dataclass(frozen=True)
-class ChangeDiffLoaded:
-    change_id: str
-    diff: list[FileDiff]
-
-
-@dataclass(frozen=True)
-class ChangeDiffLoadFailed:
-    error: str
-
-
-# --- hunk picker (split / partial squash) ------------------------------
 @dataclass(frozen=True)
 class DetailBack:
     pass
@@ -308,6 +296,18 @@ class DetailFileUp:
     pass
 
 
+@dataclass(frozen=True)
+class ChangeDiffLoaded:
+    change_id: str
+    diff: list[FileDiff]
+
+
+@dataclass(frozen=True)
+class ChangeDiffLoadFailed:
+    error: str
+
+
+# --- hunk picker (split / partial squash) ------------------------------
 @dataclass(frozen=True)
 class Split:
     pass

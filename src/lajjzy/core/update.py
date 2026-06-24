@@ -142,7 +142,10 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
             return model, []  # superseded: user navigated away or left diff mode
         return replace(model, detail=replace(model.detail, diff=msg.diff)), []
     if isinstance(msg, ChangeDiffLoadFailed):
-        return replace(model, error=msg.error), []
+        return (
+            replace(model, error=msg.error, detail=replace(model.detail, mode="files", diff=None)),
+            [],
+        )
 
     # --- graph reload -----------------------------------------------------
     if isinstance(msg, ReloadRequested):

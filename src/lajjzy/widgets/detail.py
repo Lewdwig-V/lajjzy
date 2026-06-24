@@ -85,8 +85,10 @@ class DetailPanel(Widget):
 
     def _render_diff(self) -> Text:
         diff = self._app().detail.diff
-        if not diff:
-            return Text("(no diff)", style="dim")
+        if diff is None:
+            return Text("(loading diff…)", style="dim")
+        if diff == []:
+            return Text("(no changes)", style="dim")
         files = self.current_files()
         cursor = self._app().detail.file_cursor
         # Show the opened file's diff (preserves the prior single-file view).

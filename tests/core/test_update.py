@@ -931,3 +931,56 @@ def test_change_diff_load_failed_sets_error() -> None:
     m = _two_file_change()
     m1, _ = update(m, ChangeDiffLoadFailed("boom"))
     assert m1.error == "boom"
+
+
+# --- Fix A: ChangeDiffLoadFailed exits diff mode ---------------------------
+
+
+def test_change_diff_load_failed_resets_to_files_mode() -> None:
+    """ChangeDiffLoadFailed must exit diff mode, not leave diff=None in diff mode."""
+    m = replace(_two_file_change(), detail=DetailState(mode="diff"))
+    m1, _ = update(m, ChangeDiffLoadFailed("boom"))
+    assert m1.error == "boom"
+    assert m1.detail.mode == "files"
+    assert m1.detail.diff is None
+
+
+# --- Fix B: DetailState __post_init__ invariant ----------------------------
+
+import pytest  # noqa: E402
+
+
+def test_detail_state_rejects_diff_in_files_mode() -> None:
+    with pytest.raises(ValueError, match="diff must be None in files mode"):
+        DetailState(mode="files", diff=[])
+
+
+def test_detail_state_rejects_negative_file_cursor() -> None:
+    with pytest.raises(ValueError, match="file_cursor must be >= 0"):
+        DetailState(file_cursor=-1)
+
+
+def test_detail_state_allows_diff_none_in_files_mode() -> None:
+    ds = DetailState(mode="files", diff=None)
+    assert ds.diff is None
+
+
+def test_detail_state_allows_diff_in_diff_mode() -> None:
+    ds = DetailState(mode="diff", diff=[])
+    assert ds.diff == []
+
+
+def test_detail_state_allows_diff_none_in_diff_mode() -> None:
+    # The in-flight loading state: mode="diff", diff=None is legal.
+    ds = DetailState(mode="diff", diff=None)
+    assert ds.diff is None
+
+
+# --- Fix D: GraphLoaded resets detail --------------------------------------
+
+
+def test_graph_loaded_resets_detail():
+    m = replace(_loaded("aaa", working=0), detail=DetailState(file_cursor=2, mode="diff", diff=[]))
+    fresh = _graph("aaa", "bbb", working=1)
+    done, _ = update(m, GraphLoaded(m.graph_epoch, fresh))
+    assert done.detail == DetailState()

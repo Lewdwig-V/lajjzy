@@ -755,3 +755,46 @@ async def test_detail_panel_holds_no_logic_state(temp_repo: Path):
         for name in ("file_cursor", "mode", "diff"):
             assert name not in type(panel).__dict__, f"{name} leaked back as a class attr"
             assert name not in vars(panel), f"{name} leaked back as an instance attr"
+
+
+# ---------------------------------------------------------------------------
+# Fix E: _render_diff single-file projection — diff contains the opened file
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_diff_mode_diff_contains_opened_file(temp_repo: Path):
+    """Open diff mode on the first file and assert detail.diff contains that file's path.
+
+    We assert on the model state rather than the rendered text to avoid brittleness
+    from Rich text formatting. The render-text assertion would require precise string
+    matching against Rich markup which is fragile; the model assertion is authoritative.
+    """
+    import subprocess
+
+    # Add a second file so the change has multiple files.
+    (temp_repo / "b.txt").write_text("world\n")
+    subprocess.run(
+        ["jj", "describe", "-m", "two files"], cwd=temp_repo, check=True, capture_output=True
+    )
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        # Focus detail panel and open diff for the first file (file_cursor=0).
+        await pilot.press("tab")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        assert app.detail.mode == "diff", f"expected diff mode, got {app.detail.mode!r}"
+        assert app.detail.diff is not None, "diff should be loaded after entering diff mode"
+        # The opened file (file_cursor=0) must appear in the diff list.
+        from lajjzy.widgets.detail import DetailPanel
+
+        panel = app.query_one(DetailPanel)
+        files = panel.current_files()
+        assert files, "Expected at least one file in the working change"
+        opened_path = files[0].path
+        diff_paths = [fd.path for fd in app.detail.diff]
+        assert any(opened_path in p or p in opened_path for p in diff_paths), (
+            f"Opened file {opened_path!r} not found in diff paths {diff_paths!r}"
+        )

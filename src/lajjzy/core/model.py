@@ -19,11 +19,22 @@ Modal = Literal[
 class DetailState:
     """The detail pane's logic-bearing state, owned by the Model (not the
     widget). ``diff`` is loaded through the MVU loop (LoadChangeDiff →
-    ChangeDiffLoaded); it is None until the load lands and while in files mode."""
+    ChangeDiffLoaded); it is None until the load lands and while in files mode.
+
+    ``mode == 'diff'`` with ``diff is None`` is the valid in-flight state
+    between DetailOpenFile and ChangeDiffLoaded; the renderer shows a loading
+    placeholder during that window.
+    """
 
     file_cursor: int = 0
     mode: Literal["files", "diff"] = "files"
     diff: list[FileDiff] | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode == "files" and self.diff is not None:
+            raise ValueError("DetailState: diff must be None in files mode")
+        if self.file_cursor < 0:
+            raise ValueError(f"DetailState: file_cursor must be >= 0, got {self.file_cursor}")
 
 
 @dataclass(frozen=True)
