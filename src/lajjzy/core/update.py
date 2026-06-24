@@ -100,7 +100,7 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         if model.pending_mutation:
             return model, []
         epoch = model.graph_epoch + 1
-        return replace(model, graph_epoch=epoch), [LoadGraph(epoch)]
+        return replace(model, graph_epoch=epoch), [LoadGraph(epoch, model.revset)]
     if isinstance(msg, GraphLoaded):
         if msg.epoch != model.graph_epoch:
             return model, []  # superseded by a newer load; discard
@@ -141,8 +141,8 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         return replace(model, modal=None), []
     if isinstance(msg, OmnibarSubmit):
         revset = msg.revset
-        if revset is not None and revset == "":
-            # empty query = no-op, just close
+        if revset == "":
+            # empty query = no-op, just close; None intentionally falls through to clear the filter
             return replace(model, modal=None), []
         if model.pending_mutation:
             # Don't race the mutation's follow-up reload (same guard as

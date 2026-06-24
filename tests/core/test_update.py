@@ -496,6 +496,22 @@ def test_omnibar_submit_none_clears_revset():
     assert cmds == [LoadGraph(submitted.graph_epoch, None)]
 
 
+def test_omnibar_submit_empty_is_noop():
+    m = replace(_loaded("a"), modal="omnibar", revset="mine()")
+    result, cmds = update(m, OmnibarSubmit(""))
+    assert result.modal is None
+    assert cmds == []
+    assert result.revset == "mine()"
+
+
+def test_reload_requested_preserves_revset():
+    m = replace(_loaded("a"), revset="mine()")
+    result, cmds = update(m, ReloadRequested())
+    assert len(cmds) == 1
+    assert isinstance(cmds[0], LoadGraph)
+    assert cmds[0].revset == "mine()"
+
+
 # --- bookmarks ---------------------------------------------------------
 
 
