@@ -149,7 +149,10 @@ _OP_LOG_TEMPLATE = (
 
 async def op_log(cwd: Path) -> list[OpLogEntry]:
     stdout = await run_jj(["op", "log", "--no-graph", "-T", _OP_LOG_TEMPLATE], cwd)
-    return parse_op_log(stdout)
+    try:
+        return parse_op_log(stdout)
+    except ValueError as e:
+        raise JjError(str(e)) from e
 
 
 async def op_restore(cwd: Path, op_id: str) -> str:
@@ -172,7 +175,10 @@ _BOOKMARK_TEMPLATE = (
 
 async def load_bookmarks(cwd: Path) -> list[Bookmark]:
     stdout = await run_jj(["bookmark", "list", "-T", _BOOKMARK_TEMPLATE, "--color=never"], cwd)
-    return parse_bookmarks(stdout)
+    try:
+        return parse_bookmarks(stdout)
+    except ValueError as e:
+        raise JjError(str(e)) from e
 
 
 async def bookmark_set(cwd: Path, change_id: str, name: str) -> str:

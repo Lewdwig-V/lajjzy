@@ -80,13 +80,12 @@ def test_parse_op_log_ignores_blank_trailing_line():
     assert len(entries) == 1
 
 
-def test_parse_op_log_skips_malformed_line():
-    # The middle line has no field separators — it must be skipped silently.
-    out = "abc\x1fnow\x1fdesc\nMALFORMED_NO_SEPARATORS\ndef\x1flater\x1fother\n"
-    entries = parse_op_log(out)
-    assert len(entries) == 2
-    assert entries[0].op_id == "abc"
-    assert entries[1].op_id == "def"
+def test_parse_op_log_raises_on_malformed_line():
+    # A non-empty line with wrong field count must raise ValueError.
+    import pytest
+
+    with pytest.raises(ValueError, match="fields, expected 3"):
+        parse_op_log("abc\x1fnow\x1fdesc\nMALFORMED_NO_SEPARATORS\ndef\x1flater\x1fother\n")
 
 
 def test_parse_bookmarks_empty():
@@ -113,6 +112,14 @@ def test_parse_bookmarks_ignores_blank_trailing_line():
 
     bms = parse_bookmarks("main\x1fabc\x1fdesc\n")
     assert len(bms) == 1
+
+
+def test_parse_bookmarks_raises_on_malformed_line():
+    from lajjzy.backend.parse import parse_bookmarks
+    import pytest
+
+    with pytest.raises(ValueError, match="fields, expected 3"):
+        parse_bookmarks("main\x1fabc\x1fdesc\nMALFORMED\nmain2\x1fxyz\x1fother\n")
 
 
 def test_parse_conflict_data_no_conflicts():

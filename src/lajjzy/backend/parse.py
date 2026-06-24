@@ -182,7 +182,8 @@ def parse_file_diffs(output: str) -> list[FileDiff]:
 def parse_op_log(output: str) -> list[OpLogEntry]:
     """Parse `jj op log --no-graph -T <template>` output into OpLogEntry list.
 
-    Template (set in jj.py): id ++ \\x1f ++ timestamp ++ \\x1f ++ description ++ \\n
+    Fields must match _OP_LOG_TEMPLATE field order in jj.py (id, timestamp, description).
+    Raises ValueError on non-empty lines that don't have exactly 3 UNIT_SEP-delimited fields.
     """
     entries: list[OpLogEntry] = []
     for line in output.split("\n"):
@@ -190,7 +191,7 @@ def parse_op_log(output: str) -> list[OpLogEntry]:
             continue
         parts = line.split(UNIT_SEP)
         if len(parts) != 3:
-            continue
+            raise ValueError(f"op log line has {len(parts)} fields, expected 3: {line!r}")
         entries.append(OpLogEntry(op_id=parts[0], timestamp=parts[1], description=parts[2]))
     return entries
 
@@ -198,8 +199,8 @@ def parse_op_log(output: str) -> list[OpLogEntry]:
 def parse_bookmarks(output: str) -> list[Bookmark]:
     """Parse `jj bookmark list -T <template>` output into Bookmark list.
 
-    Template (set in jj.py): name ++ \\x1f ++ change_id.short() ++ \\x1f ++
-    description.first_line() ++ \\n
+    Fields must match _BOOKMARK_TEMPLATE field order in jj.py (name, change_id, description).
+    Raises ValueError on non-empty lines that don't have exactly 3 UNIT_SEP-delimited fields.
     """
     bms: list[Bookmark] = []
     for line in output.split("\n"):
@@ -207,7 +208,7 @@ def parse_bookmarks(output: str) -> list[Bookmark]:
             continue
         parts = line.split(UNIT_SEP)
         if len(parts) != 3:
-            continue
+            raise ValueError(f"bookmark line has {len(parts)} fields, expected 3: {line!r}")
         bms.append(Bookmark(name=parts[0], change_id=parts[1], change_description=parts[2]))
     return bms
 
