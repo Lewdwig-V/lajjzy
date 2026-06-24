@@ -36,8 +36,18 @@ class DetailPanel(Widget):
         def _on_change(_: object) -> None:
             self._on_selection_change()
 
+        def _on_detail_change(detail: object) -> None:
+            from lajjzy.core import DetailState as DS
+
+            if not isinstance(detail, DS):
+                return
+            self.mode = detail.mode
+            self.diff = detail.diff if detail.diff is not None else []
+            self.refresh()
+
         self.watch(self.app, "graph", _on_change)
         self.watch(self.app, "cursor", _on_change)
+        self.watch(self.app, "detail", _on_detail_change)
 
     def _on_selection_change(self) -> None:
         self.file_cursor = 0
@@ -82,7 +92,9 @@ class DetailPanel(Widget):
 
             cast("LajjzyApp", self.app).runtime.dispatch(OpenConflictView(selected.path))
             return
-        cast("LajjzyApp", self.app).open_diff(selected.path)
+        from lajjzy.core import DetailOpenFile
+
+        cast("LajjzyApp", self.app).runtime.dispatch(DetailOpenFile())
 
     def action_back(self) -> None:
         if self.mode == "diff":

@@ -25,6 +25,7 @@ from lajjzy.core import (
     DescribeAborted,
     DescribeReady,
     DescribeRequested,
+    DetailState,
     EditChange,
     EditMessage,
     GraphLoaded,
@@ -145,6 +146,7 @@ class LajjzyApp(App[None]):
     revset: reactive[str | None] = reactive(None)
     conflict_data: reactive[ConflictData | None] = reactive(None)
     conflict_path: reactive[str | None] = reactive(None)
+    detail: reactive[DetailState] = reactive(DetailState())
 
     def __init__(self, repo_path: Path | None = None) -> None:
         super().__init__()
@@ -188,6 +190,7 @@ class LajjzyApp(App[None]):
         self.revset = model.revset
         self.conflict_data = model.conflict_data
         self.conflict_path = model.conflict_path
+        self.detail = model.detail
 
     # -- Backend.run_cmd: interpret a Cmd on the right concurrency lane ----
 
@@ -535,31 +538,6 @@ class LajjzyApp(App[None]):
             self.error = str(exc)
             return False
         return True
-
-    @work(group="diff", exclusive=True)
-    async def open_diff(self, path: str) -> None:
-        # Diff browsing is ephemeral view-local state owned by the detail pane,
-        # not core application state, so it stays outside the Model/update loop.
-        from lajjzy.widgets import DetailPanel
-
-        change_id = self.selected_change_id()
-        if change_id is None:
-            return
-        try:
-            all_files = await jj.change_diff(self.repo_path, change_id)
-        except JjError as exc:
-            self.error = str(exc)
-            return
-        except InvariantError:
-            # Must propagate (crash policy), not become a status-bar message.
-            raise
-        except Exception as exc:
-            self.error = f"Unexpected error: {exc}"
-            return
-        panel = self.query_one(DetailPanel)
-        panel.diff = [fd for fd in all_files if fd.path == path] or all_files
-        panel.mode = "diff"
-        panel.refresh()
 
 
 def main() -> None:

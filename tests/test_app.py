@@ -638,6 +638,25 @@ async def test_bookmark_set_mutation_refreshes_bookmarks(temp_repo: Path):
 
 
 @jj_required
+async def test_detail_open_file_loads_diff_through_mvu(temp_repo: Path):
+    import subprocess
+
+    (temp_repo / "x.txt").write_text("one\n")
+    subprocess.run(
+        ["jj", "describe", "-m", "add x"], cwd=temp_repo, check=True, capture_output=True
+    )
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        from lajjzy.core import DetailOpenFile
+
+        app.runtime.dispatch(DetailOpenFile())
+        await app.workers.wait_for_complete()
+        assert app.detail.mode == "diff"
+        assert app.detail.diff is not None
+
+
+@jj_required
 async def test_enter_on_conflicted_file_opens_conflict_view(temp_repo: Path, monkeypatch):
     """Enter on a CONFLICTED file in the DetailPanel must dispatch
     OpenConflictView (setting modal='conflict_view') rather than opening the
