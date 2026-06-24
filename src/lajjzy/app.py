@@ -6,7 +6,7 @@ import sys
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -29,7 +29,10 @@ from lajjzy.core import (
     EditMessage,
     GraphLoaded,
     GraphLoadFailed,
+    LoadBookmarks,
+    LoadConflictData,
     LoadGraph,
+    LoadOpLog,
     Model,
     Msg,
     MutationCompleted,
@@ -42,6 +45,14 @@ from lajjzy.core import (
     RunMutation,
     Squash,
     selected_change_id,
+)
+from lajjzy.core.messages import (
+    BookmarksLoadFailed,
+    BookmarksLoaded,
+    ConflictDataLoadFailed,
+    ConflictDataLoaded,
+    OpLogLoadFailed,
+    OpLogLoaded,
 )
 from lajjzy.invariants import InvariantError
 from lajjzy.runtime import Runtime
@@ -57,6 +68,15 @@ _OPS: dict[str, Callable[[Path, tuple[Any, ...]], Awaitable[str]]] = {
     "describe": lambda cwd, a: jj.describe(cwd, *a),
     "rebase": lambda cwd, a: jj.rebase_single(cwd, *a),
     "rebase_descendants": lambda cwd, a: jj.rebase_with_descendants(cwd, *a),
+    "undo": lambda cwd, a: jj.undo(cwd, *a),
+    "redo": lambda cwd, a: jj.redo(cwd, *a),
+    "bookmark_set": lambda cwd, a: jj.bookmark_set(cwd, *a),
+    "bookmark_delete": lambda cwd, a: jj.bookmark_delete(cwd, *a),
+    "bookmark_move": lambda cwd, a: jj.bookmark_move(cwd, *a),
+    "op_restore": lambda cwd, a: jj.op_restore(cwd, *a),
+    "resolve": lambda cwd, a: jj.resolve(cwd, *a),
+    "split": lambda cwd, a: jj.split(cwd, *a),
+    "squash_partial": lambda cwd, a: jj.squash_partial(cwd, *a),
 }
 
 
@@ -141,19 +161,27 @@ class LajjzyApp(App[None]):
 
     def run_cmd(self, cmd: Cmd, dispatch: Callable[[Msg], None]) -> None:
         if isinstance(cmd, LoadGraph):
-            self._worker_load(cmd.epoch)
+            self._worker_load(cmd.epoch, cmd.revset)
         elif isinstance(cmd, RunMutation):
             self._worker_mutation(cmd.epoch, cmd.kind, cmd.args)
         elif isinstance(cmd, EditMessage):
             # $EDITOR needs the terminal synchronously (suspend), so this runs
             # inline rather than on a worker and dispatches its result at once.
             self._run_editor(cmd.change_id, cmd.seed)
+        elif isinstance(cmd, LoadOpLog):
+            self._worker_load_op_log()
+        elif isinstance(cmd, LoadBookmarks):
+            self._worker_load_bookmarks()
+        elif isinstance(cmd, LoadConflictData):
+            self._worker_load_conflict(cmd.path)
+        else:
+            assert_never(cmd)
 
     @work(group="load", exclusive=True)
-    async def _worker_load(self, epoch: int) -> None:
+    async def _worker_load(self, epoch: int, revset: str | None = None) -> None:
         # group="load", exclusive: a new reload cancels any in-flight reload.
         try:
-            graph = await jj.load_graph(self.repo_path)
+            graph = await jj.load_graph(self.repo_path, revset)
         except JjError as exc:
             self.runtime.dispatch(GraphLoadFailed(str(exc)))
         except InvariantError:
@@ -169,7 +197,11 @@ class LajjzyApp(App[None]):
         # group="mutation": op + follow-up reload run in one worker, so the graph
         # reflects the result. The single-mutation gate lives in `update` (the
         # pending_mutation flag), so this group need not be exclusive.
-        op = _OPS[kind]
+        op = _OPS.get(kind)
+        if op is None:
+            # An unwired kind is an internal model breach (core asked for an effect
+            # the backend can't perform) — crash per the crash policy.
+            raise InvariantError(f"RunMutation kind not wired in _OPS: {kind!r}")
         try:
             message = await op(self.repo_path, args)
         except JjError as exc:
@@ -180,8 +212,11 @@ class LajjzyApp(App[None]):
         except Exception as exc:
             self.runtime.dispatch(MutationFailed(f"Unexpected error: {exc}"))
             return
+        # Thread the active revset through the follow-up reload so a mutation done
+        # while a filter is active reloads the filtered graph (not the full graph).
+        current_revset = self.runtime.model.revset
         try:
-            graph = await jj.load_graph(self.repo_path)
+            graph = await jj.load_graph(self.repo_path, current_revset)
         except JjError as exc:
             self.runtime.dispatch(MutationCompleted(epoch, message, None, str(exc)))
             return
@@ -193,6 +228,48 @@ class LajjzyApp(App[None]):
             )
             return
         self.runtime.dispatch(MutationCompleted(epoch, message, graph, None))
+
+    @work(group="oplog", exclusive=True)
+    async def _worker_load_op_log(self) -> None:
+        # group="oplog", exclusive: a new load cancels any in-flight op-log load.
+        try:
+            entries = await jj.op_log(self.repo_path)
+        except JjError as exc:
+            self.runtime.dispatch(OpLogLoadFailed(str(exc)))
+        except InvariantError:
+            raise
+        except Exception as exc:
+            self.runtime.dispatch(OpLogLoadFailed(f"Unexpected error: {exc}"))
+        else:
+            self.runtime.dispatch(OpLogLoaded(entries))
+
+    @work(group="bookmarks", exclusive=True)
+    async def _worker_load_bookmarks(self) -> None:
+        # group="bookmarks", exclusive: a new load cancels any in-flight bookmark load.
+        try:
+            bookmarks = await jj.load_bookmarks(self.repo_path)
+        except JjError as exc:
+            self.runtime.dispatch(BookmarksLoadFailed(str(exc)))
+        except InvariantError:
+            raise
+        except Exception as exc:
+            self.runtime.dispatch(BookmarksLoadFailed(f"Unexpected error: {exc}"))
+        else:
+            self.runtime.dispatch(BookmarksLoaded(bookmarks))
+
+    @work(group="conflict", exclusive=True)
+    async def _worker_load_conflict(self, path: str) -> None:
+        # group="conflict", exclusive: a new load cancels any in-flight conflict load.
+        try:
+            data = await jj.conflict_data(self.repo_path, path)
+        except JjError as exc:
+            self.runtime.dispatch(ConflictDataLoadFailed(str(exc)))
+        except InvariantError:
+            raise
+        except Exception as exc:
+            self.runtime.dispatch(ConflictDataLoadFailed(f"Unexpected error: {exc}"))
+        else:
+            self.runtime.dispatch(ConflictDataLoaded(data))
 
     def _run_editor(self, change_id: str, seed: str) -> None:
         text, err = self._edit_message_in_editor(seed)

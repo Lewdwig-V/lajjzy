@@ -8,9 +8,17 @@ machine, and the epoch guard is testable in microseconds against data.
 
 from __future__ import annotations
 
-from lajjzy.backend.types import ChangeDetail, GraphData, GraphLine
+from dataclasses import replace
+
+from lajjzy.backend.types import Bookmark, ChangeDetail, GraphData, GraphLine
 from lajjzy.core import (
     Abandon,
+    BookmarkDelete,
+    BookmarkInputCancel,
+    BookmarkInputConfirm,
+    BookmarkMoveConfirm,
+    BookmarksLoadFailed,
+    BookmarksLoaded,
     CursorBottom,
     CursorDown,
     CursorTop,
@@ -21,16 +29,24 @@ from lajjzy.core import (
     EditMessage,
     GraphLoaded,
     GraphLoadFailed,
+    LoadBookmarks,
     LoadGraph,
     Model,
     MutationCompleted,
     MutationFailed,
     NewChange,
+    OmnibarCancel,
+    OmnibarSubmit,
+    OpenBookmarkPicker,
+    OpenBookmarkSet,
+    OpenOmnibar,
     RebaseCancel,
     RebaseConfirm,
     RebaseStart,
+    Redo,
     ReloadRequested,
     RunMutation,
+    Undo,
     update,
 )
 
@@ -200,6 +216,24 @@ def test_mutation_completed_load_error_takes_precedence():
     assert done.error == "load failed"
 
 
+def test_mutation_completed_discards_stale_graph_but_keeps_message():
+    # Mutation-side twin of test_graph_loaded_discarded_when_epoch_stale: if a
+    # newer op bumped graph_epoch after the mutation armed, the mutation's own
+    # reload is stale and must be discarded — but its success message and the
+    # gate reopen still apply.
+    m = _loaded("aaa", working=0)
+    armed, [cmd] = update(m, NewChange())
+    original_graph = armed.graph
+    # A newer op supersedes the mutation's reload before it lands.
+    bumped = replace(armed, graph_epoch=armed.graph_epoch + 1)
+    stale_graph = _graph("aaa", "bbb", working=1)
+    done, _ = update(bumped, MutationCompleted(cmd.epoch, "Created", stale_graph, None))
+    assert done.error == "Created"  # success message kept
+    assert done.graph is original_graph  # stale graph discarded, graph unchanged
+    assert done.graph is not stale_graph
+    assert done.pending_mutation is False  # gate reopened
+
+
 # --- describe (editor round-trip) -------------------------------------------
 
 
@@ -274,3 +308,437 @@ def test_rebase_cancel_clears_source():
     done, _ = update(armed, RebaseCancel())
     assert done.rebase_source is None
     assert done.error == "Rebase cancelled"
+
+
+# --- phase 1a: importability smoke test ------------------------------------
+
+
+from lajjzy.core import (  # noqa: E402, F401, F811
+    # new in phase 1a:
+    ApplyResolutions,
+    BookmarkDelete,
+    BookmarkInputCancel,
+    BookmarkInputConfirm,
+    BookmarkMove,
+    BookmarkMoveConfirm,
+    BookmarksLoaded,
+    BookmarksLoadFailed,
+    ConflictDataLoadFailed,
+    ConflictDataLoaded,
+    ConflictViewClose,
+    HunkPickerClose,
+    LoadBookmarks,
+    LoadConflictData,
+    LoadOpLog,
+    OpenBookmarkPicker,
+    OpenBookmarkSet,
+    OpenConflictView,
+    OpenOmnibar,
+    OpenOpLog,
+    OmnibarAcceptCompletion,
+    OmnibarBackspace,
+    OmnibarCancel,
+    OmnibarInput,
+    OmnibarSubmit,
+    OpLogClose,
+    OpLogLoaded,
+    OpLogLoadFailed,
+    OpLogRestore,
+    Redo,
+    Split,
+    SplitConfirm,
+    SquashPartial,
+    SquashPartialConfirm,
+    Undo,
+)
+from lajjzy.backend.types import (  # noqa: E402, F401
+    CompletionItem,
+    ConflictData,
+    FileRef,
+    HunkResolution,
+    OpLogEntry,
+)
+
+
+def test_msg_types_importable():
+    # Smoke test — just constructing each is enough to verify the import + dataclass shape.
+    assert Undo() is not None
+    assert Redo() is not None
+    assert OpenOmnibar() is not None
+    assert OmnibarInput("x") is not None
+    assert OmnibarSubmit("mine()") is not None
+    assert OpenBookmarkSet() is not None
+    assert OpenBookmarkPicker() is not None
+    assert BookmarkInputConfirm("main") is not None
+    assert BookmarkDelete("main") is not None
+    assert BookmarkMove("main") is not None
+    assert BookmarkMoveConfirm("main", "ksqxwpml") is not None
+    assert OpenOpLog() is not None
+    assert OpLogRestore("abc123") is not None
+    assert OpLogClose() is not None
+    assert OpenConflictView("file.txt") is not None
+    assert ConflictViewClose() is not None
+    assert ApplyResolutions("file.txt", [HunkResolution.ACCEPT_LEFT]) is not None
+    assert Split() is not None
+    assert SquashPartial() is not None
+    assert SplitConfirm("ksqxwpml", [FileRef("file.txt")]) is not None
+    assert SquashPartialConfirm("ksqxwpml", [FileRef("file.txt")]) is not None
+    # result Msgs
+    assert OpLogLoaded([]) is not None
+    assert OpLogLoadFailed("boom") is not None
+    assert BookmarksLoaded([]) is not None
+    assert BookmarksLoadFailed("boom") is not None
+    assert ConflictDataLoaded(ConflictData(regions=[])) is not None
+    assert ConflictDataLoadFailed("boom") is not None
+    # cmds
+    assert LoadOpLog() is not None
+    assert LoadBookmarks() is not None
+    assert LoadConflictData("file.txt") is not None
+
+
+# --- task 10: Cmd types + Model fields -------------------------------------
+
+
+def test_loadgraph_has_revset_field():
+    cmd = LoadGraph(epoch=1, revset="mine()")
+    assert cmd.epoch == 1
+    assert cmd.revset == "mine()"
+
+
+def test_loadgraph_revset_defaults_none():
+    cmd = LoadGraph(epoch=1)
+    assert cmd.revset is None
+
+
+def test_loadoplog_cmd():
+    cmd = LoadOpLog()
+    assert cmd is not None
+
+
+def test_loadbookmarks_cmd():
+    cmd = LoadBookmarks()
+    assert cmd is not None
+
+
+def test_loadconflictdata_cmd():
+    cmd = LoadConflictData(path="file.txt")
+    assert cmd.path == "file.txt"
+
+
+def test_model_new_fields_default_none():
+    m = Model()
+    assert m.op_log_entries is None
+    assert m.bookmarks is None
+    assert m.revset is None
+    assert m.conflict_data is None
+    assert m.conflict_path is None
+    assert m.modal is None
+
+
+# --- undo / redo -------------------------------------------------------
+
+
+def test_undo_starts_mutation():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, Undo())
+    assert m1.pending_mutation is True
+    assert m1.graph_epoch == 2
+    assert cmds == [RunMutation(2, "undo", ())]
+
+
+def test_undo_blocked_while_pending():
+    m = _loaded("aaa", working=0)
+    armed, _ = update(m, NewChange())
+    blocked, cmds = update(armed, Undo())
+    assert cmds == []
+    assert blocked.error == "A mutation is already in progress"
+    assert blocked.pending_mutation is True
+
+
+def test_redo_starts_mutation():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, Redo())
+    assert m1.pending_mutation is True
+    assert cmds == [RunMutation(2, "redo", ())]
+
+
+# --- omnibar -----------------------------------------------------------
+
+
+def test_open_omnibar_sets_modal():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, OpenOmnibar())
+    assert m1.modal == "omnibar"
+    assert cmds == []
+
+
+def test_omnibar_cancel_clears_modal():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenOmnibar())
+    cancelled, _ = update(opened, OmnibarCancel())
+    assert cancelled.modal is None
+
+
+def test_omnibar_submit_with_revset_loads_filtered_graph():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenOmnibar())
+    submitted, cmds = update(opened, OmnibarSubmit("mine()"))
+    assert submitted.modal is None
+    assert submitted.revset == "mine()"
+    assert cmds == [LoadGraph(submitted.graph_epoch, "mine()")]
+
+
+def test_omnibar_submit_blocked_while_pending():
+    """OmnibarSubmit while a mutation is in-flight must not bump the epoch or
+    emit LoadGraph — it records the revset and closes the modal, letting the
+    mutation's follow-up reload pick it up (mirrors the ReloadRequested guard).
+    """
+    m = _loaded("aaa", working=0)
+    armed, _ = update(m, NewChange())
+    epoch_before = armed.graph_epoch
+    result, cmds = update(armed, OmnibarSubmit("mine()"))
+    assert cmds == []
+    assert result.modal is None
+    assert result.revset == "mine()"
+    assert result.graph_epoch == epoch_before  # no bump
+
+
+def test_omnibar_submit_none_clears_revset():
+    m = _loaded("aaa", working=0)
+    # precondition: a revset is active
+    pre = replace(m, revset="mine()")
+    opened, _ = update(pre, OpenOmnibar())
+    submitted, cmds = update(opened, OmnibarSubmit(None))
+    assert submitted.modal is None
+    assert submitted.revset is None
+    assert cmds == [LoadGraph(submitted.graph_epoch, None)]
+
+
+def test_omnibar_submit_empty_is_noop():
+    m = replace(_loaded("a"), modal="omnibar", revset="mine()")
+    result, cmds = update(m, OmnibarSubmit(""))
+    assert result.modal is None
+    assert cmds == []
+    assert result.revset == "mine()"
+
+
+def test_reload_requested_preserves_revset():
+    m = replace(_loaded("a"), revset="mine()")
+    result, cmds = update(m, ReloadRequested())
+    assert len(cmds) == 1
+    assert isinstance(cmds[0], LoadGraph)
+    assert cmds[0].revset == "mine()"
+
+
+# --- bookmarks ---------------------------------------------------------
+
+
+def test_open_bookmark_set_sets_modal():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, OpenBookmarkSet())
+    assert m1.modal == "bookmark_input"
+
+
+def test_open_bookmark_picker_sets_modal_and_loads():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, OpenBookmarkPicker())
+    assert m1.modal == "bookmark_picker"
+    assert cmds == [LoadBookmarks()]
+
+
+def test_bookmark_input_confirm_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenBookmarkSet())
+    confirmed, cmds = update(opened, BookmarkInputConfirm("main"))
+    assert confirmed.modal is None
+    assert confirmed.pending_mutation is True
+    assert cmds == [RunMutation(confirmed.graph_epoch, "bookmark_set", ("aaa", "main"))]
+
+
+def test_bookmark_input_cancel_clears_modal():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenBookmarkSet())
+    cancelled, _ = update(opened, BookmarkInputCancel())
+    assert cancelled.modal is None
+
+
+def test_bookmark_input_confirm_no_change_selected_sets_error():
+    # A model with no graph has no selected change — confirm should error
+    # without starting a mutation.
+    m = Model()  # graph is None → selected_change_id returns None
+    m1, cmds = update(m, BookmarkInputConfirm("main"))
+    assert m1.error == "No change selected"
+    assert m1.modal is None
+    assert not any(isinstance(c, RunMutation) for c in cmds)
+
+
+def test_bookmark_delete_starts_mutation():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, BookmarkDelete("main"))
+    assert m1.pending_mutation is True
+    assert cmds == [RunMutation(2, "bookmark_delete", ("main",))]
+
+
+def test_bookmark_move_confirm_starts_mutation():
+    m = _loaded("aaa", "bbb", working=0)
+    confirmed, cmds = update(m, BookmarkMoveConfirm("main", "bbb"))
+    assert confirmed.pending_mutation is True
+    assert cmds == [RunMutation(2, "bookmark_move", ("main", "bbb"))]
+
+
+def test_bookmarks_loaded_stores_entries():
+    m = _loaded("aaa", working=0)
+    bms = [Bookmark(name="main", change_id="aaa", change_description="d")]
+    m1, _ = update(m, BookmarksLoaded(bms))
+    assert m1.bookmarks == bms
+
+
+def test_bookmarks_load_failed_sets_error():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, BookmarksLoadFailed("boom"))
+    assert m1.error == "boom"
+
+
+# --- operation log -----------------------------------------------------
+
+
+def test_open_op_log_sets_modal_and_loads():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, OpenOpLog())
+    assert m1.modal == "op_log"
+    assert cmds == [LoadOpLog()]
+
+
+def test_op_log_close_clears_modal():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenOpLog())
+    closed, _ = update(opened, OpLogClose())
+    assert closed.modal is None
+
+
+def test_op_log_restore_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenOpLog())
+    restored, cmds = update(opened, OpLogRestore("abc123"))
+    assert restored.pending_mutation is True
+    assert restored.modal is None
+    assert cmds == [RunMutation(restored.graph_epoch, "op_restore", ("abc123",))]
+
+
+def test_op_log_loaded_stores_entries():
+    m = _loaded("aaa", working=0)
+    entries = [OpLogEntry(op_id="abc", timestamp="now", description="d")]
+    m1, _ = update(m, OpLogLoaded(entries))
+    assert m1.op_log_entries == entries
+
+
+def test_op_log_load_failed_sets_error():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, OpLogLoadFailed("boom"))
+    assert m1.error == "boom"
+
+
+# --- conflict view -----------------------------------------------------
+
+
+def test_open_conflict_view_sets_modal_and_loads():
+    m = _loaded("aaa", working=0)
+    m1, cmds = update(m, OpenConflictView("file.txt"))
+    assert m1.modal == "conflict_view"
+    assert m1.conflict_path == "file.txt"
+    assert cmds == [LoadConflictData("file.txt")]
+
+
+def test_open_conflict_view_clears_stale_conflict_data():
+    # Switching to a new conflict file must drop the previous file's data so the
+    # view never renders the old hunks under the new path while the load runs.
+    m = _loaded("aaa", working=0)
+    stale = replace(m, conflict_data=ConflictData(regions=[]))
+    m1, cmds = update(stale, OpenConflictView("other.txt"))
+    assert m1.conflict_path == "other.txt"
+    assert m1.conflict_data is None
+    assert cmds == [LoadConflictData("other.txt")]
+
+
+def test_conflict_view_close_clears_modal_and_path():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenConflictView("file.txt"))
+    closed, _ = update(opened, ConflictViewClose())
+    assert closed.modal is None
+    assert closed.conflict_path is None
+    assert closed.conflict_data is None
+
+
+def test_apply_resolutions_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, OpenConflictView("file.txt"))
+    applied, cmds = update(opened, ApplyResolutions("file.txt", [HunkResolution.ACCEPT_LEFT]))
+    assert applied.pending_mutation is True
+    assert applied.modal is None
+    assert cmds == [
+        RunMutation(applied.graph_epoch, "resolve", ("file.txt", [HunkResolution.ACCEPT_LEFT]))
+    ]
+
+
+def test_conflict_data_loaded_stores_data():
+    m = _loaded("aaa", working=0)
+    data = ConflictData(regions=[])
+    m1, _ = update(m, ConflictDataLoaded(data))
+    assert m1.conflict_data is data
+
+
+def test_conflict_data_load_failed_sets_error():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, ConflictDataLoadFailed("boom"))
+    assert m1.error == "boom"
+
+
+# --- hunk picker (split / partial squash) ------------------------------
+
+
+def test_split_opens_hunk_picker_modal():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, Split())
+    assert m1.modal == "hunk_picker"
+
+
+def test_squash_partial_opens_hunk_picker_modal():
+    m = _loaded("aaa", working=0)
+    m1, _ = update(m, SquashPartial())
+    assert m1.modal == "hunk_picker"
+
+
+def test_hunk_picker_close_clears_modal():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, Split())
+    closed, _ = update(opened, HunkPickerClose())
+    assert closed.modal is None
+
+
+def test_split_confirm_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, Split())
+    hunks = [FileRef(path="file.txt")]
+    confirmed, cmds = update(opened, SplitConfirm("aaa", hunks))
+    assert confirmed.pending_mutation is True
+    assert confirmed.modal is None
+    assert cmds == [RunMutation(confirmed.graph_epoch, "split", ("aaa", hunks))]
+
+
+def test_squash_partial_confirm_starts_mutation():
+    m = _loaded("aaa", working=0)
+    opened, _ = update(m, SquashPartial())
+    hunks = [FileRef(path="file.txt")]
+    confirmed, cmds = update(opened, SquashPartialConfirm("aaa", hunks))
+    assert confirmed.pending_mutation is True
+    assert confirmed.modal is None
+    assert cmds == [RunMutation(confirmed.graph_epoch, "squash_partial", ("aaa", hunks))]
+
+
+def test_split_confirm_blocked_while_pending():
+    m = _loaded("aaa", working=0)
+    armed, _ = update(m, NewChange())
+    opened = replace(armed, modal="hunk_picker")
+    blocked, cmds = update(opened, SplitConfirm("aaa", [FileRef("f")]))
+    assert cmds == []
+    assert blocked.error == "A mutation is already in progress"

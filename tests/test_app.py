@@ -331,8 +331,8 @@ async def test_mutation_gate_clears_after_completion(temp_repo: Path, monkeypatc
     # finishes quickly without spawning jj.
     original_load = jjmod.load_graph
 
-    async def instant_load(cwd):
-        return await original_load(cwd)
+    async def instant_load(cwd, revset=None):
+        return await original_load(cwd, revset)
 
     # The backend reloads via the jj facade attribute (jj.load_graph), so
     # patching the facade is sufficient — no app-module patch needed.
@@ -423,7 +423,7 @@ async def test_worker_invariant_error_captured_via_workerfailed(temp_repo: Path,
 
     sentinel = InvariantError("worker-path invariant breach")
 
-    async def boom(_path):
+    async def boom(_path, _revset=None):
         raise sentinel
 
     # load_graph is called via the `jj` module (imported into app.py as `jj`),
@@ -450,3 +450,84 @@ async def test_worker_invariant_error_captured_via_workerfailed(temp_repo: Path,
         "_invariant_error was not captured — WorkerFailed.error unwrap is missing"
     )
     assert isinstance(app._invariant_error, InvariantError)
+
+
+# ---------------------------------------------------------------------------
+# New worker behavioral tests (op-log / bookmarks / conflict)
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_open_op_log_populates_model(temp_repo: Path, monkeypatch):
+    """Dispatching OpenOpLog triggers _worker_load_op_log which sets
+    model.op_log_entries via OpLogLoaded."""
+    import lajjzy.backend.jj as jj_mod
+    from lajjzy.backend.types import OpLogEntry
+    from lajjzy.core.messages import OpenOpLog
+
+    canned = [OpLogEntry(op_id="aabbccdd", timestamp="1 second ago", description="init")]
+
+    async def fake_op_log(cwd):
+        return canned
+
+    monkeypatch.setattr(jj_mod, "op_log", fake_op_log)
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        # Dispatch OpenOpLog through the runtime (mirrors a key press that would
+        # open the op-log view); the update() function emits LoadOpLog which
+        # run_cmd routes to _worker_load_op_log.
+        app.runtime.dispatch(OpenOpLog())
+        await app.workers.wait_for_complete()
+        assert app.model.op_log_entries == canned, (
+            f"Expected op_log_entries={canned!r}, got {app.model.op_log_entries!r}"
+        )
+
+
+@jj_required
+async def test_open_op_log_jjerror_sets_model_error(temp_repo: Path, monkeypatch):
+    """A JjError from jj.op_log causes OpLogLoadFailed which sets model.error."""
+    import lajjzy.backend.jj as jj_mod
+    from lajjzy.backend.types import JjError
+    from lajjzy.core.messages import OpenOpLog
+
+    async def boom(cwd):
+        raise JjError("op log exploded")
+
+    monkeypatch.setattr(jj_mod, "op_log", boom)
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        # Clear any mount-time error first.
+        app.runtime.dispatch(OpenOpLog())
+        await app.workers.wait_for_complete()
+        assert app.model.error == "op log exploded", (
+            f"Expected error='op log exploded', got {app.model.error!r}"
+        )
+
+
+@jj_required
+async def test_open_bookmark_picker_populates_model(temp_repo: Path, monkeypatch):
+    """Dispatching OpenBookmarkPicker triggers _worker_load_bookmarks which sets
+    model.bookmarks via BookmarksLoaded."""
+    import lajjzy.backend.jj as jj_mod
+    from lajjzy.backend.types import Bookmark
+    from lajjzy.core.messages import OpenBookmarkPicker
+
+    canned = [Bookmark(name="main", change_id="abcdef12", change_description="first change")]
+
+    async def fake_load_bookmarks(cwd):
+        return canned
+
+    monkeypatch.setattr(jj_mod, "load_bookmarks", fake_load_bookmarks)
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        app.runtime.dispatch(OpenBookmarkPicker())
+        await app.workers.wait_for_complete()
+        assert app.model.bookmarks == canned, (
+            f"Expected bookmarks={canned!r}, got {app.model.bookmarks!r}"
+        )

@@ -15,6 +15,7 @@ class LoadGraph:
     or GraphLoadFailed(error)."""
 
     epoch: int
+    revset: str | None = None
 
 
 @dataclass(frozen=True)
@@ -40,4 +41,28 @@ class EditMessage:
     seed: str
 
 
-Cmd = LoadGraph | RunMutation | EditMessage
+@dataclass(frozen=True)
+class LoadOpLog:
+    """Load the operation log. On completion dispatch OpLogLoaded(entries)
+    or OpLogLoadFailed(error)."""
+
+    pass
+
+
+@dataclass(frozen=True)
+class LoadBookmarks:
+    """Load the list of bookmarks. On completion dispatch BookmarksLoaded(bookmarks)
+    or BookmarksLoadFailed(error)."""
+
+    pass
+
+
+@dataclass(frozen=True)
+class LoadConflictData:
+    """Load conflict data for a file. On completion dispatch ConflictDataLoaded(data)
+    or ConflictDataLoadFailed(error)."""
+
+    path: str
+
+
+Cmd = LoadGraph | RunMutation | EditMessage | LoadOpLog | LoadBookmarks | LoadConflictData

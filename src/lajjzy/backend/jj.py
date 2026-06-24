@@ -3,8 +3,26 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from lajjzy.backend.parse import parse_file_diffs, parse_graph_output
-from lajjzy.backend.types import FileDiff, GraphData, JjError
+from lajjzy.backend.parse import (
+    parse_bookmarks,
+    parse_conflict_data,
+    parse_file_diffs,
+    parse_graph_output,
+    parse_op_log,
+)
+from lajjzy.backend.types import (
+    Bookmark,
+    ConflictData,
+    ConflictHunk,
+    FileDiff,
+    FileRef,
+    GraphData,
+    HunkResolution,
+    HunkResolutionValue,
+    JjError,
+    OpLogEntry,
+    ResolvedRegion,
+)
 
 
 async def run_jj(args: list[str], cwd: Path) -> str:
@@ -46,13 +64,18 @@ _GRAPH_TEMPLATE = (
 
 
 async def _op_id(cwd: Path) -> str:
-    try:
-        out = await run_jj(
-            ["op", "log", "--limit=1", "--no-graph", "-T", "self.id().short(16)"], cwd
-        )
-        return out.strip() or "unknown"
-    except JjError:
-        return "unknown"
+    # Every valid jj repo (even a fresh ``jj git init``) has at least one
+    # operation in its op-log, so this command succeeds with non-empty output
+    # for any repo we could legally be pointed at.  We therefore let a JjError
+    # propagate (a failure here is a real error — e.g. not a jj repo) and treat
+    # empty output as a broken invariant rather than swallowing either into a
+    # bogus "unknown" op-id, which would silently defeat concurrency detection
+    # in load_graph's GraphData.op_id.
+    out = await run_jj(["op", "log", "--limit=1", "--no-graph", "-T", "self.id().short(16)"], cwd)
+    op_id = out.strip()
+    if not op_id:
+        raise JjError("op log returned no operation id (corrupt or unsupported repo?)")
+    return op_id
 
 
 async def change_diff(cwd: Path, change_id: str) -> list[FileDiff]:
@@ -112,3 +135,190 @@ async def rebase_single(cwd: Path, source: str, destination: str) -> str:
 async def rebase_with_descendants(cwd: Path, source: str, destination: str) -> str:
     await run_jj(["rebase", "-s", source, "--onto", destination], cwd)
     return f"Rebased {source} + descendants onto {destination}"
+
+
+async def undo(cwd: Path) -> str:
+    await run_jj(["undo"], cwd)
+    return "Undid the last operation"
+
+
+async def redo(cwd: Path) -> str:
+    await run_jj(["redo"], cwd)
+    return "Redid the last operation"
+
+
+# Op-log templates operate on the Operation type, not a commit.
+# Fields: self.id() / self.time().start().ago() (NOT committer.timestamp()) / description.
+# Field order (id, timestamp, description) must match parse_op_log in parse.py.
+_OP_LOG_TEMPLATE = (
+    'self.id().short(16) ++ "\\x1f" ++ '
+    'self.time().start().ago() ++ "\\x1f" ++ '
+    'coalesce(description.first_line(), "") ++ "\\n"'
+)
+
+
+async def op_log(cwd: Path) -> list[OpLogEntry]:
+    stdout = await run_jj(["op", "log", "--no-graph", "-T", _OP_LOG_TEMPLATE], cwd)
+    try:
+        return parse_op_log(stdout)
+    except ValueError as e:
+        raise JjError(str(e)) from e
+
+
+async def op_restore(cwd: Path, op_id: str) -> str:
+    await run_jj(["op", "restore", op_id], cwd)
+    return f"Restored operation {op_id}"
+
+
+# In jj 0.42.0, `jj bookmark list -T` exposes a CommitRef type where fields are
+# methods invoked on `self`, not bare keywords.  The template therefore uses
+# `self.name()`, `self.normal_target().change_id().short()` and
+# `self.normal_target().description().first_line()` — not the bare `name` /
+# `change_id.short()` / `description.first_line()` that the brief assumed.
+# Field order (name \x1f change_id \x1f description) is preserved so
+# `parse_bookmarks` in parse.py remains correct.
+_BOOKMARK_TEMPLATE = (
+    'self.name() ++ "\\x1f" ++ self.normal_target().change_id().short() ++ "\\x1f" ++ '
+    'coalesce(self.normal_target().description().first_line(), "") ++ "\\n"'
+)
+
+
+async def load_bookmarks(cwd: Path) -> list[Bookmark]:
+    stdout = await run_jj(["bookmark", "list", "-T", _BOOKMARK_TEMPLATE, "--color=never"], cwd)
+    try:
+        return parse_bookmarks(stdout)
+    except ValueError as e:
+        raise JjError(str(e)) from e
+
+
+async def bookmark_set(cwd: Path, change_id: str, name: str) -> str:
+    await run_jj(["bookmark", "set", "-r", change_id, name], cwd)
+    return f"Set bookmark {name} on {change_id}"
+
+
+async def bookmark_delete(cwd: Path, name: str) -> str:
+    await run_jj(["bookmark", "delete", name], cwd)
+    return f"Deleted bookmark {name}"
+
+
+async def bookmark_move(cwd: Path, name: str, dest_change_id: str) -> str:
+    # --allow-backwards permits moving a bookmark to an ancestor (older) commit,
+    # which jj refuses by default.  A TUI move operation should not impose
+    # directionality constraints — that is the caller's responsibility.
+    await run_jj(["bookmark", "set", "--allow-backwards", "-r", dest_change_id, name], cwd)
+    return f"Moved bookmark {name} to {dest_change_id}"
+
+
+async def conflict_data(cwd: Path, path: str) -> ConflictData:
+    """Read a conflicted file's raw content (with jj conflict markers) and
+    parse it into ConflictData. Works on the working copy (``@``).
+
+    Forces ``ui.conflict-marker-style=git`` so the output uses the
+    traditional 3-way markers (``<<<<<<<`` / ``|||||||`` / ``=======`` /
+    ``>>>>>>>``) that ``parse_conflict_data`` understands.  jj 0.42.0
+    defaults to a diff-based format that is structurally incompatible with
+    the parser; the git style is the stable, machine-parseable subset.
+    """
+    stdout = await run_jj(
+        ["file", "show", "-r", "@", "--config", "ui.conflict-marker-style=git", path],
+        cwd,
+    )
+    return parse_conflict_data(stdout)
+
+
+def _build_resolved_content(data: ConflictData, resolutions: list[HunkResolutionValue]) -> str:
+    """Apply per-hunk resolution choices to produce the final file content.
+
+    ``resolutions`` is one entry per conflict region (in order), each being a
+    ``HunkResolution`` constant.  ``HunkResolution.NONE`` is treated as
+    ``ACCEPT_LEFT`` (the widget must not let users apply with NONE set, but we
+    default defensively).
+    """
+    n_conflicts = sum(1 for r in data.regions if isinstance(r, ConflictHunk))
+    if n_conflicts > len(resolutions):
+        raise JjError(
+            f"resolve: {n_conflicts} conflict region(s) but only {len(resolutions)} resolution(s) provided"
+        )
+    out: list[str] = []
+    conflict_idx = 0
+    for region in data.regions:
+        if isinstance(region, ResolvedRegion):
+            out.append(region.text)
+            continue
+        choice = resolutions[conflict_idx]
+        conflict_idx += 1
+        if choice == HunkResolution.ACCEPT_RIGHT:
+            out.append(region.right)
+        else:  # NONE or ACCEPT_LEFT
+            out.append(region.left)
+    return "".join(out)
+
+
+async def resolve(cwd: Path, path: str, resolutions: list[HunkResolutionValue]) -> str:
+    """Write the resolved file content to the working copy.
+
+    Caller must ensure ``@`` is the conflicted change.  Does NOT mark the
+    conflict resolved in jj's internal state — that happens automatically when
+    the file no longer contains conflict markers.
+    """
+    data = await conflict_data(cwd, path)
+    # Guard against overwriting a file that isn't actually conflicted (e.g. @ is
+    # not the conflicted change).  _build_resolved_content's count guard handles
+    # too-few resolutions; this handles the no-conflict case before any write.
+    if not any(isinstance(r, ConflictHunk) for r in data.regions):
+        raise JjError(f"{path} has no conflicts to resolve (is @ the conflicted change?)")
+    resolved = _build_resolved_content(data, resolutions)
+    (cwd / path).write_text(resolved)
+    return f"Resolved {path}"
+
+
+async def split(cwd: Path, source: str, files: list[FileRef]) -> str:
+    """Non-interactively split ``source`` by file.
+
+    Runs ``jj split -r <source> -m "" <paths...>``.  Empirically verified
+    behaviour in jj 0.42.0:
+
+    * The **selected** files (``<paths>``) are placed in the **first/parent**
+      commit, which **retains the source's original change-id** and receives
+      the empty description supplied via ``-m ""``.
+    * The **unselected** files continue in a **new child** commit that becomes
+      the working copy (``@``) and keeps the source's original description.
+
+    Phase-1 contract is **file granularity**: the whole of each selected file
+    is split out.  Hunk-granular split will reintroduce a richer reference type
+    once jj exposes a stable non-interactive flag for it (none in 0.42.0).
+
+    Raises ``JjError`` if ``files`` is empty or the jj command fails.
+    """
+    paths = sorted({f.path for f in files})
+    if not paths:
+        raise JjError("split requires at least one selected file")
+    # -m "" suppresses the editor prompt for the selected-changes description;
+    # the remaining changes keep the original description automatically.
+    await run_jj(["split", "-r", source, "-m", "", *paths], cwd)
+    return f"Split {len(paths)} file(s) out of {source}"
+
+
+async def squash_partial(cwd: Path, source: str, files: list[FileRef]) -> str:
+    """Move selected files' changes from ``source`` into its parent.
+
+    Runs ``jj squash -r <source> --use-destination-message <paths...>``.
+    Only the selected paths are moved; other files in ``source`` remain.
+    Phase-1 contract is **file granularity** (the whole of each selected file
+    moves); hunk-granular squash will reintroduce a richer reference type once
+    jj exposes a stable non-interactive flag for it (none in 0.42.0).
+
+    The destination is always ``source``'s parent, parallel to the
+    whole-change ``squash(cwd, change_id)`` which uses
+    ``jj squash -r <id> --use-destination-message``.
+
+    Raises ``JjError`` if ``files`` is empty or the jj command fails.
+    """
+    paths = sorted({f.path for f in files})
+    if not paths:
+        raise JjError("squash_partial requires at least one selected file")
+    await run_jj(
+        ["squash", "-r", source, "--use-destination-message", *paths],
+        cwd,
+    )
+    return f"Squashed {len(paths)} file(s) from {source} into its parent"

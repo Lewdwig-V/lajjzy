@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import TypedDict
 
 from lajjzy.backend.types import (
+    Bookmark,
     ChangeDetail,
+    ConflictData,
+    ConflictHunk,
+    ConflictRegion,
+    ResolvedRegion,
     DiffHunk,
     DiffLine,
     FileDiff,
@@ -11,6 +16,7 @@ from lajjzy.backend.types import (
     FileStatus,
     GraphData,
     GraphLine,
+    OpLogEntry,
 )
 
 UNIT_SEP = "\x1f"
@@ -173,3 +179,110 @@ def parse_file_diffs(output: str) -> list[FileDiff]:
         )
         for pf in pending_files
     ]
+
+
+def parse_op_log(output: str) -> list[OpLogEntry]:
+    """Parse `jj op log --no-graph -T <template>` output into OpLogEntry list.
+
+    Fields must match _OP_LOG_TEMPLATE field order in jj.py (id, timestamp, description).
+    Raises ValueError on non-empty lines that don't have exactly 3 UNIT_SEP-delimited fields.
+    """
+    entries: list[OpLogEntry] = []
+    for line in output.split("\n"):
+        if not line:
+            continue
+        parts = line.split(UNIT_SEP)
+        if len(parts) != 3:
+            raise ValueError(f"op log line has {len(parts)} fields, expected 3: {line!r}")
+        entries.append(OpLogEntry(op_id=parts[0], timestamp=parts[1], description=parts[2]))
+    return entries
+
+
+def parse_bookmarks(output: str) -> list[Bookmark]:
+    """Parse `jj bookmark list -T <template>` output into Bookmark list.
+
+    Fields must match _BOOKMARK_TEMPLATE field order in jj.py (name, change_id, description).
+    Raises ValueError on non-empty lines that don't have exactly 3 UNIT_SEP-delimited fields.
+    """
+    bms: list[Bookmark] = []
+    for line in output.split("\n"):
+        if not line:
+            continue
+        parts = line.split(UNIT_SEP)
+        if len(parts) != 3:
+            raise ValueError(f"bookmark line has {len(parts)} fields, expected 3: {line!r}")
+        bms.append(Bookmark(name=parts[0], change_id=parts[1], change_description=parts[2]))
+    return bms
+
+
+def _is_conflict_marker(stripped: str, prefix: str) -> bool:
+    """True if a line (already rstripped of "\n") is the jj git-style conflict
+    marker for ``prefix`` — either the bare 7-char prefix or the prefix followed
+    by a space and metadata. Avoids misreading content lines like "<<<<<<<x"."""
+    return stripped == prefix or stripped.startswith(prefix + " ")
+
+
+def parse_conflict_data(output: str) -> ConflictData:
+    """Parse a conflicted file's raw content into ConflictData.
+
+    Handles jj's git-style conflict markers (``ui.conflict-marker-style = "git"``).
+    Each marker begins with the canonical 7-char sequence but may be followed by
+    extra metadata on the same line (e.g. ``<<<<<<< abc1234 "branch-name"``).
+    The ``=======`` separator carries no extra metadata and is matched exactly.
+
+    Format::
+
+        <<<<<<< <optional metadata>
+        <left (ours)>
+        ||||||| <optional metadata>
+        <base>
+        =======
+        <right (theirs)>
+        >>>>>>> <optional metadata>
+
+    Regions outside conflict hunks are non-conflicting (``resolved``).
+    An empty side means that side deleted the region.
+    """
+    lines = output.splitlines(keepends=True)
+    regions: list[ConflictRegion] = []
+    i = 0
+    pending_resolved: list[str] = []
+
+    def flush_resolved() -> None:
+        if pending_resolved:
+            regions.append(ResolvedRegion(text="".join(pending_resolved)))
+            pending_resolved.clear()
+
+    while i < len(lines):
+        stripped = lines[i].rstrip("\n")
+        if _is_conflict_marker(stripped, "<<<<<<<"):
+            flush_resolved()
+            i += 1
+            left: list[str] = []
+            while i < len(lines) and not _is_conflict_marker(lines[i].rstrip("\n"), "|||||||"):
+                left.append(lines[i])
+                i += 1
+            i += 1  # skip |||||||
+            base: list[str] = []
+            while i < len(lines) and not _is_conflict_marker(lines[i].rstrip("\n"), "======="):
+                base.append(lines[i])
+                i += 1
+            i += 1  # skip =======
+            right: list[str] = []
+            while i < len(lines) and not _is_conflict_marker(lines[i].rstrip("\n"), ">>>>>>>"):
+                right.append(lines[i])
+                i += 1
+            i += 1  # skip >>>>>>>
+            regions.append(
+                ConflictHunk(
+                    base="".join(base),
+                    left="".join(left),
+                    right="".join(right),
+                )
+            )
+        else:
+            pending_resolved.append(lines[i])
+            i += 1
+
+    flush_resolved()
+    return ConflictData(regions=regions)
