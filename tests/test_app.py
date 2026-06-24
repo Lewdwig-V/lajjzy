@@ -531,3 +531,188 @@ async def test_open_bookmark_picker_populates_model(temp_repo: Path, monkeypatch
         assert app.model.bookmarks == canned, (
             f"Expected bookmarks={canned!r}, got {app.model.bookmarks!r}"
         )
+
+
+@jj_required
+async def test_present_projects_modal_and_new_model_fields(temp_repo: Path):
+    from lajjzy.core import OpenOmnibar
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        app.runtime.dispatch(OpenOmnibar())
+        await app.workers.wait_for_complete()
+        assert app.modal == "omnibar"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: pilot tests for new key bindings
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_undo_key_runs_jj_undo(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("u")
+        await app.workers.wait_for_complete()
+        assert app.graph is not None
+
+
+@jj_required
+async def test_U_key_runs_jj_redo(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("u")
+        await app.workers.wait_for_complete()
+        await pilot.press("U")
+        await app.workers.wait_for_complete()
+        assert app.graph is not None
+
+
+@jj_required
+async def test_slash_key_opens_omnibar_modal(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("/")
+        await app.workers.wait_for_complete()
+        assert app.modal == "omnibar"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: bookmark mutations refresh bookmarks list in same step
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_switching_modal_hides_the_previous_one(temp_repo: Path):
+    # Exactly one modal visible: opening op-log after omnibar hides omnibar.
+    from lajjzy.widgets import Omnibar, OpLog
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("/")
+        await app.workers.wait_for_complete()
+        assert app.query_one(Omnibar).display is True
+        await pilot.press("o")
+        await app.workers.wait_for_complete()
+        assert app.query_one(OpLog).display is True
+        assert app.query_one(Omnibar).display is False
+
+
+@jj_required
+async def test_omnibar_mounts_when_modal_reactive_set(temp_repo: Path):
+    from lajjzy.widgets import Omnibar
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("/")
+        await app.workers.wait_for_complete()
+        # The Omnibar widget should now be mounted and visible.
+        app.query_one(Omnibar)
+
+
+@jj_required
+async def test_bookmark_set_mutation_refreshes_bookmarks(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        from lajjzy.core import BookmarkInputConfirm, OpenBookmarkSet
+
+        app.runtime.dispatch(OpenBookmarkSet())
+        await app.workers.wait_for_complete()
+        app.runtime.dispatch(BookmarkInputConfirm("testbm"))
+        await app.workers.wait_for_complete()
+        assert app.bookmarks is not None
+        assert any(b.name == "testbm" for b in app.bookmarks)
+
+
+# ---------------------------------------------------------------------------
+# Task 8: Enter on conflicted file opens conflict view
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_enter_on_conflicted_file_opens_conflict_view(temp_repo: Path, monkeypatch):
+    """Enter on a CONFLICTED file in the DetailPanel must dispatch
+    OpenConflictView (setting modal='conflict_view') rather than opening the
+    diff view.
+
+    In jj 0.42.0, ``jj log --summary`` does not emit a ``C <path>`` line for
+    the empty merge commit that carries the conflict — the conflict is
+    inherited from the diverging parents but no file changes are recorded on
+    the merge commit itself.  We therefore inject a synthetic GraphData that
+    contains a CONFLICTED file to drive the routing logic directly, without
+    depending on a jj output format that doesn't expose it.
+    """
+    import lajjzy.backend.jj as jj_mod
+    from lajjzy.backend.types import (
+        ChangeDetail,
+        FileChange,
+        FileStatus,
+        GraphData,
+        GraphLine,
+    )
+    from lajjzy.widgets import ConflictView
+    from lajjzy.widgets.detail import DetailPanel
+
+    # Build a synthetic graph with one change that has a CONFLICTED file.
+    conflicted_change_id = "aabbccddeeff"
+    conflicted_file = FileChange(path="c.txt", status=FileStatus.CONFLICTED)
+    detail = ChangeDetail(
+        commit_id="deadbeef0001",
+        author="Test",
+        email="t@x",
+        timestamp="now",
+        description="merge",
+        bookmarks=[],
+        is_empty=False,
+        has_conflict=True,
+        files=[conflicted_file],
+        parents=[],
+    )
+    fake_graph = GraphData(
+        lines=[GraphLine(raw="@ merge", change_id=conflicted_change_id, glyph_prefix="")],
+        details={conflicted_change_id: detail},
+        working_copy_index=0,
+        op_id="op-fake-001",
+    )
+
+    async def fake_load_graph(cwd, revset=None):
+        return fake_graph
+
+    monkeypatch.setattr(jj_mod, "load_graph", fake_load_graph)
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+
+        panel = app.query_one(DetailPanel)
+
+        # Verify the CONFLICTED file is visible in the panel.
+        files = panel.current_files()
+        assert files, "Expected files from the injected graph"
+        conflict_idx = next(
+            (i for i, f in enumerate(files) if f.status == FileStatus.CONFLICTED), None
+        )
+        assert conflict_idx is not None, (
+            f"Expected at least one CONFLICTED file in the injected graph; "
+            f"got: {[(f.path, f.status) for f in files]}"
+        )
+
+        # Focus the detail panel and position the cursor on the conflicted file.
+        panel.focus()
+        panel.file_cursor = conflict_idx
+
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+
+        # The conflict view must be visible and the modal set.
+        cv = app.query_one(ConflictView)
+        assert app.modal == "conflict_view", f"Expected modal='conflict_view', got {app.modal!r}"
+        assert cv.display, "ConflictView is not visible after pressing Enter on a CONFLICTED file"

@@ -121,12 +121,15 @@ class MutationCompleted:
     None if the reload failed), and ``load_error`` carries the reload failure.
     ``epoch`` is the graph epoch assigned when the mutation launched, used to
     discard the reload if a newer graph-producing op has since superseded it.
+    ``bookmarks`` is the refreshed bookmarks list for bookmark-kind mutations,
+    or None if not applicable / the refresh failed.
     """
 
     epoch: int
     message: str
     graph: GraphData | None
     load_error: str | None
+    bookmarks: list[Bookmark] | None = None
 
 
 # --- undo / redo -------------------------------------------------------

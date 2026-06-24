@@ -14,7 +14,7 @@ from textual.containers import Horizontal
 from textual.reactive import reactive
 
 import lajjzy.backend.jj as jj
-from lajjzy.backend.types import GraphData, JjError
+from lajjzy.backend.types import Bookmark, ConflictData, GraphData, JjError, OpLogEntry
 from lajjzy.core import (
     Abandon,
     Cmd,
@@ -33,17 +33,26 @@ from lajjzy.core import (
     LoadConflictData,
     LoadGraph,
     LoadOpLog,
+    Modal,
     Model,
     Msg,
     MutationCompleted,
     MutationFailed,
     NewChange,
+    OpenBookmarkPicker,
+    OpenBookmarkSet,
+    OpenOmnibar,
+    OpenOpLog,
     RebaseCancel,
     RebaseConfirm,
     RebaseStart,
+    Redo,
     ReloadRequested,
     RunMutation,
+    Split,
     Squash,
+    SquashPartial,
+    Undo,
     selected_change_id,
 )
 from lajjzy.core.messages import (
@@ -111,6 +120,14 @@ class LajjzyApp(App[None]):
         ("ctrl+r", "rebase_descendants", "Rebase+desc"),
         ("enter", "rebase_confirm", "Confirm rebase"),
         ("escape", "rebase_cancel", "Cancel"),
+        ("u", "undo", "Undo"),
+        ("U", "redo", "Redo"),
+        ("/", "open_omnibar", "Omnibar"),
+        ("B", "open_bookmark_set", "Set bookmark"),
+        ("b", "open_bookmark_picker", "Bookmarks"),
+        ("o", "open_op_log", "Op log"),
+        ("s", "split", "Split"),
+        ("ctrl+s", "squash_partial", "Squash partial"),
     ]
 
     # Reactives are a *projection* of the Model for the widget layer to watch;
@@ -119,6 +136,12 @@ class LajjzyApp(App[None]):
     cursor: reactive[int] = reactive(0)
     error: reactive[str | None] = reactive(None)
     rebase_source: reactive[str | None] = reactive(None)
+    modal: reactive[Modal | None] = reactive(None)
+    op_log_entries: reactive[list[OpLogEntry] | None] = reactive(None)
+    bookmarks: reactive[list[Bookmark] | None] = reactive(None)
+    revset: reactive[str | None] = reactive(None)
+    conflict_data: reactive[ConflictData | None] = reactive(None)
+    conflict_path: reactive[str | None] = reactive(None)
 
     def __init__(self, repo_path: Path | None = None) -> None:
         super().__init__()
@@ -156,6 +179,12 @@ class LajjzyApp(App[None]):
         self.error = model.error
         self.rebase_source = model.rebase_source
         self.pending_mutation = model.pending_mutation
+        self.modal = model.modal
+        self.op_log_entries = model.op_log_entries
+        self.bookmarks = model.bookmarks
+        self.revset = model.revset
+        self.conflict_data = model.conflict_data
+        self.conflict_path = model.conflict_path
 
     # -- Backend.run_cmd: interpret a Cmd on the right concurrency lane ----
 
@@ -227,6 +256,17 @@ class LajjzyApp(App[None]):
                 MutationCompleted(epoch, message, None, f"Unexpected error: {exc}")
             )
             return
+        # For bookmark mutations, also refresh the bookmarks list so the
+        # picker reflects the change in the same step as the graph reload.
+        if kind in ("bookmark_set", "bookmark_delete", "bookmark_move"):
+            try:
+                bms = await jj.load_bookmarks(self.repo_path)
+            except InvariantError:
+                raise  # crash policy: an invariant breach must always propagate
+            except Exception:
+                bms = None  # non-fatal: graph reload is the primary result
+            self.runtime.dispatch(MutationCompleted(epoch, message, graph, None, bookmarks=bms))
+            return
         self.runtime.dispatch(MutationCompleted(epoch, message, graph, None))
 
     @work(group="oplog", exclusive=True)
@@ -281,17 +321,73 @@ class LajjzyApp(App[None]):
     # -- Textual lifecycle ------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        from lajjzy.widgets import DetailPanel, GraphView, StatusBar
+        from lajjzy.widgets import (
+            BookmarkInput,
+            BookmarkPicker,
+            ConflictView,
+            DetailPanel,
+            GraphView,
+            HunkPicker,
+            Omnibar,
+            OpLog,
+            StatusBar,
+        )
 
         with Horizontal(id="panes"):
             yield GraphView()
             yield DetailPanel()
         yield StatusBar()
+        # Modals are always mounted but hidden; visibility follows self.modal.
+        # (Mounting once avoids mount/unmount churn on every modal open/close.)
+        yield Omnibar(id="omnibar")
+        yield BookmarkInput(id="bookmark_input")
+        yield BookmarkPicker(id="bookmark_picker")
+        yield OpLog(id="op_log")
+        yield ConflictView(id="conflict_view")
+        yield HunkPicker(id="hunk_picker")
+
+    def watch_modal(self, modal: str | None) -> None:
+        from textual.widget import Widget
+
+        from lajjzy.widgets import (
+            BookmarkInput,
+            BookmarkPicker,
+            ConflictView,
+            HunkPicker,
+            Omnibar,
+            OpLog,
+        )
+
+        mapping: dict[str, type[Widget]] = {
+            "omnibar": Omnibar,
+            "bookmark_input": BookmarkInput,
+            "bookmark_picker": BookmarkPicker,
+            "op_log": OpLog,
+            "conflict_view": ConflictView,
+            "hunk_picker": HunkPicker,
+        }
+        for name, cls in mapping.items():
+            try:
+                w = self.query_one(cls)
+            except Exception:
+                continue
+            w.display = modal == name
 
     def on_mount(self) -> None:
-        from lajjzy.widgets import GraphView
+        from lajjzy.widgets import (
+            BookmarkInput,
+            BookmarkPicker,
+            ConflictView,
+            GraphView,
+            HunkPicker,
+            Omnibar,
+            OpLog,
+        )
 
         self.query_one(GraphView).focus()
+        # Modals start hidden; watch_modal shows the active one.
+        for cls in (Omnibar, BookmarkInput, BookmarkPicker, OpLog, ConflictView, HunkPicker):
+            self.query_one(cls).display = False
         self.runtime.dispatch(ReloadRequested())
 
     # -- key bindings → messages -----------------------------------------
@@ -342,6 +438,30 @@ class LajjzyApp(App[None]):
 
     def action_rebase_cancel(self) -> None:
         self.runtime.dispatch(RebaseCancel())
+
+    def action_undo(self) -> None:
+        self.runtime.dispatch(Undo())
+
+    def action_redo(self) -> None:
+        self.runtime.dispatch(Redo())
+
+    def action_open_omnibar(self) -> None:
+        self.runtime.dispatch(OpenOmnibar())
+
+    def action_open_bookmark_set(self) -> None:
+        self.runtime.dispatch(OpenBookmarkSet())
+
+    def action_open_bookmark_picker(self) -> None:
+        self.runtime.dispatch(OpenBookmarkPicker())
+
+    def action_open_op_log(self) -> None:
+        self.runtime.dispatch(OpenOpLog())
+
+    def action_split(self) -> None:
+        self.runtime.dispatch(Split())
+
+    def action_squash_partial(self) -> None:
+        self.runtime.dispatch(SquashPartial())
 
     # -- $EDITOR (app-layer terminal suspend) ----------------------------
 

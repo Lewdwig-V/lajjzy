@@ -234,6 +234,37 @@ def test_mutation_completed_discards_stale_graph_but_keeps_message():
     assert done.pending_mutation is False  # gate reopened
 
 
+def test_mutation_completed_with_bookmarks_applies_them_to_model():
+    """MutationCompleted with bookmarks=[...] stores them in model.bookmarks."""
+    m = _loaded("aaa", working=0)
+    armed, [cmd] = update(m, BookmarkInputConfirm("testbm"))
+    new_graph = _graph("aaa", "bbb", working=1)
+    bms = [Bookmark(name="testbm", change_id="aaa", change_description="desc aaa")]
+    done, _ = update(
+        armed, MutationCompleted(cmd.epoch, "Created bookmark", new_graph, None, bookmarks=bms)
+    )
+    assert done.pending_mutation is False
+    assert done.graph is new_graph
+    assert done.bookmarks == bms
+
+
+def test_mutation_completed_stale_graph_still_applies_bookmarks():
+    """Even when the graph reload is stale, bookmarks are still applied."""
+    m = _loaded("aaa", working=0)
+    armed, [cmd] = update(m, BookmarkInputConfirm("testbm"))
+    original_graph = armed.graph
+    # Bump epoch so the graph from the mutation is stale.
+    bumped = replace(armed, graph_epoch=armed.graph_epoch + 1)
+    stale_graph = _graph("aaa", "bbb", working=1)
+    bms = [Bookmark(name="testbm", change_id="aaa", change_description="desc aaa")]
+    done, _ = update(
+        bumped, MutationCompleted(cmd.epoch, "Created bookmark", stale_graph, None, bookmarks=bms)
+    )
+    assert done.graph is original_graph  # stale graph discarded
+    assert done.bookmarks == bms  # but bookmarks still applied
+    assert done.pending_mutation is False
+
+
 # --- describe (editor round-trip) -------------------------------------------
 
 

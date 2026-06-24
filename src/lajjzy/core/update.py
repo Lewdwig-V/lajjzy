@@ -296,5 +296,11 @@ def _mutation_completed(model: Model, msg: MutationCompleted) -> Model:
     reported = replace(model, error=msg.message, pending_mutation=False)
     # Keep the success message but discard a superseded / failed reload.
     if msg.graph is None or msg.epoch != model.graph_epoch:
+        # Even if the graph is stale, apply bookmarks if we fetched them.
+        if msg.bookmarks is not None:
+            reported = replace(reported, bookmarks=msg.bookmarks)
         return reported
-    return replace(reported, graph=msg.graph, cursor=cursor_after_reload(msg.graph))
+    reported = replace(reported, graph=msg.graph, cursor=cursor_after_reload(msg.graph))
+    if msg.bookmarks is not None:
+        reported = replace(reported, bookmarks=msg.bookmarks)
+    return reported
