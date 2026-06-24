@@ -649,6 +649,17 @@ def test_open_conflict_view_sets_modal_and_loads():
     assert cmds == [LoadConflictData("file.txt")]
 
 
+def test_open_conflict_view_clears_stale_conflict_data():
+    # Switching to a new conflict file must drop the previous file's data so the
+    # view never renders the old hunks under the new path while the load runs.
+    m = _loaded("aaa", working=0)
+    stale = replace(m, conflict_data=ConflictData(regions=[]))
+    m1, cmds = update(stale, OpenConflictView("other.txt"))
+    assert m1.conflict_path == "other.txt"
+    assert m1.conflict_data is None
+    assert cmds == [LoadConflictData("other.txt")]
+
+
 def test_conflict_view_close_clears_modal_and_path():
     m = _loaded("aaa", working=0)
     opened, _ = update(m, OpenConflictView("file.txt"))

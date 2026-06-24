@@ -240,7 +240,9 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
 
     # --- conflict view ----------------------------------------------------
     if isinstance(msg, OpenConflictView):
-        return replace(model, modal="conflict_view", conflict_path=msg.path), [
+        # Clear any prior file's conflict_data so the view never briefly renders
+        # the old file's hunks under the new path while LoadConflictData runs.
+        return replace(model, modal="conflict_view", conflict_path=msg.path, conflict_data=None), [
             LoadConflictData(msg.path)
         ]
     if isinstance(msg, ConflictViewClose):
