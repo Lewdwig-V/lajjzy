@@ -261,7 +261,9 @@ class LajjzyApp(App[None]):
         if kind in ("bookmark_set", "bookmark_delete", "bookmark_move"):
             try:
                 bms = await jj.load_bookmarks(self.repo_path)
-            except (JjError, Exception):
+            except InvariantError:
+                raise  # crash policy: an invariant breach must always propagate
+            except Exception:
                 bms = None  # non-fatal: graph reload is the primary result
             self.runtime.dispatch(MutationCompleted(epoch, message, graph, None, bookmarks=bms))
             return
