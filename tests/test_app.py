@@ -588,6 +588,23 @@ async def test_slash_key_opens_omnibar_modal(temp_repo: Path):
 
 
 @jj_required
+async def test_switching_modal_hides_the_previous_one(temp_repo: Path):
+    # Exactly one modal visible: opening op-log after omnibar hides omnibar.
+    from lajjzy.widgets import Omnibar, OpLog
+
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("/")
+        await app.workers.wait_for_complete()
+        assert app.query_one(Omnibar).display is True
+        await pilot.press("o")
+        await app.workers.wait_for_complete()
+        assert app.query_one(OpLog).display is True
+        assert app.query_one(Omnibar).display is False
+
+
+@jj_required
 async def test_omnibar_mounts_when_modal_reactive_set(temp_repo: Path):
     from lajjzy.widgets import Omnibar
 
