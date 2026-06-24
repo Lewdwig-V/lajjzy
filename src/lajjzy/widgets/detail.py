@@ -6,7 +6,7 @@ from rich.text import Text
 from textual.reactive import reactive
 from textual.widget import Widget
 
-from lajjzy.backend.types import FileDiff, FileChange
+from lajjzy.backend.types import FileDiff, FileChange, FileStatus
 
 if TYPE_CHECKING:
     from lajjzy.app import LajjzyApp
@@ -72,9 +72,17 @@ class DetailPanel(Widget):
         if self.mode != "files":
             return
         files = self.current_files()
-        if files:
-            app = cast("LajjzyApp", self.app)
-            app.open_diff(files[self.file_cursor].path)
+        if not files:
+            return
+        if not (0 <= self.file_cursor < len(files)):
+            return
+        selected = files[self.file_cursor]
+        if selected.status == FileStatus.CONFLICTED:
+            from lajjzy.core import OpenConflictView
+
+            cast("LajjzyApp", self.app).runtime.dispatch(OpenConflictView(selected.path))
+            return
+        cast("LajjzyApp", self.app).open_diff(selected.path)
 
     def action_back(self) -> None:
         if self.mode == "diff":
