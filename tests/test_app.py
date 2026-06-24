@@ -580,3 +580,23 @@ async def test_slash_key_opens_omnibar_modal(temp_repo: Path):
         await pilot.press("/")
         await app.workers.wait_for_complete()
         assert app.modal == "omnibar"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: bookmark mutations refresh bookmarks list in same step
+# ---------------------------------------------------------------------------
+
+
+@jj_required
+async def test_bookmark_set_mutation_refreshes_bookmarks(temp_repo: Path):
+    app = LajjzyApp(repo_path=temp_repo)
+    async with app.run_test():
+        await app.workers.wait_for_complete()
+        from lajjzy.core import BookmarkInputConfirm, OpenBookmarkSet
+
+        app.runtime.dispatch(OpenBookmarkSet())
+        await app.workers.wait_for_complete()
+        app.runtime.dispatch(BookmarkInputConfirm("testbm"))
+        await app.workers.wait_for_complete()
+        assert app.bookmarks is not None
+        assert any(b.name == "testbm" for b in app.bookmarks)

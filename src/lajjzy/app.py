@@ -256,6 +256,15 @@ class LajjzyApp(App[None]):
                 MutationCompleted(epoch, message, None, f"Unexpected error: {exc}")
             )
             return
+        # For bookmark mutations, also refresh the bookmarks list so the
+        # picker reflects the change in the same step as the graph reload.
+        if kind in ("bookmark_set", "bookmark_delete", "bookmark_move"):
+            try:
+                bms = await jj.load_bookmarks(self.repo_path)
+            except (JjError, Exception):
+                bms = None  # non-fatal: graph reload is the primary result
+            self.runtime.dispatch(MutationCompleted(epoch, message, graph, None, bookmarks=bms))
+            return
         self.runtime.dispatch(MutationCompleted(epoch, message, graph, None))
 
     @work(group="oplog", exclusive=True)
