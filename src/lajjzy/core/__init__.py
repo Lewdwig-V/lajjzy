@@ -62,9 +62,11 @@ from lajjzy.core.messages import (
     Undo,
 )
 from lajjzy.core.model import (
+    DetailState,
     Modal,
     Model,
     cursor_after_reload,
+    select_change,
     selected_change_id,
     step_cursor,
 )
@@ -133,7 +135,9 @@ __all__ = [
     "SquashPartialConfirm",
     "Undo",
     "cursor_after_reload",
+    "select_change",
     "selected_change_id",
     "step_cursor",
     "update",
+    "DetailState",
 ]

@@ -49,6 +49,7 @@ from lajjzy.core import (
     Undo,
     update,
 )
+from lajjzy.core.model import DetailState, select_change
 
 
 def _detail(desc: str = "") -> ChangeDetail:
@@ -773,3 +774,31 @@ def test_split_confirm_blocked_while_pending():
     blocked, cmds = update(opened, SplitConfirm("aaa", [FileRef("f")]))
     assert cmds == []
     assert blocked.error == "A mutation is already in progress"
+
+
+# --- phase 2a task 1: DetailState + select_change --------------------------
+
+
+def test_model_has_detail_defaulting_to_fresh_detailstate():
+    m = Model()
+    assert m.detail == DetailState()
+    assert m.detail.file_cursor == 0
+    assert m.detail.mode == "files"
+    assert m.detail.diff is None
+
+
+def test_select_change_resets_detail_only_on_actual_change():
+    g = _loaded("aaa", "bbb", working=0).graph  # two nodes
+    m = replace(
+        Model(),
+        graph=g,
+        cursor=g.node_indices[0],
+        detail=DetailState(file_cursor=3, mode="diff", diff=[]),
+    )
+    # moving to a different node resets detail
+    moved = select_change(m, g.node_indices[1])
+    assert moved.cursor == g.node_indices[1]
+    assert moved.detail == DetailState()
+    # selecting the same cursor leaves detail untouched
+    same = select_change(m, g.node_indices[0])
+    assert same.detail == m.detail

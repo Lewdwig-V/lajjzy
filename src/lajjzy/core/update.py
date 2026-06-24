@@ -62,7 +62,14 @@ from lajjzy.core.messages import (
     SquashPartialConfirm,
     Undo,
 )
-from lajjzy.core.model import Model, cursor_after_reload, selected_change_id, step_cursor
+from lajjzy.core.model import (
+    DetailState,
+    Model,
+    cursor_after_reload,
+    select_change,
+    selected_change_id,
+    step_cursor,
+)
 
 _REBASE_PROMPT = "Rebase: pick a destination, Enter to confirm, Esc to cancel"
 _REBASE_DESC_PROMPT = "Rebase +desc: pick a destination, Enter to confirm, Esc to cancel"
@@ -78,16 +85,16 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
     """
     # --- navigation -------------------------------------------------------
     if isinstance(msg, CursorDown):
-        return replace(model, cursor=step_cursor(model, 1)), []
+        return select_change(model, step_cursor(model, 1)), []
     if isinstance(msg, CursorUp):
-        return replace(model, cursor=step_cursor(model, -1)), []
+        return select_change(model, step_cursor(model, -1)), []
     if isinstance(msg, CursorTop):
         if model.graph and model.graph.node_indices:
-            return replace(model, cursor=model.graph.node_indices[0]), []
+            return select_change(model, model.graph.node_indices[0]), []
         return model, []
     if isinstance(msg, CursorBottom):
         if model.graph and model.graph.node_indices:
-            return replace(model, cursor=model.graph.node_indices[-1]), []
+            return select_change(model, model.graph.node_indices[-1]), []
         return model, []
 
     # --- graph reload -----------------------------------------------------
@@ -105,7 +112,11 @@ def update(model: Model, msg: Msg) -> tuple[Model, list[Cmd]]:
         if msg.epoch != model.graph_epoch:
             return model, []  # superseded by a newer load; discard
         return replace(
-            model, error=None, graph=msg.graph, cursor=cursor_after_reload(msg.graph)
+            model,
+            error=None,
+            graph=msg.graph,
+            cursor=cursor_after_reload(msg.graph),
+            detail=DetailState(),
         ), []
     if isinstance(msg, GraphLoadFailed):
         return replace(model, error=msg.error), []
